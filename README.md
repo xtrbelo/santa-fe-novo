@@ -10,8 +10,12 @@ Aplicação interna para cadastro de pessoas, criação de agendas e controle do
 
 Validações: `npm run lint` e `npm run build`.
 
+Testes locais das Firestore Rules: `npm run test:rules`. O comando requer Java 21+ e usa exclusivamente o Firebase Emulator; consulte `docs/DEPLOY.md`.
+
 ## Segurança
 
 O acesso exige conta Google e perfil ativo em `artifacts/{appId}/public/data/usuarios/{uid}`. Novos usuários recebem `role: "pendente"`. Consulte `docs/SECURITY.md` antes de publicar as regras e prepare o primeiro administrador.
 
 Depois que o primeiro administrador é configurado manualmente, o módulo **Usuários** permite liberar, promover, ativar e desativar outras contas sem usar o Firebase Console.
+
+Antes de qualquer publicação, siga `docs/FIRST_ADMIN.md` e `docs/DEPLOY.md`.

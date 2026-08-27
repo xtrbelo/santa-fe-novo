@@ -9,3 +9,9 @@
 - [ ] **G — Gestor:** tentar alcançar Usuários; confirmar menu ausente, fallback da aplicação e negação pelas rules.
 
 Verifique também a criação correspondente em `auditoria` após mudanças de role e status.
+
+## Antes do checklist
+
+- Execute `npm run lint`, `npm run build` e `npm run test:rules`.
+- Confirme Google habilitado e Anonymous desabilitado em **Authentication > Sign-in method**.
+- Siga `FIRST_ADMIN.md` para o bootstrap e `DEPLOY.md` para qualquer publicação futura.

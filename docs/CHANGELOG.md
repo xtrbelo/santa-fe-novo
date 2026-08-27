@@ -1,5 +1,12 @@
 # Changelog
 
+## Fase 3 — validação de segurança e preparação do deploy
+
+- Firestore Emulator configurado localmente.
+- Suíte automatizada de Firestore Rules adicionada.
+- Bootstrap do primeiro administrador documentado.
+- Ordem de deploy, backup, smoke test e plano de retorno documentados.
+
 ## Fase 2 — administração de usuários e permissões
 
 - Módulo administrativo de usuários com busca, filtros, ordenação e contador de pendentes.

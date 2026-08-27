@@ -23,3 +23,9 @@ O menu Usuários aparece somente para `admin`. O administrador pode alterar outr
 A própria conta do administrador aparece como **Sua conta** e não pode ter perfil ou status alterado pela interface. As rules também recusam atualização do próprio documento, alteração de `uid`, roles desconhecidos e exclusão de usuários.
 
 O perfil logado é acompanhado em tempo real. Promoções liberam a sessão, enquanto uma desativação bloqueia imediatamente os módulos. A tela pendente também oferece **Verificar liberação**.
+
+## Validação automatizada
+
+`npm run test:rules` executa a suíte em `tests/firestore.rules.test.js` contra o Firestore Emulator local. Ela cobre usuários não autenticados, pendentes, inativos, todos os perfis internos, criação do próprio perfil, auditoria e autobloqueio.
+
+Impedir que um administrador rebaixe o último **outro** administrador exige backend confiável (por exemplo, Cloud Functions/Admin SDK) e permanece pendente.
