@@ -24,6 +24,7 @@ function AppContent() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
   const toast = useToast();
+  const toastError = toast.error;
 
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) { setLoading(false); return undefined; }
@@ -43,11 +44,11 @@ function AppContent() {
         unsubscribeProfile = onSnapshot(ref, profileSnapshot => {
           setProfile(profileSnapshot.exists() ? { id: profileSnapshot.id, ...profileSnapshot.data() } : null);
           setLoading(false);
-        }, error => { console.error(error); toast.error('Não foi possível acompanhar seu perfil de acesso.'); setLoading(false); });
-      } catch (error) { console.error(error); toast.error('Não foi possível carregar seu perfil de acesso.'); setLoading(false); }
+        }, error => { console.error(error); toastError('Não foi possível acompanhar seu perfil de acesso.'); setLoading(false); });
+      } catch (error) { console.error(error); toastError('Não foi possível carregar seu perfil de acesso.'); setLoading(false); }
     });
     return () => { unsubscribeAuth(); unsubscribeProfile(); };
-  }, [toast]);
+  }, [toastError]);
 
   const handleGoogleLogin = async () => {
     if (!auth) return;
