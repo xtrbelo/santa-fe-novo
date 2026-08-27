@@ -7,7 +7,6 @@
 - Histórico de registros desativados.
 - Reagendamento atômico entre agendas (cancelar origem e reservar destino numa única operação confiável).
 - Métricas agregadas no painel sem leituras excessivas (avaliar contadores ou backend).
-- Testes automatizados das transações de negócio contra o Emulator; as rules já possuem cobertura automatizada.
 - Avaliar Cloud Functions/Admin SDK para impedir também a remoção do último administrador entre contas distintas.
 - Avaliar code splitting por rota/módulo. O bundle principal concentra React, Firebase SDK, lucide-react e todos os módulos, ultrapassando 500 kB sem afetar o funcionamento.
 - Acompanhar avisos de segurança transitivos do `firebase-tools` (dependência somente de desenvolvimento) e atualizar quando houver versão corrigida compatível.

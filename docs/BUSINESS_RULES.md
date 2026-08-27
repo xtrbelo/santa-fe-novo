@@ -18,3 +18,9 @@
 - Horários de chegada e saída são gravados uma única vez.
 - Uma agenda `Concluída` fica somente para consulta: novos agendamentos, cancelamentos e demais alterações são bloqueados.
 - Reagendamento entre agendas permanece pendente até existir uma operação atômica que preserve vagas e evite duplicidade nos dois lados.
+
+## Validação transacional
+
+- A validação de `tiposPessoaPermitidos` pertence também ao serviço transacional, não somente à interface.
+- Reserva, limite de vagas, duplicidade, cancelamento, dupla devolução, agenda concluída, prioridade, compatibilidade legada e concorrência da última vaga são exercitados contra o Firebase Emulator por `npm run test:business`.
+- A suíte usa o projeto fictício `santa-fe-business-test` e chama as mesmas funções utilizadas pelo frontend por meio de injeção opcional do Firestore.

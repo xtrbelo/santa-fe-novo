@@ -73,6 +73,9 @@ export const getAppDoc = (collName, docId) => {
   return doc(db, 'artifacts', appId, 'public', 'data', collName, docId);
 };
 
+const getDataCollection = (firestore, collName) => collection(firestore, 'artifacts', appId, 'public', 'data', collName);
+const getDataDoc = (firestore, collName, docId) => doc(firestore, 'artifacts', appId, 'public', 'data', collName, docId);
+
 /**
  * Busca otimizada de pessoa por CPF no Firestore utilizando indexação direta
  */
@@ -85,9 +88,11 @@ export const findPessoaByCpf = async (cpfClean, includeInactive = false) => {
   return { id: docSnap.id, ...docSnap.data() };
 };
 
-export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }) => {
+export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
   if (agenda.status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
-  const existingQuery = query(getAppCollection('consulentes'), where('agendaId', '==', agenda.id));
+  const permittedTypes = agenda.tiposPessoaPermitidos || [];
+  if (permittedTypes.length && !permittedTypes.includes(pessoa.tipoPessoa)) throw new Error('TIPO_PESSOA_NAO_PERMITIDO');
+  const existingQuery = query(getDataCollection(firestore, 'consulentes'), where('agendaId', '==', agenda.id));
   const existingSnapshot = await getDocs(existingQuery);
   const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => item.status !== 'Cancelado');
   if (activeAppointments.some(item => item.pessoaBaseId === pessoa.id)) throw new Error('AGENDAMENTO_DUPLICADO');
@@ -97,15 +102,17 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
     realOccupancy[serviceId] = (realOccupancy[serviceId] || 0) + 1;
   }));
 
-  const agendaRef = getAppDoc('agendas', agenda.id);
-  const appointmentRef = getAppDoc('consulentes', `${agenda.id}_${pessoa.id}`);
-  await runTransaction(db, async transaction => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agenda.id);
+  const appointmentRef = getDataDoc(firestore, 'consulentes', `${agenda.id}_${pessoa.id}`);
+  await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
     if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
     if (appointmentSnapshot.exists() && appointmentSnapshot.data().status !== 'Cancelado') throw new Error('AGENDAMENTO_DUPLICADO');
 
     const agendaData = agendaSnapshot.data();
+    const transactionPermittedTypes = agendaData.tiposPessoaPermitidos || [];
+    if (transactionPermittedTypes.length && !transactionPermittedTypes.includes(pessoa.tipoPessoa)) throw new Error('TIPO_PESSOA_NAO_PERMITIDO');
     const occupied = { ...(agendaData.vagasOcupadas || {}) };
     servicos.filter(service => service.requerVagas).forEach(service => {
       const total = Number(agendaData.vagasTotais?.[service.id] || 0);
@@ -125,12 +132,12 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   });
 };
 
-const createAuditRef = () => doc(getAppCollection('auditoria'));
+const createAuditRef = firestore => doc(getDataCollection(firestore, 'auditoria'));
 
-export const cancelAgendamento = async ({ agendaId, agendamentoId, userId, motivo = null }) => {
-  const agendaRef = getAppDoc('agendas', agendaId);
-  const appointmentRef = getAppDoc('consulentes', agendamentoId);
-  await runTransaction(db, async transaction => {
+export const cancelAgendamento = async ({ agendaId, agendamentoId, userId, motivo = null }, firestore = db) => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const appointmentRef = getDataDoc(firestore, 'consulentes', agendamentoId);
+  await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
     const agendaData = agendaSnapshot.data();
@@ -152,21 +159,21 @@ export const cancelAgendamento = async ({ agendaId, agendamentoId, userId, motiv
       status: 'Cancelado', canceladoEm: now, canceladoPor: userId,
       ...(motivo ? { motivoCancelamento: motivo.trim() } : {}), atualizadoEm: now, atualizadoPor: userId
     });
-    transaction.set(createAuditRef(), { tipo: 'AGENDAMENTO_CANCELADO', alvoId: agendamentoId, agendaId, executadoPor: userId, criadoEm: now });
+    transaction.set(createAuditRef(firestore), { tipo: 'AGENDAMENTO_CANCELADO', alvoId: agendamentoId, agendaId, executadoPor: userId, criadoEm: now });
   });
 };
 
-export const setAgendamentoPrioridade = async ({ agendaId, agendamentoId, prioridade, userId }) => {
-  const agendaRef = getAppDoc('agendas', agendaId);
-  const appointmentRef = getAppDoc('consulentes', agendamentoId);
-  await runTransaction(db, async transaction => {
+export const setAgendamentoPrioridade = async ({ agendaId, agendamentoId, prioridade, userId }, firestore = db) => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const appointmentRef = getDataDoc(firestore, 'consulentes', agendamentoId);
+  await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
     if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
     if (!['Agendado', 'Presente'].includes(appointmentSnapshot.data().status)) throw new Error('STATUS_SEM_PRIORIDADE');
     const now = Timestamp.now();
     transaction.update(appointmentRef, { prioridade: Boolean(prioridade), atualizadoEm: now, atualizadoPor: userId });
-    transaction.set(createAuditRef(), { tipo: 'PRIORIDADE_ALTERADA', alvoId: agendamentoId, agendaId, valorNovo: Boolean(prioridade), executadoPor: userId, criadoEm: now });
+    transaction.set(createAuditRef(firestore), { tipo: 'PRIORIDADE_ALTERADA', alvoId: agendamentoId, agendaId, valorNovo: Boolean(prioridade), executadoPor: userId, criadoEm: now });
   });
 };
 
@@ -188,15 +195,15 @@ export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status,
   });
 };
 
-export const concluirAgenda = async ({ agendaId, userId }) => {
-  const agendaRef = getAppDoc('agendas', agendaId);
-  await runTransaction(db, async transaction => {
+export const concluirAgenda = async ({ agendaId, userId }, firestore = db) => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  await runTransaction(firestore, async transaction => {
     const agendaSnapshot = await transaction.get(agendaRef);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
     if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
     const now = Timestamp.now();
     transaction.update(agendaRef, { status: 'Concluída', concluidaEm: now, concluidaPor: userId, atualizadoEm: now, atualizadoPor: userId });
-    transaction.set(createAuditRef(), { tipo: 'AGENDA_CONCLUIDA', alvoId: agendaId, executadoPor: userId, criadoEm: now });
+    transaction.set(createAuditRef(firestore), { tipo: 'AGENDA_CONCLUIDA', alvoId: agendaId, executadoPor: userId, criadoEm: now });
   });
 };
 
