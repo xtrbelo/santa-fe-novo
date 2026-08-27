@@ -19,3 +19,7 @@ O acesso exige conta Google e perfil ativo em `artifacts/{appId}/public/data/usu
 Depois que o primeiro administrador é configurado manualmente, o módulo **Usuários** permite liberar, promover, ativar e desativar outras contas sem usar o Firebase Console.
 
 Antes de qualquer publicação, siga `docs/FIRST_ADMIN.md` e `docs/DEPLOY.md`.
+
+## Operação
+
+O fluxo diário usa transições controladas de chegada, falta e conclusão. Cancelamentos preservam o registro, devolvem vagas atomicamente e geram auditoria. A tela de Pessoas oferece histórico de atendimentos, e agendas encerradas permanecem consultáveis com resumo por status, sem aceitar novas alterações.

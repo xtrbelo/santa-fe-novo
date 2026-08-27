@@ -24,3 +24,12 @@
 - Agendamento transacional com tipo, duplicidade e vagas.
 - Consultas de inscritos filtradas por agenda.
 - Remoção do `public/index.html` legado.
+# Fase 5 — fluxo operacional e histórico
+
+- Cancelamento transacional com devolução de vagas e auditoria.
+- Transições controladas e timestamps de chegada/saída preservados.
+- Prioridade operacional editável no Fluxo do Dia.
+- Histórico de atendimentos por pessoa.
+- Resumo por status e conclusão protegida de agendas.
+- Firestore Rules e testes ampliados para impedir exclusão física e escrita em agendas concluídas.
+- Reagendamento atômico e métricas agregadas documentados como evolução futura.

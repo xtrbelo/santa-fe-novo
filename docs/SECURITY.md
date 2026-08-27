@@ -15,6 +15,7 @@ Novas contas Google criam o próprio documento `usuarios/{uid}` como `pendente`,
 4. Só então publique `firestore.rules`. Sem um admin válido, ninguém poderá promover contas.
 
 As regras negam por padrão e proíbem exclusão física de Pessoas e configurações.
+Também proíbem exclusão física de agendamentos e qualquer escrita operacional vinculada a uma agenda concluída. Cancelamentos, prioridade e conclusão geram auditoria imutável em nome do usuário autenticado.
 
 ## Administração dentro do sistema
 
@@ -26,6 +27,6 @@ O perfil logado é acompanhado em tempo real. Promoções liberam a sessão, enq
 
 ## Validação automatizada
 
-`npm run test:rules` executa a suíte em `tests/firestore.rules.test.js` contra o Firestore Emulator local. Ela cobre usuários não autenticados, pendentes, inativos, todos os perfis internos, criação do próprio perfil, auditoria e autobloqueio.
+`npm run test:rules` executa a suíte em `tests/firestore.rules.test.js` contra o Firestore Emulator local. Ela cobre usuários não autenticados, pendentes, inativos, todos os perfis internos, criação do próprio perfil, auditoria, autobloqueio, eventos operacionais, imutabilidade e proteção de agendas concluídas.
 
 Impedir que um administrador rebaixe o último **outro** administrador exige backend confiável (por exemplo, Cloud Functions/Admin SDK) e permanece pendente.

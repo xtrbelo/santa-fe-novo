@@ -21,6 +21,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { PessoaHistoricoModal } from './PessoaHistoricoModal';
 import { useToast } from '../../components/ui/useToast';
 import { 
   UserPlus, 
@@ -29,7 +30,8 @@ import {
   UserSquare2, 
   Edit, 
   Trash2, 
-  CheckCircle2 
+  CheckCircle2,
+  History
 } from 'lucide-react';
 
 export const PessoasModule = ({ user, readOnly = false }) => {
@@ -41,6 +43,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
   const [editing, setEditing] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [historyPerson, setHistoryPerson] = useState(null);
 
   // Estados do formulário
   const [eTipoPessoa, setETipoPessoa] = useState('');
@@ -303,7 +306,9 @@ export const PessoasModule = ({ user, readOnly = false }) => {
                 </div>
               </div>
 
-              {!readOnly && <div className="flex gap-2 border-t border-gray-50 pt-3">
+              <div className="flex gap-2 border-t border-gray-50 pt-3">
+                <Button variant="secondary" onClick={() => setHistoryPerson(p)} className="flex-1 py-2 text-xs h-10 rounded-xl text-blue-700 hover:bg-blue-50"><History size={14} /> Histórico</Button>
+                {!readOnly && <>
                 <Button 
                   variant="secondary" 
                   onClick={() => openEdit(p)} 
@@ -318,7 +323,8 @@ export const PessoasModule = ({ user, readOnly = false }) => {
                 >
                   <Trash2 size={16} />
                 </Button>
-              </div>}
+                </>}
+              </div>
             </Card>
           ))
         )}
@@ -453,6 +459,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
         message={`Deseja desativar o registro de "${itemToDelete?.nome}"?`}
         confirmText="Sim, Desativar"
       />
+      <PessoaHistoricoModal pessoa={historyPerson} onClose={() => setHistoryPerson(null)} />
     </div>
   );
 };

@@ -9,3 +9,12 @@
 - Alterações relevantes registram UID e Timestamp.
 - Apenas administradores gerenciam usuários; não podem desativar nem rebaixar a própria conta pela interface.
 - Usuários pendentes ou inativos não acessam coleções operacionais. Alterações de perfil/status entram em vigor pelo snapshot em tempo real.
+
+## Ciclo operacional
+
+- Transições aceitas: `Agendado → Presente → Concluído` e `Agendado → Faltou`. Estados finais não voltam para estados anteriores.
+- `Agendado` e `Presente` podem ser cancelados; o registro passa a `Cancelado`, recebe executor/data e devolve as vagas numa transação. Não há exclusão física.
+- A prioridade pode ser alterada apenas em atendimentos abertos e coloca presentes prioritários primeiro na fila.
+- Horários de chegada e saída são gravados uma única vez.
+- Uma agenda `Concluída` fica somente para consulta: novos agendamentos, cancelamentos e demais alterações são bloqueados.
+- Reagendamento entre agendas permanece pendente até existir uma operação atômica que preserve vagas e evite duplicidade nos dois lados.

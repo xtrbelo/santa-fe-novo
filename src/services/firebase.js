@@ -86,6 +86,7 @@ export const findPessoaByCpf = async (cpfClean, includeInactive = false) => {
 };
 
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }) => {
+  if (agenda.status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
   const existingQuery = query(getAppCollection('consulentes'), where('agendaId', '==', agenda.id));
   const existingSnapshot = await getDocs(existingQuery);
   const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => item.status !== 'Cancelado');
@@ -101,6 +102,7 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   await runTransaction(db, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
     if (appointmentSnapshot.exists() && appointmentSnapshot.data().status !== 'Cancelado') throw new Error('AGENDAMENTO_DUPLICADO');
 
     const agendaData = agendaSnapshot.data();
@@ -120,6 +122,81 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
       atualizadoEm: now, atualizadoPor: userId, prioridade: false
     });
     transaction.update(agendaRef, { vagasOcupadas: occupied, atualizadoEm: now, atualizadoPor: userId });
+  });
+};
+
+const createAuditRef = () => doc(getAppCollection('auditoria'));
+
+export const cancelAgendamento = async ({ agendaId, agendamentoId, userId, motivo = null }) => {
+  const agendaRef = getAppDoc('agendas', agendaId);
+  const appointmentRef = getAppDoc('consulentes', agendamentoId);
+  await runTransaction(db, async transaction => {
+    const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
+    if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
+    const agendaData = agendaSnapshot.data();
+    const appointment = appointmentSnapshot.data();
+    if (agendaData.status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (appointment.status === 'Cancelado') throw new Error('JA_CANCELADO');
+    if (appointment.status === 'Concluído') throw new Error('ATENDIMENTO_CONCLUIDO');
+    if (!['Agendado', 'Presente'].includes(appointment.status)) throw new Error('STATUS_NAO_CANCELAVEL');
+
+    const occupied = { ...(agendaData.vagasOcupadas || {}) };
+    (appointment.servicosIds || []).forEach(serviceId => {
+      if (Object.hasOwn(agendaData.vagasTotais || {}, serviceId)) {
+        occupied[serviceId] = Math.max(0, Number(occupied[serviceId] || 0) - 1);
+      }
+    });
+    const now = Timestamp.now();
+    transaction.update(agendaRef, { vagasOcupadas: occupied, atualizadoEm: now, atualizadoPor: userId });
+    transaction.update(appointmentRef, {
+      status: 'Cancelado', canceladoEm: now, canceladoPor: userId,
+      ...(motivo ? { motivoCancelamento: motivo.trim() } : {}), atualizadoEm: now, atualizadoPor: userId
+    });
+    transaction.set(createAuditRef(), { tipo: 'AGENDAMENTO_CANCELADO', alvoId: agendamentoId, agendaId, executadoPor: userId, criadoEm: now });
+  });
+};
+
+export const setAgendamentoPrioridade = async ({ agendaId, agendamentoId, prioridade, userId }) => {
+  const agendaRef = getAppDoc('agendas', agendaId);
+  const appointmentRef = getAppDoc('consulentes', agendamentoId);
+  await runTransaction(db, async transaction => {
+    const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
+    if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
+    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (!['Agendado', 'Presente'].includes(appointmentSnapshot.data().status)) throw new Error('STATUS_SEM_PRIORIDADE');
+    const now = Timestamp.now();
+    transaction.update(appointmentRef, { prioridade: Boolean(prioridade), atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(createAuditRef(), { tipo: 'PRIORIDADE_ALTERADA', alvoId: agendamentoId, agendaId, valorNovo: Boolean(prioridade), executadoPor: userId, criadoEm: now });
+  });
+};
+
+export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status, userId }) => {
+  const agendaRef = getAppDoc('agendas', agendaId);
+  const appointmentRef = getAppDoc('consulentes', agendamentoId);
+  await runTransaction(db, async transaction => {
+    const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
+    if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
+    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    const current = appointmentSnapshot.data();
+    const allowed = current.status === 'Agendado' ? ['Presente', 'Faltou'] : current.status === 'Presente' ? ['Concluído'] : [];
+    if (!allowed.includes(status)) throw new Error('TRANSICAO_INVALIDA');
+    const now = Timestamp.now();
+    const data = { status, atualizadoEm: now, atualizadoPor: userId };
+    if (status === 'Presente' && !current.horaChegada) data.horaChegada = now;
+    if (status === 'Concluído' && !current.horaSaida) data.horaSaida = now;
+    transaction.update(appointmentRef, data);
+  });
+};
+
+export const concluirAgenda = async ({ agendaId, userId }) => {
+  const agendaRef = getAppDoc('agendas', agendaId);
+  await runTransaction(db, async transaction => {
+    const agendaSnapshot = await transaction.get(agendaRef);
+    if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    const now = Timestamp.now();
+    transaction.update(agendaRef, { status: 'Concluída', concluidaEm: now, concluidaPor: userId, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(createAuditRef(), { tipo: 'AGENDA_CONCLUIDA', alvoId: agendaId, executadoPor: userId, criadoEm: now });
   });
 };
 

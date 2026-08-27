@@ -28,9 +28,10 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/auditoria/{id} {
       allow read: if isAdmin(appId);
-      allow create: if isAdmin(appId)
+      allow create: if isInternal(appId)
         && request.resource.data.executadoPor == request.auth.uid
-        && request.resource.data.tipo in ['USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'];
+        && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'])
+          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA']);
       allow update, delete: if false;
     }
 
@@ -47,15 +48,21 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/agendas/{id} {
       allow read: if isInternal(appId);
       allow create: if isAdmin(appId) || isGestor(appId);
-      allow update: if isAdmin(appId) || isGestor(appId)
-        || (isAtendimento(appId) && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['vagasOcupadas', 'atualizadoEm', 'atualizadoPor']));
+      allow update: if resource.data.get('status', 'Aberta') != 'Concluída'
+        && (isAdmin(appId) || isGestor(appId)
+          || (isAtendimento(appId) && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['vagasOcupadas', 'atualizadoEm', 'atualizadoPor'])));
       allow delete: if isAdmin(appId);
     }
 
     match /artifacts/{appId}/public/data/consulentes/{id} {
-      allow read, create, update: if isInternal(appId);
-      allow delete: if isAdmin(appId);
+      allow read: if isInternal(appId);
+      allow create: if isInternal(appId)
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') != 'Concluída';
+      allow update: if isInternal(appId)
+        && request.resource.data.agendaId == resource.data.agendaId
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') != 'Concluída';
+      allow delete: if false;
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{id} {

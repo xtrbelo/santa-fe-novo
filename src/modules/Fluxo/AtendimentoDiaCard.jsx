@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   getAppCollection, 
-  getAppDoc, 
   onSnapshot, 
-  updateDoc, 
   Timestamp, 
   findPessoaByCpf,
   createAgendamento,
+  cancelAgendamento,
+  setAgendamentoPrioridade,
+  updateAtendimentoStatus,
   query,
   where
 } from '../../services/firebase';
@@ -19,13 +20,17 @@ import {
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { 
   BookOpenCheck, 
   Plus, 
   Search, 
   UserCheck, 
-  CheckCircle2 
+  CheckCircle2,
+  Star,
+  XCircle,
+  UserX
 } from 'lucide-react';
 
 export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
@@ -36,6 +41,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
   const [step, setStep] = useState('search');
   const [buscaCpf, setBuscaCpf] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState(null);
 
   const toast = useToast();
 
@@ -52,16 +58,33 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
 
   const updateSt = async (id, st) => {
     try {
-      const data = { status: st };
-      if (st === 'Presente') data.horaChegada = Timestamp.now();
-      if (st === 'Concluído') data.horaSaida = Timestamp.now();
-      data.atualizadoEm = Timestamp.now();
-      data.atualizadoPor = user.uid;
-      await updateDoc(getAppDoc('consulentes', id), data);
+      await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: id, status: st, userId: user.uid });
       toast.success(`Status alterado para ${st}`);
     } catch (err) {
       console.error(err);
       toast.error('Erro ao atualizar status.');
+    }
+  };
+
+  const togglePriority = async (appointment) => {
+    try {
+      await setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: appointment.id, prioridade: !appointment.prioridade, userId: user.uid });
+      toast.success(appointment.prioridade ? 'Prioridade removida.' : 'Atendimento marcado como prioritário.');
+    } catch (err) {
+      console.error(err);
+      toast.error('Não foi possível alterar a prioridade.');
+    }
+  };
+
+  const confirmCancel = async () => {
+    if (!cancelTarget) return;
+    try {
+      await cancelAgendamento({ agendaId: agenda.id, agendamentoId: cancelTarget.id, userId: user.uid });
+      toast.success('Agendamento cancelado e vaga devolvida.');
+      setCancelTarget(null);
+    } catch (err) {
+      console.error(err);
+      toast.error('Não foi possível cancelar o agendamento.');
     }
   };
 
@@ -181,35 +204,20 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
                     </p>
                   </div>
                 </div>
-                <select 
-                  value={c.status} 
-                  onChange={e => updateSt(c.id, e.target.value)} 
-                  className={`text-[10px] font-black uppercase px-2.5 py-1.5 rounded-lg border-none outline-none shadow-sm cursor-pointer ${getStatusColor(c.status)}`}
-                >
-                  <option value="Agendado">Agendado</option>
-                  <option value="Presente">Presente</option>
-                  <option value="Concluído">Concluído</option>
-                  <option value="Faltou">Faltou</option>
-                </select>
+                <span className={`text-[10px] font-black uppercase px-2.5 py-1.5 rounded-lg shadow-sm ${getStatusColor(c.status)}`}>{c.status}</span>
               </div>
 
-              {c.status === 'Agendado' && (
-                <Button 
-                  onClick={() => updateSt(c.id, 'Presente')} 
-                  className="w-full mt-3 py-2 text-xs bg-blue-600 hover:bg-blue-700 text-white h-10"
-                >
-                  <UserCheck size={16} /> Dar Entrada / Confirmar Presença
+              {['Agendado', 'Presente'].includes(c.status) && <div className="flex flex-wrap gap-2 mt-3">
+                <Button onClick={() => togglePriority(c)} variant="secondary" className={`px-3 h-10 ${c.prioridade ? 'text-amber-600 bg-amber-50' : ''}`} title="Alternar prioridade">
+                  <Star size={16} fill={c.prioridade ? 'currentColor' : 'none'} /> Prioridade
                 </Button>
-              )}
-              {c.status === 'Presente' && (
-                <Button 
-                  onClick={() => updateSt(c.id, 'Concluído')} 
-                  variant="success" 
-                  className="w-full mt-3 py-2 text-xs h-10"
-                >
-                  <CheckCircle2 size={16} /> Finalizar Atendimento
-                </Button>
-              )}
+                <Button onClick={() => setCancelTarget(c)} variant="danger" className="px-3 h-10"><XCircle size={16} /> Cancelar</Button>
+                {c.status === 'Agendado' && <>
+                  <Button onClick={() => updateSt(c.id, 'Faltou')} variant="secondary" className="px-3 h-10"><UserX size={16} /> Faltou</Button>
+                  <Button onClick={() => updateSt(c.id, 'Presente')} className="flex-1 min-w-48 h-10 bg-blue-600 hover:bg-blue-700 text-white"><UserCheck size={16} /> Dar Entrada</Button>
+                </>}
+                {c.status === 'Presente' && <Button onClick={() => updateSt(c.id, 'Concluído')} variant="success" className="flex-1 min-w-48 h-10"><CheckCircle2 size={16} /> Finalizar Atendimento</Button>}
+              </div>}
             </div>
           ))
         )}
@@ -285,6 +293,15 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        isOpen={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={confirmCancel}
+        title="Cancelar Agendamento"
+        message={`Cancelar o agendamento de "${cancelTarget?.nome}"? A vaga será devolvida automaticamente.`}
+        confirmText="Sim, Cancelar"
+      />
     </Card>
   );
 };

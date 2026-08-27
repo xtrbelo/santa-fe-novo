@@ -30,7 +30,7 @@ async function seed() {
     await Promise.all(users.map(([uid, role, ativo]) => setDoc(ref(db, paths.user(uid)), { uid, nome: uid, email: `${uid}@example.test`, role, ativo, criadoEm: new Date(), atualizadoEm: new Date() })));
     await Promise.all([
       setDoc(ref(db, paths.people), { nome: 'Pessoa', ativo: true }),
-      setDoc(ref(db, paths.agendas), { tipo: 'Agenda', vagasOcupadas: {}, ativo: true }),
+      setDoc(ref(db, paths.agendas), { tipo: 'Agenda', status: 'Aberta', vagasOcupadas: {}, ativo: true }),
       setDoc(ref(db, paths.appointments), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Agendado' }),
       setDoc(ref(db, paths.config), { nome: 'Serviço', ativo: true }),
       setDoc(ref(db, paths.audit), { tipo: 'USUARIO_ROLE_ALTERADO', alvoUid: 'gestor', executadoPor: 'admin-a', criadoEm: new Date() })
@@ -76,8 +76,9 @@ describe('D. admin', () => {
     const db = authDb('admin-a');
     await assertSucceeds(getDoc(ref(db, paths.agendas)));
     await assertSucceeds(setDoc(ref(db, `${root}/agendas/nova`), { tipo: 'Nova' }));
+    await assertSucceeds(setDoc(ref(db, `${root}/consulentes/nova`), { agendaId: 'agenda-1', status: 'Agendado' }));
     await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
-    await assertSucceeds(setDoc(ref(db, `${root}/consulentes/nova`), { status: 'Agendado' }));
+    await assertFails(deleteDoc(ref(db, paths.appointments)));
   });
   test('administra configurações sem excluir fisicamente', async () => {
     const db = authDb('admin-a');
@@ -156,4 +157,28 @@ describe('H. auditoria', () => {
   test('não-admin não cria evento', async () => assertFails(setDoc(ref(authDb('gestor'), `${root}/auditoria/novo`), { ...audit, executadoPor: 'gestor' })));
   test('auditoria existente não pode ser editada', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.audit), { valorNovo: 'fraude' })));
   test('auditoria existente não pode ser excluída', async () => assertFails(deleteDoc(ref(authDb('admin-a'), paths.audit))));
+});
+
+describe('I. integridade operacional', () => {
+  test('perfil interno cria auditoria operacional em seu próprio nome', async () => {
+    const event = { tipo: 'AGENDAMENTO_CANCELADO', alvoId: 'consulta-1', agendaId: 'agenda-1', executadoPor: 'gestor', criadoEm: new Date() };
+    await assertSucceeds(setDoc(ref(authDb('gestor'), `${root}/auditoria/cancelamento`), event));
+  });
+  test('atendimento cria auditoria operacional, mas não auditoria de usuário', async () => {
+    const db = authDb('atendimento');
+    await assertSucceeds(setDoc(ref(db, `${root}/auditoria/prioridade`), { tipo: 'PRIORIDADE_ALTERADA', executadoPor: 'atendimento', criadoEm: new Date() }));
+    await assertFails(setDoc(ref(db, `${root}/auditoria/usuario`), { tipo: 'USUARIO_STATUS_ALTERADO', executadoPor: 'atendimento', criadoEm: new Date() }));
+  });
+  test('agenda concluída bloqueia novos agendamentos e alterações', async () => {
+    const db = authDb('admin-a');
+    await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
+    await assertFails(setDoc(ref(db, `${root}/consulentes/nova`), { agendaId: 'agenda-1', status: 'Agendado' }));
+    await assertFails(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
+    await assertFails(updateDoc(ref(db, paths.agendas), { tipo: 'Alteração tardia' }));
+  });
+  test('nenhum perfil exclui fisicamente um agendamento', async () => {
+    await assertFails(deleteDoc(ref(authDb('admin-a'), paths.appointments)));
+    await assertFails(deleteDoc(ref(authDb('gestor'), paths.appointments)));
+    await assertFails(deleteDoc(ref(authDb('atendimento'), paths.appointments)));
+  });
 });

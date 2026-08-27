@@ -4,6 +4,8 @@ import {
   onSnapshot, 
   findPessoaByCpf,
   createAgendamento,
+  cancelAgendamento,
+  concluirAgenda,
   query,
   where
 } from '../../services/firebase';
@@ -16,6 +18,7 @@ import {
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { 
   CalendarDays, 
@@ -23,7 +26,9 @@ import {
   Plus, 
   Search, 
   UserCheck, 
-  CheckCircle2 
+  CheckCircle2,
+  XCircle,
+  LockKeyhole
 } from 'lucide-react';
 
 export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
@@ -35,8 +40,12 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [selCons, setSelCons] = useState(null);
   const [selSrvs, setSelSrvs] = useState({});
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [confirmClose, setConfirmClose] = useState(false);
 
   const toast = useToast();
+  const isClosed = agenda.status === 'Concluída';
+  const summary = fila.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
 
   useEffect(() => {
     if (!expanded || !user) return;
@@ -48,6 +57,29 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
       );
     });
   }, [expanded, agenda.id, user]);
+
+  const handleCancel = async () => {
+    if (!cancelTarget) return;
+    try {
+      await cancelAgendamento({ agendaId: agenda.id, agendamentoId: cancelTarget.id, userId: user.uid });
+      toast.success('Agendamento cancelado e vaga devolvida.');
+      setCancelTarget(null);
+    } catch (err) {
+      console.error(err);
+      toast.error('Não foi possível cancelar o agendamento.');
+    }
+  };
+
+  const handleClose = async () => {
+    try {
+      await concluirAgenda({ agendaId: agenda.id, userId: user.uid });
+      toast.success('Agenda concluída. Novas alterações foram bloqueadas.');
+      setConfirmClose(false);
+    } catch (err) {
+      console.error(err);
+      toast.error('Não foi possível concluir a agenda.');
+    }
+  };
 
   const confirmAgendamento = async () => {
     const srvs = servicosCatalogo.filter(s => selSrvs[s.id]);
@@ -74,6 +106,7 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
       console.error(err);
       if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui agendamento ativo nesta agenda.');
       else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
+      else if (err.message === 'AGENDA_CONCLUIDA') toast.error('Esta agenda já foi concluída.');
       else toast.error('Erro ao realizar o agendamento.');
     }
   };
@@ -133,7 +166,7 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
             <span className="text-[11px] font-black uppercase text-gray-400 tracking-widest">
               {fila.length} Inscritos
             </span>
-            <Button 
+            {!isClosed && <Button
               onClick={() => {
                 setModalWiz(true);
                 setStep('search');
@@ -145,7 +178,14 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
               className="py-1.5 px-3 text-xs h-auto rounded-lg"
             >
               <Plus size={14} /> Novo
-            </Button>
+            </Button>}
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+            {['Agendado', 'Presente', 'Concluído', 'Faltou', 'Cancelado'].map(status => <div key={status} className="bg-white border border-gray-100 rounded-xl p-2 text-center">
+              <strong className="block text-sm text-gray-900">{summary[status] || 0}</strong>
+              <span className="text-[8px] font-black uppercase text-gray-400">{status}</span>
+            </div>)}
           </div>
 
           <div className="space-y-2">
@@ -160,13 +200,16 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
                       {c.servicosNomes?.join(', ')}
                     </p>
                   </div>
-                  <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>
-                    {c.status}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>
+                    {['Agendado', 'Presente'].includes(c.status) && !isClosed && <button onClick={() => setCancelTarget(c)} className="text-rose-500 hover:text-rose-700" title="Cancelar agendamento"><XCircle size={18} /></button>}
+                  </div>
                 </div>
               ))
             )}
           </div>
+
+          {!isClosed ? <Button variant="secondary" onClick={() => setConfirmClose(true)} className="w-full text-gray-700"><LockKeyhole size={16} /> Concluir Agenda</Button> : <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda concluída e protegida</div>}
         </div>
       )}
 
@@ -240,6 +283,9 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog isOpen={!!cancelTarget} onClose={() => setCancelTarget(null)} onConfirm={handleCancel} title="Cancelar Agendamento" message={`Cancelar o agendamento de "${cancelTarget?.nome}"? A vaga será devolvida automaticamente.`} confirmText="Sim, Cancelar" />
+      <ConfirmDialog isOpen={confirmClose} onClose={() => setConfirmClose(false)} onConfirm={handleClose} title="Concluir Agenda" message={`Concluir esta agenda? Existem ${(summary.Agendado || 0) + (summary.Presente || 0)} atendimentos ainda abertos. Após concluir, nenhuma alteração será permitida.`} confirmText="Sim, Concluir" />
     </Card>
   );
 };
