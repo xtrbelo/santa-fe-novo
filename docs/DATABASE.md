@@ -8,5 +8,6 @@ Raiz: `artifacts/{appId}/public/data`.
 - `agendas/{id}`: data, tipo, tipos permitidos, vagas, status e auditoria.
 - `consulentes/{agendaId_pessoaId}`: vínculo pessoa/agenda, serviços, status, prioridade e auditoria.
 - `config_tipos_pessoa`, `config_eventos`, `config_servicos`: catálogos ativos/auditados.
+- `auditoria/{id}`: eventos administrativos imutáveis com tipo, alvo, valores anterior/novo, executor e data.
 
 Legados sem `ativo` continuam visíveis (`ativo !== false`). A consulta de inscritos usa `agendaId ==`; não exige índice composto.

@@ -15,3 +15,11 @@ Novas contas Google criam o próprio documento `usuarios/{uid}` como `pendente`,
 4. Só então publique `firestore.rules`. Sem um admin válido, ninguém poderá promover contas.
 
 As regras negam por padrão e proíbem exclusão física de Pessoas e configurações.
+
+## Administração dentro do sistema
+
+O menu Usuários aparece somente para `admin`. O administrador pode alterar outros usuários entre `admin`, `gestor`, `atendimento` e `pendente`, além de ativá-los ou desativá-los. As alterações têm confirmação, `atualizadoEm`, `atualizadoPor` e registro em `auditoria`.
+
+A própria conta do administrador aparece como **Sua conta** e não pode ter perfil ou status alterado pela interface. As rules também recusam atualização do próprio documento, alteração de `uid`, roles desconhecidos e exclusão de usuários.
+
+O perfil logado é acompanhado em tempo real. Promoções liberam a sessão, enquanto uma desativação bloqueia imediatamente os módulos. A tela pendente também oferece **Verificar liberação**.

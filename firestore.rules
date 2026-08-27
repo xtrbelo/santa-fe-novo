@@ -16,8 +16,22 @@ service cloud.firestore {
       allow create: if isAuthenticated() && request.auth.uid == uid
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role == 'pendente'
-        && request.resource.data.ativo == true;
-      allow update, delete: if isAdmin(appId);
+        && request.resource.data.ativo == true
+        && request.resource.data.keys().hasOnly(['uid', 'nome', 'email', 'role', 'ativo', 'criadoEm', 'atualizadoEm']);
+      allow update: if isAdmin(appId)
+        && request.auth.uid != uid
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role in ['admin', 'gestor', 'atendimento', 'pendente']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'ativo', 'atualizadoEm', 'atualizadoPor']);
+      allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/auditoria/{id} {
+      allow read: if isAdmin(appId);
+      allow create: if isAdmin(appId)
+        && request.resource.data.executadoPor == request.auth.uid
+        && request.resource.data.tipo in ['USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'];
+      allow update, delete: if false;
     }
 
     match /artifacts/{appId}/public/data/pessoas/{id} {

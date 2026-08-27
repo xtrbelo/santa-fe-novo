@@ -13,3 +13,5 @@ Validações: `npm run lint` e `npm run build`.
 ## Segurança
 
 O acesso exige conta Google e perfil ativo em `artifacts/{appId}/public/data/usuarios/{uid}`. Novos usuários recebem `role: "pendente"`. Consulte `docs/SECURITY.md` antes de publicar as regras e prepare o primeiro administrador.
+
+Depois que o primeiro administrador é configurado manualmente, o módulo **Usuários** permite liberar, promover, ativar e desativar outras contas sem usar o Firebase Console.

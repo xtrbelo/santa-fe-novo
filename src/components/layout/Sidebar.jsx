@@ -4,16 +4,19 @@ import {
   CalendarDays, 
   BookOpenCheck, 
   Users, 
+  UsersRound,
   Settings, 
   LogOut 
 } from 'lucide-react';
+import { ROLE_LABELS } from '../../constants/roles';
 
-export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs }) => {
+export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs, profile }) => {
   const navItems = [
     { id: 'home', label: 'Painel', icon: <LayoutDashboard size={22} /> },
     { id: 'agendas', label: 'Agendas', icon: <CalendarDays size={22} /> },
     { id: 'fluxo', label: 'Fluxo do Dia', icon: <BookOpenCheck size={22} /> },
     { id: 'pessoas', label: 'Pessoas', icon: <Users size={22} /> },
+    { id: 'usuarios', label: 'Usuários', icon: <UsersRound size={22} /> },
     { id: 'config', label: 'Configurações', icon: <Settings size={22} /> },
   ];
 
@@ -53,9 +56,13 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs }) => {
         })}
       </nav>
 
+      <div className="border-t border-gray-100 pt-5 px-4 mb-2 min-w-0">
+        <p className="font-black text-sm text-gray-800 truncate">{profile?.nome || profile?.email}</p>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{ROLE_LABELS[profile?.role] || profile?.role}</p>
+      </div>
       <button
         onClick={onSignOut}
-        className="flex items-center gap-4 text-gray-400 hover:text-rose-600 font-black uppercase text-[11px] tracking-widest p-4 transition-all mt-auto border-t border-gray-100 pt-6 cursor-pointer"
+        className="flex items-center gap-4 text-gray-400 hover:text-rose-600 font-black uppercase text-[11px] tracking-widest p-4 transition-all cursor-pointer"
       >
         <LogOut size={18} />
         <span>Sair do Sistema</span>
