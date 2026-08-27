@@ -1,5 +1,7 @@
 # Pendências futuras
 
+- Backup pré-deploy do Firestore pendente por decisão do responsável pelo projeto; criar bucket privado compatível e executar exportação em etapa futura autorizada.
+
 - Migrar CPFs antigos para `cpf_index`.
 - Reconciliar definitivamente `vagasOcupadas` e retirar a compatibilidade legada.
 - Histórico de registros desativados.
