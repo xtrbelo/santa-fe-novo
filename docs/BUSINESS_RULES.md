@@ -14,6 +14,7 @@
 
 - Transições aceitas: `Agendado → Presente → Concluído` e `Agendado → Faltou`. Estados finais não voltam para estados anteriores.
 - `Agendado` e `Presente` podem ser cancelados; o registro passa a `Cancelado`, recebe executor/data e devolve as vagas numa transação. Não há exclusão física.
+- `Faltou` preserva a vaga utilizada no histórico da agenda; somente o cancelamento explícito devolve a reserva. Registros `Cancelado` não entram na reconciliação da ocupação real.
 - A prioridade pode ser alterada apenas em atendimentos abertos e coloca presentes prioritários primeiro na fila.
 - Horários de chegada e saída são gravados uma única vez.
 - Uma agenda `Concluída` fica somente para consulta: novos agendamentos, cancelamentos e demais alterações são bloqueados.
@@ -22,5 +23,5 @@
 ## Validação transacional
 
 - A validação de `tiposPessoaPermitidos` pertence também ao serviço transacional, não somente à interface.
-- Reserva, limite de vagas, duplicidade, cancelamento, dupla devolução, agenda concluída, prioridade, compatibilidade legada e concorrência da última vaga são exercitados contra o Firebase Emulator por `npm run test:business`.
+- Reserva, limite de vagas, duplicidade, cancelamento, dupla devolução, agenda concluída, prioridade, ordenação da fila, horários, compatibilidade legada e concorrência da última vaga são exercitados contra o Firebase Emulator por `npm run test:business`.
 - A suíte usa o projeto fictício `santa-fe-business-test` e chama as mesmas funções utilizadas pelo frontend por meio de injeção opcional do Firestore.

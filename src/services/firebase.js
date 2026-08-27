@@ -177,10 +177,10 @@ export const setAgendamentoPrioridade = async ({ agendaId, agendamentoId, priori
   });
 };
 
-export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status, userId }) => {
-  const agendaRef = getAppDoc('agendas', agendaId);
-  const appointmentRef = getAppDoc('consulentes', agendamentoId);
-  await runTransaction(db, async transaction => {
+export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status, userId }, firestore = db) => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const appointmentRef = getDataDoc(firestore, 'consulentes', agendamentoId);
+  await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
     if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');

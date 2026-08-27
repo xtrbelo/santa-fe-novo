@@ -2,10 +2,11 @@
 
 ## Fase 5B — testes das transações de negócio
 
-- Suíte exclusiva do Firebase Emulator com dez cenários transacionais críticos.
+- Suíte exclusiva do Firebase Emulator ampliada para quatorze cenários críticos.
 - Operações de negócio passaram a aceitar injeção opcional do Firestore, preservando a API usada pelo frontend.
 - Corrigida a validação de tipos de pessoa para ocorrer também dentro do serviço transacional.
 - Cobertura de limite e concorrência de vagas, duplicidade, cancelamentos, agenda concluída, prioridade, legado e auditoria.
+- Cobertura adicional de ordenação da fila, preservação dos horários de chegada/saída e ocupação por status legado.
 
 ## Fase 3 — validação de segurança e preparação do deploy
 

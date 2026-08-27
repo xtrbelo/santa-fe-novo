@@ -8,8 +8,10 @@ import {
   cancelAgendamento,
   concluirAgenda,
   createAgendamento,
-  setAgendamentoPrioridade
+  setAgendamentoPrioridade,
+  updateAtendimentoStatus
 } from '../src/services/firebase.js';
+import { sortQueue } from '../src/utils/formatters.js';
 
 const PROJECT_ID = 'santa-fe-business-test';
 const root = `artifacts/${appId}/public/data`;
@@ -127,6 +129,7 @@ describe('transações do fluxo operacional', () => {
     assert.equal(closed.status, 'Concluída');
     assert.ok(closed.concluidaEm);
     assert.equal(closed.concluidaPor, USER_ID);
+    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().status, 'Agendado');
     await assert.rejects(book(db, { ...agenda, status: 'Concluída' }, person('2')), /AGENDA_CONCLUIDA/);
     await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_CONCLUIDA/);
     await assert.rejects(setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, prioridade: true, userId: USER_ID }, db), /AGENDA_CONCLUIDA/);
@@ -183,5 +186,63 @@ describe('transações do fluxo operacional', () => {
     assert.equal(results.filter(result => result.status === 'rejected' && /SEM_VAGA/.test(result.reason.message)).length, 1);
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
     assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 1);
+  });
+
+  test('ordena fila por status, prioridade e hora de chegada', () => {
+    const time = value => ({ toMillis: () => value });
+    const queue = [
+      { id: 'cancelado', status: 'Cancelado', criadoEm: time(60) },
+      { id: 'presente-normal-tarde', status: 'Presente', prioridade: false, horaChegada: time(30) },
+      { id: 'faltou', status: 'Faltou', criadoEm: time(50) },
+      { id: 'agendado', status: 'Agendado', criadoEm: time(40) },
+      { id: 'presente-prioritario-tarde', status: 'Presente', prioridade: true, horaChegada: time(20) },
+      { id: 'concluido', status: 'Concluído', criadoEm: time(30) },
+      { id: 'presente-prioritario-cedo', status: 'Presente', prioridade: true, horaChegada: time(10) },
+      { id: 'presente-normal-cedo', status: 'Presente', prioridade: false, horaChegada: time(5) }
+    ];
+    assert.deepEqual(queue.sort(sortQueue).map(item => item.id), [
+      'presente-prioritario-cedo', 'presente-prioritario-tarde',
+      'presente-normal-cedo', 'presente-normal-tarde',
+      'agendado', 'concluido', 'faltou', 'cancelado'
+    ]);
+  });
+
+  test('registra chegada uma vez e não permite sobrescrevê-la', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-chegada');
+    await book(db, agenda, person('1'));
+    const params = { agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, status: 'Presente', userId: USER_ID };
+    await updateAtendimentoStatus(params, db);
+    const original = (await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaChegada.toMillis();
+    await assert.rejects(updateAtendimentoStatus(params, db), /TRANSICAO_INVALIDA/);
+    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaChegada.toMillis(), original);
+  });
+
+  test('registra saída uma vez e protege atendimento concluído', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-saida');
+    await book(db, agenda, person('1'));
+    await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, status: 'Presente', userId: USER_ID }, db);
+    const params = { agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, status: 'Concluído', userId: USER_ID };
+    await updateAtendimentoStatus(params, db);
+    const original = (await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaSaida.toMillis();
+    await assert.rejects(updateAtendimentoStatus(params, db), /TRANSICAO_INVALIDA/);
+    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaSaida.toMillis(), original);
+  });
+
+  test('ignora cancelado e considera Faltou na reconciliação de vagas', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-status-vaga', { vagasTotais: { [service.id]: 2 }, vagasOcupadas: { [service.id]: 0 } });
+    await seedDocuments([
+      ['consulentes', 'agendado-1', { agendaId: agenda.id, pessoaBaseId: 'agendado-1', status: 'Agendado', servicosIds: [service.id] }],
+      ['consulentes', 'cancelado-1', { agendaId: agenda.id, pessoaBaseId: 'cancelado-1', status: 'Cancelado', servicosIds: [service.id] }]
+    ]);
+    await book(db, agenda, person('nova'));
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 2);
+
+    const faltouAgenda = await seedAgenda('agenda-faltou', { vagasTotais: { [service.id]: 1 }, vagasOcupadas: { [service.id]: 0 } });
+    await seedDocuments([['consulentes', 'faltou-1', { agendaId: faltouAgenda.id, pessoaBaseId: 'faltou-1', status: 'Faltou', servicosIds: [service.id] }]]);
+    await assert.rejects(book(db, faltouAgenda, person('outra')), /SEM_VAGA/);
+    assert.equal((await getDoc(agendaRef(db, faltouAgenda.id))).data().vagasOcupadas[service.id], 0);
   });
 });
