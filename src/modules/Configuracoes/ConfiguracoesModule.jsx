@@ -4,7 +4,8 @@ import {
   getAppDoc, 
   onSnapshot, 
   addDoc, 
-  deleteDoc 
+  updateDoc,
+  Timestamp
 } from '../../services/firebase';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -33,13 +34,13 @@ export const ConfiguracoesModule = ({ user }) => {
   useEffect(() => {
     if (!user) return;
     const unsubT = onSnapshot(getAppCollection('config_tipos_pessoa'), (s) => 
-      setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })))
+      setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
     );
     const unsubE = onSnapshot(getAppCollection('config_eventos'), (s) => 
-      setEventos(s.docs.map(d => ({ id: d.id, ...d.data() })))
+      setEventos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
     );
     const unsubS = onSnapshot(getAppCollection('config_servicos'), (s) => 
-      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })))
+      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
     );
     return () => {
       unsubT();
@@ -51,7 +52,8 @@ export const ConfiguracoesModule = ({ user }) => {
   const addTipoPessoa = async () => {
     if (!novoTP.trim()) return;
     try {
-      await addDoc(getAppCollection('config_tipos_pessoa'), { nome: novoTP.trim() });
+      const now = Timestamp.now();
+      await addDoc(getAppCollection('config_tipos_pessoa'), { nome: novoTP.trim(), ativo: true, criadoEm: now, criadoPor: user.uid, atualizadoEm: now, atualizadoPor: user.uid });
       toast.success(`Tipo de pessoa "${novoTP}" cadastrado com sucesso!`);
       setNovoTP('');
     } catch (err) {
@@ -65,7 +67,8 @@ export const ConfiguracoesModule = ({ user }) => {
     try {
       await addDoc(getAppCollection('config_eventos'), {
         nome: novoEV.nome.trim(),
-        tiposPessoaPermitidos: novoEV.tiposPessoaPermitidos
+        tiposPessoaPermitidos: novoEV.tiposPessoaPermitidos,
+        ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid
       });
       toast.success(`Tipo de agenda "${novoEV.nome}" cadastrado com sucesso!`);
       setNovoEV({ nome: '', tiposPessoaPermitidos: [] });
@@ -80,7 +83,8 @@ export const ConfiguracoesModule = ({ user }) => {
     try {
       await addDoc(getAppCollection('config_servicos'), {
         nome: novoSV.nome.trim(),
-        requerVagas: novoSV.requerVagas
+        requerVagas: novoSV.requerVagas,
+        ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid
       });
       toast.success(`Serviço "${novoSV.nome}" adicionado com sucesso!`);
       setNovoSV({ nome: '', requerVagas: false });
@@ -93,8 +97,8 @@ export const ConfiguracoesModule = ({ user }) => {
   const confirmDelete = async () => {
     if (!itemToDelete) return;
     try {
-      await deleteDoc(getAppDoc(itemToDelete.coll, itemToDelete.id));
-      toast.success(`Item "${itemToDelete.name}" removido.`);
+      await updateDoc(getAppDoc(itemToDelete.coll, itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+      toast.success(`Item "${itemToDelete.name}" desativado.`);
       setItemToDelete(null);
     } catch (err) {
       console.error(err);
@@ -285,9 +289,9 @@ export const ConfiguracoesModule = ({ user }) => {
         isOpen={!!itemToDelete}
         onClose={() => setItemToDelete(null)}
         onConfirm={confirmDelete}
-        title="Excluir Configuração"
-        message={`Deseja excluir "${itemToDelete?.name}"? Esta ação pode impactar os agendamentos que utilizam este parâmetro.`}
-        confirmText="Sim, Excluir"
+        title="Desativar Configuração"
+        message={`Deseja desativar "${itemToDelete?.name}"? Agendamentos existentes serão preservados.`}
+        confirmText="Sim, Desativar"
       />
     </div>
   );

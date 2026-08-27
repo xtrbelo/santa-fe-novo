@@ -39,6 +39,20 @@ export const maskPhone = (v) => {
 
 export const cleanDigits = (v) => (v ? v.replace(/\D/g, '') : '');
 
+export const validateCPF = (cpf) => {
+  const digits = cleanDigits(cpf);
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
+
+  const calculateDigit = (length) => {
+    let sum = 0;
+    for (let i = 0; i < length; i += 1) sum += Number(digits[i]) * (length + 1 - i);
+    const remainder = (sum * 10) % 11;
+    return remainder === 10 ? 0 : remainder;
+  };
+
+  return calculateDigit(9) === Number(digits[9]) && calculateDigit(10) === Number(digits[10]);
+};
+
 export const sortQueue = (a, b) => {
   const order = { 'Presente': 1, 'Agendado': 2, 'Aguardando': 2, 'Concluído': 3, 'Faltou': 4, 'Cancelado': 4 };
   if ((order[a.status] || 5) !== (order[b.status] || 5)) return (order[a.status] || 5) - (order[b.status] || 5);

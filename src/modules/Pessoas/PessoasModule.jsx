@@ -3,17 +3,19 @@ import {
   getAppCollection, 
   getAppDoc, 
   onSnapshot, 
-  addDoc, 
   updateDoc, 
-  deleteDoc, 
-  Timestamp 
+  Timestamp,
+  runTransaction,
+  doc,
+  findPessoaByCpf
 } from '../../services/firebase';
 import { 
   calcularIdade, 
   isMenor, 
   maskCPF, 
   maskPhone, 
-  cleanDigits 
+  cleanDigits,
+  validateCPF
 } from '../../utils/formatters';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -30,7 +32,7 @@ import {
   CheckCircle2 
 } from 'lucide-react';
 
-export const PessoasModule = ({ user }) => {
+export const PessoasModule = ({ user, readOnly = false }) => {
   const [pessoas, setPessoas] = useState([]);
   const [tiposPessoa, setTiposPessoa] = useState([]);
   const [abaAtiva, setAbaAtiva] = useState('Todos');
@@ -60,11 +62,12 @@ export const PessoasModule = ({ user }) => {
       setPessoas(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
+          .filter(p => p.ativo !== false)
           .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""))
       );
     });
     const unsubT = onSnapshot(getAppCollection('config_tipos_pessoa'), (s) => {
-      setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })));
+      setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(t => t.ativo !== false));
     });
     return () => {
       unsubP();
@@ -117,9 +120,23 @@ export const PessoasModule = ({ user }) => {
     const rawCpf = cleanDigits(eCpf);
     
     // Validação básica se CPF fornecido
-    if (rawCpf && rawCpf.length !== 11) {
-      toast.error('CPF deve conter 11 dígitos.');
+    if (rawCpf && !validateCPF(rawCpf)) {
+      toast.error('Informe um CPF válido.');
       return;
+    }
+
+    if (rawCpf) {
+      try {
+        const existingPessoa = await findPessoaByCpf(rawCpf, true);
+        if (existingPessoa && existingPessoa.id !== editing?.id) {
+          toast.error('Já existe uma pessoa cadastrada com este CPF.');
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+        toast.error('Não foi possível verificar a unicidade do CPF.');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -133,23 +150,43 @@ export const PessoasModule = ({ user }) => {
       responsavelCpf: minor ? cleanDigits(eRespCpf) || null : null,
       responsavelNome: minor ? eRespNome.trim() || null : null,
       responsavelContato: minor ? cleanDigits(eRespContato) || null : null,
-      atualizadoEm: Timestamp.now()
+      atualizadoEm: Timestamp.now(),
+      atualizadoPor: user.uid
     };
 
     try {
       if (editing) {
-        await updateDoc(getAppDoc('pessoas', editing.id), data);
+        const pessoaRef = getAppDoc('pessoas', editing.id);
+        await runTransaction(pessoaRef.firestore, async transaction => {
+          const oldCpf = cleanDigits(editing.cpf);
+          if (rawCpf && rawCpf !== oldCpf) {
+            const newIndexRef = getAppDoc('cpf_index', rawCpf);
+            const indexSnap = await transaction.get(newIndexRef);
+            if (indexSnap.exists() && indexSnap.data().pessoaId !== editing.id) throw new Error('CPF_DUPLICADO');
+            transaction.set(newIndexRef, { pessoaId: editing.id, criadoEm: Timestamp.now() });
+          }
+          if (oldCpf && oldCpf !== rawCpf) transaction.delete(getAppDoc('cpf_index', oldCpf));
+          transaction.update(pessoaRef, data);
+        });
         toast.success('Cadastro atualizado com sucesso!');
       } else {
-        data.criadoEm = Timestamp.now();
-        await addDoc(getAppCollection('pessoas'), data);
+        const pessoaRef = doc(getAppCollection('pessoas'));
+        await runTransaction(pessoaRef.firestore, async transaction => {
+          if (rawCpf) {
+            const indexRef = getAppDoc('cpf_index', rawCpf);
+            const indexSnap = await transaction.get(indexRef);
+            if (indexSnap.exists()) throw new Error('CPF_DUPLICADO');
+            transaction.set(indexRef, { pessoaId: pessoaRef.id, criadoEm: Timestamp.now() });
+          }
+          transaction.set(pessoaRef, { ...data, ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid });
+        });
         toast.success('Nova pessoa cadastrada com sucesso!');
       }
       setIsModalOpen(false);
       resetForm();
     } catch (err) {
       console.error(err);
-      toast.error('Erro ao salvar os dados.');
+      toast.error(err.message === 'CPF_DUPLICADO' ? 'Já existe uma pessoa cadastrada com este CPF.' : 'Erro ao salvar os dados.');
     } finally {
       setIsSubmitting(false);
     }
@@ -158,8 +195,8 @@ export const PessoasModule = ({ user }) => {
   const handleDelete = async () => {
     if (!itemToDelete) return;
     try {
-      await deleteDoc(getAppDoc('pessoas', itemToDelete.id));
-      toast.success(`Registro de ${itemToDelete.nome} removido.`);
+      await updateDoc(getAppDoc('pessoas', itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+      toast.success(`Registro de ${itemToDelete.nome} desativado.`);
       setItemToDelete(null);
     } catch (err) {
       console.error(err);
@@ -188,12 +225,12 @@ export const PessoasModule = ({ user }) => {
             Cadastro unificado de membros e consulentes
           </p>
         </div>
-        <Button 
+        {!readOnly && <Button
           onClick={openNew} 
           className="rounded-full w-12 h-12 p-0 shadow-lg shadow-purple-500/30 shrink-0 bg-purple-600 hover:bg-purple-700 text-white"
         >
           <UserPlus size={22} />
-        </Button>
+        </Button>}
       </header>
 
       <div className="flex flex-col gap-3">
@@ -266,7 +303,7 @@ export const PessoasModule = ({ user }) => {
                 </div>
               </div>
 
-              <div className="flex gap-2 border-t border-gray-50 pt-3">
+              {!readOnly && <div className="flex gap-2 border-t border-gray-50 pt-3">
                 <Button 
                   variant="secondary" 
                   onClick={() => openEdit(p)} 
@@ -281,7 +318,7 @@ export const PessoasModule = ({ user }) => {
                 >
                   <Trash2 size={16} />
                 </Button>
-              </div>
+              </div>}
             </Card>
           ))
         )}
@@ -412,9 +449,9 @@ export const PessoasModule = ({ user }) => {
         isOpen={!!itemToDelete}
         onClose={() => setItemToDelete(null)}
         onConfirm={handleDelete}
-        title="Excluir Registro"
-        message={`Deseja realmente excluir o registro de "${itemToDelete?.nome}"? Esta ação não pode ser desfeita.`}
-        confirmText="Sim, Excluir"
+        title="Desativar Registro"
+        message={`Deseja desativar o registro de "${itemToDelete?.nome}"?`}
+        confirmText="Sim, Desativar"
       />
     </div>
   );

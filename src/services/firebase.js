@@ -3,7 +3,6 @@ import {
   getAuth, 
   GoogleAuthProvider, 
   signInWithPopup, 
-  signInAnonymously, 
   signOut, 
   onAuthStateChanged 
 } from 'firebase/auth';
@@ -13,10 +12,14 @@ import {
   doc, 
   addDoc, 
   updateDoc, 
-  deleteDoc, 
   onSnapshot, 
   Timestamp, 
+  serverTimestamp,
+  getDoc,
+  setDoc,
   getDocs,
+  runTransaction,
+  writeBatch,
   query,
   where,
   limit
@@ -73,29 +76,70 @@ export const getAppDoc = (collName, docId) => {
 /**
  * Busca otimizada de pessoa por CPF no Firestore utilizando indexação direta
  */
-export const findPessoaByCpf = async (cpfClean) => {
+export const findPessoaByCpf = async (cpfClean, includeInactive = false) => {
   if (!db) return null;
-  const q = query(getAppCollection('pessoas'), where('cpf', '==', cpfClean), limit(1));
+  const q = query(getAppCollection('pessoas'), where('cpf', '==', cpfClean));
   const snap = await getDocs(q);
-  if (snap.empty) return null;
-  const docSnap = snap.docs[0];
+  const docSnap = snap.docs.find(item => includeInactive || item.data().ativo !== false);
+  if (!docSnap) return null;
   return { id: docSnap.id, ...docSnap.data() };
+};
+
+export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }) => {
+  const existingQuery = query(getAppCollection('consulentes'), where('agendaId', '==', agenda.id));
+  const existingSnapshot = await getDocs(existingQuery);
+  const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => item.status !== 'Cancelado');
+  if (activeAppointments.some(item => item.pessoaBaseId === pessoa.id)) throw new Error('AGENDAMENTO_DUPLICADO');
+
+  const realOccupancy = {};
+  activeAppointments.forEach(item => (item.servicosIds || []).forEach(serviceId => {
+    realOccupancy[serviceId] = (realOccupancy[serviceId] || 0) + 1;
+  }));
+
+  const agendaRef = getAppDoc('agendas', agenda.id);
+  const appointmentRef = getAppDoc('consulentes', `${agenda.id}_${pessoa.id}`);
+  await runTransaction(db, async transaction => {
+    const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
+    if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    if (appointmentSnapshot.exists() && appointmentSnapshot.data().status !== 'Cancelado') throw new Error('AGENDAMENTO_DUPLICADO');
+
+    const agendaData = agendaSnapshot.data();
+    const occupied = { ...(agendaData.vagasOcupadas || {}) };
+    servicos.filter(service => service.requerVagas).forEach(service => {
+      const total = Number(agendaData.vagasTotais?.[service.id] || 0);
+      const current = Math.max(Number(occupied[service.id] || 0), Number(realOccupancy[service.id] || 0));
+      if (current >= total) throw new Error(`SEM_VAGA:${service.nome}`);
+      occupied[service.id] = current + 1;
+    });
+
+    const now = Timestamp.now();
+    transaction.set(appointmentRef, {
+      agendaId: agenda.id, nome: pessoa.nome, pessoaBaseId: pessoa.id, cpf: pessoa.cpf || '', status,
+      ...(horaChegada ? { horaChegada } : {}), servicosIds: servicos.map(service => service.id),
+      servicosNomes: servicos.map(service => service.nome), criadoEm: now, criadoPor: userId,
+      atualizadoEm: now, atualizadoPor: userId, prioridade: false
+    });
+    transaction.update(agendaRef, { vagasOcupadas: occupied, atualizadoEm: now, atualizadoPor: userId });
+  });
 };
 
 export {
   GoogleAuthProvider,
   signInWithPopup,
-  signInAnonymously,
   signOut,
   onAuthStateChanged,
   collection,
   doc,
   addDoc,
   updateDoc,
-  deleteDoc,
   onSnapshot,
   Timestamp,
+  serverTimestamp,
+  getDoc,
+  setDoc,
   getDocs,
+  runTransaction,
+  writeBatch,
   query,
   where,
   limit

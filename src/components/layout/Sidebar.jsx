@@ -8,7 +8,7 @@ import {
   LogOut 
 } from 'lucide-react';
 
-export const Sidebar = ({ activeTab, onSelectTab, onSignOut }) => {
+export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs }) => {
   const navItems = [
     { id: 'home', label: 'Painel', icon: <LayoutDashboard size={22} /> },
     { id: 'agendas', label: 'Agendas', icon: <CalendarDays size={22} /> },
@@ -34,7 +34,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut }) => {
       </div>
 
       <nav className="flex-grow space-y-2.5">
-        {navItems.map((item) => {
+        {navItems.filter(item => allowedTabs.includes(item.id)).map((item) => {
           const isActive = activeTab === item.id;
           return (
             <button

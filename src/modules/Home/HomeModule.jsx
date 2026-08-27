@@ -2,7 +2,7 @@ import React from 'react';
 import { Card } from '../../components/ui/Card';
 import { CalendarDays, BookOpenCheck, Users, Sparkles } from 'lucide-react';
 
-export const HomeModule = ({ user, onSelectTab }) => {
+export const HomeModule = ({ user, onSelectTab, allowedTabs }) => {
   const firstName = user?.displayName?.split(' ')[0] || 'Utilizador';
 
   return (
@@ -20,7 +20,7 @@ export const HomeModule = ({ user, onSelectTab }) => {
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        <Card
+        {allowedTabs.includes('agendas') && <Card
           onClick={() => onSelectTab('agendas')}
           className="!bg-gradient-to-br from-amber-500 to-amber-600 text-white !p-6 shadow-xl shadow-amber-500/20 group !border-none hover:-translate-y-1 transition-all"
         >
@@ -33,9 +33,9 @@ export const HomeModule = ({ user, onSelectTab }) => {
           <p className="text-amber-100 text-[11px] font-bold uppercase tracking-widest mt-1">
             Planejamento & Calendário
           </p>
-        </Card>
+        </Card>}
 
-        <Card
+        {allowedTabs.includes('fluxo') && <Card
           onClick={() => onSelectTab('fluxo')}
           className="!bg-gradient-to-br from-emerald-600 to-emerald-700 text-white !p-6 shadow-xl shadow-emerald-600/20 group !border-none hover:-translate-y-1 transition-all"
         >
@@ -48,9 +48,9 @@ export const HomeModule = ({ user, onSelectTab }) => {
           <p className="text-emerald-100 text-[11px] font-bold uppercase tracking-widest mt-1">
             Atendimentos & Fila em Tempo Real
           </p>
-        </Card>
+        </Card>}
 
-        <Card
+        {allowedTabs.includes('pessoas') && <Card
           onClick={() => onSelectTab('pessoas')}
           className="!bg-gradient-to-br from-purple-600 to-purple-700 text-white !p-6 shadow-xl shadow-purple-600/20 group !border-none hover:-translate-y-1 transition-all sm:col-span-2 lg:col-span-1"
         >
@@ -63,7 +63,7 @@ export const HomeModule = ({ user, onSelectTab }) => {
           <p className="text-purple-100 text-[11px] font-bold uppercase tracking-widest mt-1">
             Base de Dados & Cadastros
           </p>
-        </Card>
+        </Card>}
       </div>
     </div>
   );

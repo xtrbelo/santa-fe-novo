@@ -36,13 +36,13 @@ export const AgendasModule = ({ user }) => {
       setAgendas(s.docs.map(d => ({ id: d.id, ...d.data() })))
     );
     const unsubE = onSnapshot(getAppCollection('config_eventos'), (s) => 
-      setEventos(s.docs.map(d => ({ id: d.id, ...d.data() })))
+      setEventos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
     );
     const unsubS = onSnapshot(getAppCollection('config_servicos'), (s) => 
-      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })))
+      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
     );
     const unsubT = onSnapshot(getAppCollection('config_tipos_pessoa'), (s) => 
-      setTiposPessoa(s.docs.map(d => d.data().nome))
+      setTiposPessoa(s.docs.map(d => d.data()).filter(item => item.ativo !== false).map(item => item.nome))
     );
     return () => { unsubA(); unsubE(); unsubS(); unsubT(); };
   }, [user]);
@@ -96,7 +96,11 @@ export const AgendasModule = ({ user }) => {
             vagasTotais: a.vagas,
             vagasOcupadas: Object.keys(a.vagas).reduce((acc, k) => ({ ...acc, [k]: 0 }), {}),
             status: 'Agendada',
-            criadoEm: Timestamp.now()
+            ativo: true,
+            criadoEm: Timestamp.now(),
+            criadoPor: user.uid,
+            atualizadoEm: Timestamp.now(),
+            atualizadoPor: user.uid
           });
         })
       );

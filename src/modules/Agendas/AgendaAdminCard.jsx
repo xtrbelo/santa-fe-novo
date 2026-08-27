@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   getAppCollection, 
   onSnapshot, 
-  addDoc, 
-  Timestamp, 
-  findPessoaByCpf 
+  findPessoaByCpf,
+  createAgendamento,
+  query,
+  where
 } from '../../services/firebase';
 import { 
   maskCPF, 
@@ -39,11 +40,10 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
 
   useEffect(() => {
     if (!expanded || !user) return;
-    return onSnapshot(getAppCollection('consulentes'), (s) => {
+    return onSnapshot(query(getAppCollection('consulentes'), where('agendaId', '==', agenda.id)), (s) => {
       setFila(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(c => c.agendaId === agenda.id)
           .sort(sortQueue)
       );
     });
@@ -56,18 +56,14 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
       return;
     }
 
+    const permittedTypes = agenda.tiposPessoaPermitidos || [];
+    if (permittedTypes.length && !permittedTypes.includes(selCons.tipoPessoa)) {
+      toast.error(`O tipo de pessoa "${selCons.tipoPessoa || 'não informado'}" não é permitido nesta agenda.`);
+      return;
+    }
+
     try {
-      await addDoc(getAppCollection('consulentes'), {
-        agendaId: agenda.id,
-        nome: selCons.nome,
-        pessoaBaseId: selCons.id,
-        cpf: selCons.cpf || '',
-        status: 'Agendado',
-        servicosIds: srvs.map(s => s.id),
-        servicosNomes: srvs.map(s => s.nome),
-        criadoEm: Timestamp.now(),
-        prioridade: false
-      });
+      await createAgendamento({ agenda, pessoa: selCons, servicos: srvs, userId: user.uid, status: 'Agendado' });
       toast.success(`Agendamento de ${selCons.nome} confirmado com sucesso!`);
       setModalWiz(false);
       setStep('search');
@@ -76,7 +72,9 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
       setBuscaCpf('');
     } catch (err) {
       console.error(err);
-      toast.error('Erro ao realizar o agendamento.');
+      if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui agendamento ativo nesta agenda.');
+      else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
+      else toast.error('Erro ao realizar o agendamento.');
     }
   };
 

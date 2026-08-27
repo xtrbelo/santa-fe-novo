@@ -7,7 +7,7 @@ import {
   Settings 
 } from 'lucide-react';
 
-export const MobileNav = ({ activeTab, onSelectTab }) => {
+export const MobileNav = ({ activeTab, onSelectTab, allowedTabs }) => {
   const navItems = [
     { id: 'home', label: 'Início', icon: LayoutDashboard },
     { id: 'agendas', label: 'Agendas', icon: CalendarDays },
@@ -18,7 +18,7 @@ export const MobileNav = ({ activeTab, onSelectTab }) => {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 px-2 py-3 flex justify-around items-center lg:hidden z-[90] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] pb-safe">
-      {navItems.map((item) => {
+      {navItems.filter(item => allowedTabs.includes(item.id)).map((item) => {
         const Icon = item.icon;
         const isActive = activeTab === item.id;
         return (

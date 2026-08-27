@@ -1,16 +1,15 @@
-# React + Vite
+# Sistema Santa Fé
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Aplicação interna para cadastro de pessoas, criação de agendas e controle do fluxo diário de atendimentos. O frontend usa React, Vite, Tailwind CSS e Firebase Authentication/Firestore.
 
-Currently, two official plugins are available:
+## Desenvolvimento
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Copie `.env.example` para `.env.local` e configure o projeto Firebase.
+2. Ative o provedor Google no Firebase Authentication.
+3. Execute `npm install` e `npm run dev`.
 
-## React Compiler
+Validações: `npm run lint` e `npm run build`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Segurança
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+O acesso exige conta Google e perfil ativo em `artifacts/{appId}/public/data/usuarios/{uid}`. Novos usuários recebem `role: "pendente"`. Consulte `docs/SECURITY.md` antes de publicar as regras e prepare o primeiro administrador.

@@ -1,9 +1,55 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Permite leitura e escrita para usuários autenticados (inclusive anônimos)
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+    function isAuthenticated() { return request.auth != null; }
+    function userPath(appId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(request.auth.uid); }
+    function currentUser(appId) { return get(userPath(appId)).data; }
+    function isActive(appId) { return isAuthenticated() && exists(userPath(appId)) && currentUser(appId).ativo == true; }
+    function isAdmin(appId) { return isActive(appId) && currentUser(appId).role == 'admin'; }
+    function isGestor(appId) { return isActive(appId) && currentUser(appId).role == 'gestor'; }
+    function isAtendimento(appId) { return isActive(appId) && currentUser(appId).role == 'atendimento'; }
+    function isInternal(appId) { return isAdmin(appId) || isGestor(appId) || isAtendimento(appId); }
+
+    match /artifacts/{appId}/public/data/usuarios/{uid} {
+      allow get: if isAuthenticated() && (request.auth.uid == uid || isAdmin(appId));
+      allow list: if isAdmin(appId);
+      allow create: if isAuthenticated() && request.auth.uid == uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role == 'pendente'
+        && request.resource.data.ativo == true;
+      allow update, delete: if isAdmin(appId);
     }
+
+    match /artifacts/{appId}/public/data/pessoas/{id} {
+      allow read: if isInternal(appId);
+      allow create, update: if isAdmin(appId) || isGestor(appId);
+      allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/cpf_index/{cpf} {
+      allow read, create, update, delete: if isAdmin(appId) || isGestor(appId);
+    }
+
+    match /artifacts/{appId}/public/data/agendas/{id} {
+      allow read: if isInternal(appId);
+      allow create: if isAdmin(appId) || isGestor(appId);
+      allow update: if isAdmin(appId) || isGestor(appId)
+        || (isAtendimento(appId) && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['vagasOcupadas', 'atualizadoEm', 'atualizadoPor']));
+      allow delete: if isAdmin(appId);
+    }
+
+    match /artifacts/{appId}/public/data/consulentes/{id} {
+      allow read, create, update: if isInternal(appId);
+      allow delete: if isAdmin(appId);
+    }
+
+    match /artifacts/{appId}/public/data/{collectionName}/{id} {
+      allow read: if collectionName in ['config_tipos_pessoa', 'config_eventos', 'config_servicos'] && isInternal(appId);
+      allow create, update: if collectionName in ['config_tipos_pessoa', 'config_eventos', 'config_servicos'] && isAdmin(appId);
+      allow delete: if false;
+    }
+
+    match /{document=**} { allow read, write: if false; }
   }
 }

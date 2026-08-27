@@ -33,7 +33,7 @@ export const FluxoModule = ({ user }) => {
     });
 
     const unsubS = onSnapshot(getAppCollection('config_servicos'), (s) => {
-      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })));
+      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false));
     });
 
     return () => {
