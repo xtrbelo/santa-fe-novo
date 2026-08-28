@@ -18,7 +18,7 @@ import {
   realocarAtendimento
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
-import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
+import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
 
 const PROJECT_ID = 'santa-fe-business-test';
 const root = `artifacts/${appId}/public/data`;
@@ -70,6 +70,15 @@ beforeEach(async () => {
 after(async () => environment.cleanup());
 
 describe('transações do fluxo operacional', () => {
+  test('Fluxo do Dia exibe somente os status operacionais definidos', () => {
+    for (const status of ['Agendado', 'Presente', 'Concluído', 'Faltou']) {
+      assert.equal(isAtendimentoFluxoDia({ status }), true, `${status} deve aparecer`);
+    }
+    for (const status of ['Cancelado', 'Reagendado']) {
+      assert.equal(isAtendimentoFluxoDia({ status }), false, `${status} deve ficar oculto`);
+    }
+    assert.equal(isAtendimentoOperacional({ status: 'Cancelado' }), true, 'Cancelado permanece na Agenda administrativa');
+  });
   test('reserva vagas até o limite e falha atomicamente com SEM_VAGA', async () => {
     const db = adminDb();
     const agenda = await seedAgenda();

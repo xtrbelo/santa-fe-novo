@@ -31,6 +31,9 @@ export const getServicosAtivosAtendimento = atendimento => {
 
 export const isAtendimentoOperacional = atendimento => atendimento?.status !== 'Reagendado';
 
+export const isAtendimentoFluxoDia = atendimento =>
+  !['Cancelado', 'Reagendado'].includes(atendimento?.status);
+
 export const getNomeServicoAtendimento = (atendimento, serviceId) => {
   const names = atendimento?.servicosNomes;
   if (names && !Array.isArray(names) && names[serviceId]) return names[serviceId];
