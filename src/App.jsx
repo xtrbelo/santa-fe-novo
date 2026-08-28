@@ -87,7 +87,7 @@ function AppContent() {
     if (tab === 'fluxo') return <FluxoModule user={user} />;
     if (tab === 'pessoas') return <PessoasModule user={user} readOnly={profile.role === ROLES.ATENDIMENTO} />;
     if (tab === 'usuarios') return profile.role === ROLES.ADMIN ? <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} /> : <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} />;
-    if (tab === 'config') return <ConfiguracoesModule user={user} />;
+    if (tab === 'config') return <ConfiguracoesModule user={user} profile={profile} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;
   };
   return <div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} allowedTabs={allowedTabs} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} allowedTabs={allowedTabs} /></div>;

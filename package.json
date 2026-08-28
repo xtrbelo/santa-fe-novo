@@ -10,10 +10,11 @@
     "validate:emulator": "node scripts/validate-phase6-emulator.js",
     "build": "vite build",
     "lint": "eslint .",
+    "test:helpers": "node --test tests/pessoaSearch.test.js",
     "test:rules": "firebase emulators:exec --config firebase.test.json --only firestore --project santa-fe-rules-test \"node --test tests/firestore.rules.test.js\"",
     "test:business": "firebase emulators:exec --config firebase.test.json --only firestore --project santa-fe-business-test \"node --test tests/firestore.business.test.js\"",
     "test": "npm run test:rules && npm run test:business",
-    "test:all": "npm run test:rules && npm run test:business",
+    "test:all": "npm run test:helpers && npm run test:rules && npm run test:business",
     "preview": "vite preview"
   },
   "dependencies": {

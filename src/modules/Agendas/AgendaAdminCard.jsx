@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   getAppCollection, 
   onSnapshot, 
-  findPessoaByCpf,
   createAgendamento,
   cancelAgendamento,
   concluirAgenda,
@@ -17,7 +16,6 @@ import {
 } from '../../services/firebase';
 import { 
   maskCPF, 
-  cleanDigits, 
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
@@ -27,12 +25,13 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { RealocacaoModal } from './RealocacaoModal';
+import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
+import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { useToast } from '../../components/ui/useToast';
 import { 
   CalendarDays, 
   ChevronRight, 
   Plus, 
-  Search, 
   UserCheck, 
   CheckCircle2,
   XCircle,
@@ -44,9 +43,8 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
   const [step, setStep] = useState('search');
-  const [buscaCpf, setBuscaCpf] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
   const [selCons, setSelCons] = useState(null);
+  const [newPersonName, setNewPersonName] = useState(null);
   const [selSrvs, setSelSrvs] = useState({});
   const [cancelTarget, setCancelTarget] = useState(null);
   const [confirmClose, setConfirmClose] = useState(false);
@@ -197,7 +195,6 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
       setStep('search');
       setSelCons(null);
       setSelSrvs({});
-      setBuscaCpf('');
     } catch (err) {
       console.error(err);
       if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui um atendimento nesta agenda.');
@@ -205,31 +202,6 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
       else if (err.message === 'AGENDA_INDISPONIVEL') toast.error('Esta agenda está concluída ou cancelada.');
       else if (err.code === 'permission-denied' || err.code === 'firestore/permission-denied') toast.error('A operação foi bloqueada pelas regras de segurança.');
       else toast.error('Erro ao realizar o agendamento.');
-    }
-  };
-
-  const buscarPessoa = async (e) => {
-    e.preventDefault();
-    const clean = cleanDigits(buscaCpf);
-    if (!clean) {
-      toast.error('Informe o CPF para busca.');
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const pessoa = await findPessoaByCpf(clean);
-      if (pessoa) {
-        setSelCons(pessoa);
-        setStep('services');
-      } else {
-        toast.error('Pessoa não encontrada no sistema. Cadastre-a no módulo de Pessoas primeiro.');
-      }
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao pesquisar pessoa.');
-    } finally {
-      setIsSearching(false);
     }
   };
 
@@ -267,7 +239,6 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
               onClick={() => {
                 setModalWiz(true);
                 setStep('search');
-                setBuscaCpf('');
                 setSelCons(null);
                 setSelSrvs({});
               }} 
@@ -325,29 +296,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
         title="Assistente de Marcação"
       >
         {step === 'search' ? (
-          <form onSubmit={buscarPessoa} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
-                CPF do Consulente
-              </label>
-              <input 
-                value={buscaCpf} 
-                onChange={e => setBuscaCpf(maskCPF(e.target.value))} 
-                placeholder="000.000.000-00" 
-                maxLength={14}
-                required
-                className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm outline-none focus:border-amber-500 focus:bg-white transition-all" 
-              />
-            </div>
-            <Button 
-              type="submit" 
-              variant="warning" 
-              disabled={isSearching}
-              className="w-full py-4"
-            >
-              <Search size={18} /> {isSearching ? 'Procurando...' : 'Procurar Pessoa'}
-            </Button>
-          </form>
+          <PessoaSearchSelector value={selCons} onChange={setSelCons} onContinue={() => setStep('services')} onCreateNew={setNewPersonName} accent="amber" />
         ) : (
           <div className="space-y-6">
             <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 flex items-center gap-3">
@@ -389,6 +338,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
           </div>
         )}
       </Modal>
+      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
 
       <Modal isOpen={editing} onClose={() => setEditing(false)} title="Editar Agenda">
         {editDraft && <div className="space-y-4"><div className="grid grid-cols-2 gap-2"><input type="date" value={editDraft.data} onChange={e => setEditDraft({ ...editDraft, data: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/><input type="time" value={editDraft.horario} onChange={e => setEditDraft({ ...editDraft, horario: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/></div><select value={editDraft.tipoTrabalhoId} onChange={e => setEditDraft({ ...editDraft, tipoTrabalhoId: e.target.value })} className="w-full bg-gray-50 p-3 rounded-xl"><option value="">Legado: {agenda.tipo}</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select><div>{['consulente', 'membro'].map(id => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={editDraft.publicosPermitidos.includes(id)} onChange={() => setEditDraft({ ...editDraft, publicosPermitidos: editDraft.publicosPermitidos.includes(id) ? editDraft.publicosPermitidos.filter(x => x !== id) : [...editDraft.publicosPermitidos, id] })}/> {id}</label>)}</div>{servicosCatalogo.filter(s => !editDraft.tipoTrabalhoId || !s.tipoTrabalhoIds?.length || s.tipoTrabalhoIds.includes(editDraft.tipoTrabalhoId)).map(s => <div key={s.id} className="bg-gray-50 p-3 rounded-xl"><label className="text-sm font-bold"><input type="checkbox" checked={editDraft.servicosIds.includes(s.id)} onChange={() => setEditDraft({ ...editDraft, servicosIds: editDraft.servicosIds.includes(s.id) ? editDraft.servicosIds.filter(x => x !== s.id) : [...editDraft.servicosIds, s.id] })}/> {s.nome}</label>{editDraft.servicosIds.includes(s.id) && servicoControlaVagas(s) && <input type="number" min={agenda.vagasOcupadas?.[s.id] || 0} value={editDraft.vagasTotais[s.id] || ''} onChange={e => setEditDraft({ ...editDraft, vagasTotais: { ...editDraft.vagasTotais, [s.id]: Number(e.target.value) } })} className="w-full bg-white p-2 mt-2 rounded-lg"/>}</div>)}<Button onClick={saveEdit} variant="warning" className="w-full">Salvar Alterações</Button></div>}

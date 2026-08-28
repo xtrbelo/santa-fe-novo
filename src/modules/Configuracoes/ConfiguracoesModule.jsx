@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, getAppCollection, getAppDoc, onSnapshot, Timestamp, updateDoc } from '../../services/firebase';
+import { addDoc, getAppCollection, getAppDoc, onSnapshot, rebuildPessoaSearchIndex, Timestamp, updateDoc } from '../../services/firebase';
 import { getPublicosPermitidosTrabalho, servicoControlaVagas } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
-import { CalendarDays, Plus, Tag, Trash2, Users } from 'lucide-react';
+import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 const initialFunctions = [{ id: 'medium', nome: 'Médium' }, { id: 'cambone', nome: 'Cambone' }];
 
-export const ConfiguracoesModule = ({ user }) => {
+export const ConfiguracoesModule = ({ user, profile }) => {
   const [funcoes, setFuncoes] = useState([]);
   const [trabalhos, setTrabalhos] = useState([]);
   const [servicos, setServicos] = useState([]);
@@ -18,6 +18,8 @@ export const ConfiguracoesModule = ({ user }) => {
   const [novoTrabalho, setNovoTrabalho] = useState({ nome: '', publicosPermitidos: ['consulente', 'membro'] });
   const [novoServico, setNovoServico] = useState({ nome: '', tipoTrabalhoIds: [], controlaVagas: false });
   const [itemToDelete, setItemToDelete] = useState(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildReport, setRebuildReport] = useState(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -53,6 +55,32 @@ export const ConfiguracoesModule = ({ user }) => {
     toast.success('Configuração desativada.'); setItemToDelete(null);
   };
 
+  const rebuildIndex = async () => {
+    if (!window.confirm('Esta operação atualizará apenas o índice utilizado para pesquisa.\n\nNome, CPF, telefone e demais dados cadastrais não serão alterados.')) return;
+    setRebuilding(true);
+    const totals = { analyzed: 0, updated: 0, correct: 0, errors: 0 };
+    try {
+      let cursor = null;
+      do {
+        const page = await rebuildPessoaSearchIndex({ pageSize: 200, cursor });
+        totals.analyzed += page.analyzed;
+        totals.updated += page.updated;
+        totals.correct += page.correct;
+        totals.errors += page.errors;
+        cursor = page.nextCursor;
+        setRebuildReport({ ...totals });
+      } while (cursor);
+      toast.success('Índice de busca atualizado com sucesso.');
+    } catch (error) {
+      console.error(error);
+      totals.errors += 1;
+      setRebuildReport({ ...totals });
+      toast.error('Não foi possível concluir a atualização do índice.');
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
   const effectiveFunctions = funcoes.length ? funcoes : initialFunctions;
   return <div className="space-y-6 pb-10">
     <header><h2 className="text-3xl font-black uppercase italic">Configurações</h2><p className="text-sm text-gray-500">Modelo operacional da Casa</p></header>
@@ -74,6 +102,17 @@ export const ConfiguracoesModule = ({ user }) => {
       <Button onClick={addService} variant="success" className="w-full"><Plus size={16}/> Adicionar Serviço</Button>
       {servicos.map(s => <div key={s.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{s.nome}</strong><p className="text-[10px] text-gray-500">{servicoControlaVagas(s) ? 'Controla vagas' : 'Sem limite'} · {(s.tipoTrabalhoIds || []).map(id => trabalhos.find(t => t.id === id)?.nome).filter(Boolean).join(', ') || 'Legado/global'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_servicos', id: s.id })}><Trash2 size={16}/></button></div>)}
     </Card>
+    {profile?.role === 'admin' && <Card className="space-y-4">
+      <h3 className="font-black uppercase text-blue-700 flex gap-2"><DatabaseZap size={18}/> Manutenção</h3>
+      <p className="text-sm text-gray-600">Reconstrói somente o índice derivado usado na busca de pessoas, em lotes seguros.</p>
+      <Button onClick={rebuildIndex} disabled={rebuilding} className="w-full">{rebuilding ? 'Atualizando índice...' : 'Atualizar índice de busca de pessoas'}</Button>
+      {rebuildReport && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+        <span className="bg-gray-50 p-2 rounded-lg">Analisadas<br/><strong>{rebuildReport.analyzed}</strong></span>
+        <span className="bg-blue-50 p-2 rounded-lg">Atualizadas<br/><strong>{rebuildReport.updated}</strong></span>
+        <span className="bg-emerald-50 p-2 rounded-lg">Já corretas<br/><strong>{rebuildReport.correct}</strong></span>
+        <span className="bg-red-50 p-2 rounded-lg">Erros<br/><strong>{rebuildReport.errors}</strong></span>
+      </div>}
+    </Card>}
     <ConfirmDialog isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={deactivate} title="Desativar configuração" message="Registros existentes serão preservados." confirmText="Desativar"/>
   </div>;
 };

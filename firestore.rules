@@ -110,7 +110,12 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/pessoas/{id} {
       allow read: if isInternal(appId);
-      allow create, update: if isAdmin(appId) || isGestor(appId);
+      allow create: if isAdmin(appId) || isGestor(appId);
+      allow update: if isAdmin(appId)
+        || (isGestor(appId) && request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'vinculo', 'funcoesCasa', 'tipoPessoa', 'nome', 'dataNascimento', 'cpf', 'contato', 'email',
+          'responsavelCpf', 'responsavelNome', 'responsavelContato', 'ativo'
+        ]));
       allow delete: if false;
     }
 

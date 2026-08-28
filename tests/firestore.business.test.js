@@ -15,7 +15,10 @@ import {
   cancelarAgenda,
   excluirAgendaVazia,
   corrigirStatusAtendimento,
-  realocarAtendimento
+  realocarAtendimento,
+  rebuildPessoaSearchIndex,
+  searchPessoas,
+  withPessoaSearchIndex
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
 import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
@@ -60,6 +63,35 @@ const book = (db, agenda, selectedPerson) => createAgendamento({ agenda, pessoa:
 
 before(async () => {
   environment = await initializeTestEnvironment({ projectId: PROJECT_ID, firestore: { rules: readFileSync('firestore.rules', 'utf8') } });
+});
+
+describe('Fase 7A - índice e busca de pessoas', () => {
+  test('busca por nome sem acento e telefone não retorna pessoa inativa', async () => {
+    const db = adminDb();
+    await seedDocuments([
+      ['pessoas', 'marcia', withPessoaSearchIndex({ nome: 'Márcia Araújo', contato: '96991234567', ativo: true })],
+      ['pessoas', 'inativa', withPessoaSearchIndex({ nome: 'Márcia Inativa', contato: '96990004567', ativo: false })]
+    ]);
+    assert.deepEqual((await searchPessoas('marcia', {}, db)).map(item => item.id), ['marcia']);
+    assert.deepEqual((await searchPessoas('4567', {}, db)).map(item => item.id), ['marcia']);
+  });
+
+  test('CPF completo encontra pessoa legada sem índice', async () => {
+    const db = adminDb();
+    await seedDocuments([['pessoas', 'legada-cpf', { nome: 'Legada', cpf: '12345678900', ativo: true }]]);
+    assert.equal((await searchPessoas('123.456.789-00', {}, db))[0].id, 'legada-cpf');
+  });
+
+  test('reconstrução cria índice correto e reconhece documento já atualizado', async () => {
+    const db = adminDb();
+    await seedDocuments([['pessoas', 'sem-indice', { nome: 'João Paulo Belo', cpf: '12345678900', contato: '96991234567', ativo: true }]]);
+    const first = await rebuildPessoaSearchIndex({ pageSize: 200 }, db);
+    assert.equal(first.updated, 1);
+    const saved = (await getDoc(doc(db, path('pessoas', 'sem-indice')))).data();
+    assert.ok(saved.busca.termos.includes('joao pa'));
+    const second = await rebuildPessoaSearchIndex({ pageSize: 200 }, db);
+    assert.equal(second.correct, 1);
+  });
 });
 
 beforeEach(async () => {

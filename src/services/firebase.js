@@ -24,9 +24,13 @@ import {
   query,
   where,
   limit,
+  orderBy,
+  startAfter,
+  documentId,
   deleteField
 } from 'firebase/firestore';
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
+import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
 
 const getEnv = (key, fallback) => {
   try {
@@ -95,6 +99,94 @@ export const findPessoaByCpf = async (cpfClean, includeInactive = false) => {
   const docSnap = snap.docs.find(item => includeInactive || item.data().ativo !== false);
   if (!docSnap) return null;
   return { id: docSnap.id, ...docSnap.data() };
+};
+
+export const searchPessoas = async (term, { limitResults = 12 } = {}, firestore = db) => {
+  if (!firestore) return [];
+  const raw = String(term || '').trim();
+  const digits = normalizeSearchDigits(raw);
+  const numericSearch = digits.length > 0 && !/[a-zA-ZÀ-ÿ]/.test(raw);
+  const normalized = numericSearch ? digits : normalizeSearchText(raw);
+  if (!normalized || (numericSearch ? normalized.length < 4 : normalized.length < 2)) return [];
+
+  if (numericSearch && digits.length === 11) {
+    const cpfQuery = query(getDataCollection(firestore, 'pessoas'), where('cpf', '==', digits), limit(1));
+    const cpfSnapshot = await getDocs(cpfQuery);
+    const exact = cpfSnapshot.docs[0];
+    if (exact && exact.data().ativo !== false) return [{ id: exact.id, ...exact.data() }];
+  }
+
+  const snapshot = await getDocs(query(
+    getDataCollection(firestore, 'pessoas'),
+    where('busca.termos', 'array-contains', normalized),
+    limit(Math.min(Math.max(1, limitResults), 20))
+  ));
+  return snapshot.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.ativo !== false);
+};
+
+export const getPessoaById = async (pessoaId, firestore = db) => {
+  if (!pessoaId || !firestore) return null;
+  const snapshot = await getDoc(getDataDoc(firestore, 'pessoas', pessoaId));
+  if (!snapshot.exists() || snapshot.data().ativo === false) return null;
+  return { id: snapshot.id, ...snapshot.data() };
+};
+
+let recentPessoasCache = null;
+export const getRecentPessoas = async ({ limitResults = 6, refresh = false } = {}, firestore = db) => {
+  if (!refresh && firestore === db && recentPessoasCache) return recentPessoasCache.slice(0, limitResults);
+  const snapshot = await getDocs(query(getDataCollection(firestore, 'consulentes'), orderBy('criadoEm', 'desc'), limit(15)));
+  const ids = [...new Set(snapshot.docs
+    .map(item => item.data())
+    .filter(item => !['Cancelado', 'Reagendado'].includes(item.status) && item.pessoaBaseId)
+    .map(item => item.pessoaBaseId))].slice(0, limitResults + 4);
+  const pessoas = (await Promise.all(ids.map(id => getPessoaById(id, firestore)))).filter(Boolean).slice(0, limitResults);
+  if (firestore === db) recentPessoasCache = pessoas;
+  return pessoas;
+};
+
+export const withPessoaSearchIndex = pessoa => ({ ...pessoa, busca: buildPessoaSearchIndex(pessoa) });
+
+export const createPessoa = async ({ data, userId }, firestore = db) => {
+  const pessoaRef = doc(getDataCollection(firestore, 'pessoas'));
+  const cpf = normalizeSearchDigits(data.cpf);
+  const now = Timestamp.now();
+  await runTransaction(firestore, async transaction => {
+    if (cpf) {
+      const indexRef = getDataDoc(firestore, 'cpf_index', cpf);
+      const indexSnapshot = await transaction.get(indexRef);
+      if (indexSnapshot.exists()) throw new Error('CPF_DUPLICADO');
+      transaction.set(indexRef, { pessoaId: pessoaRef.id, criadoEm: now });
+    }
+    transaction.set(pessoaRef, withPessoaSearchIndex({ ...data, cpf: cpf || null, ativo: true, criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId }));
+  });
+  return { id: pessoaRef.id, ...withPessoaSearchIndex({ ...data, cpf: cpf || null, ativo: true }) };
+};
+
+export const rebuildPessoaSearchIndex = async ({ pageSize = 200, cursor = null } = {}, firestore = db) => {
+  const effectivePageSize = Math.min(Math.max(1, pageSize), 400);
+  const constraints = [orderBy(documentId()), limit(effectivePageSize)];
+  if (cursor) constraints.splice(1, 0, startAfter(cursor));
+  const snapshot = await getDocs(query(getDataCollection(firestore, 'pessoas'), ...constraints));
+  const batch = writeBatch(firestore);
+  let updated = 0;
+  let correct = 0;
+  snapshot.docs.forEach(item => {
+    const expected = buildPessoaSearchIndex(item.data());
+    if (item.data().busca?.versao === PESSOA_SEARCH_VERSION && JSON.stringify(item.data().busca) === JSON.stringify(expected)) {
+      correct += 1;
+    } else {
+      batch.update(item.ref, { busca: expected });
+      updated += 1;
+    }
+  });
+  if (updated) await batch.commit();
+  return {
+    analyzed: snapshot.size,
+    updated,
+    correct,
+    errors: 0,
+    nextCursor: snapshot.size === effectivePageSize ? snapshot.docs.at(-1).id : null
+  };
 };
 
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
@@ -494,5 +586,6 @@ export {
   query,
   where,
   limit,
+  orderBy,
   deleteField
 };

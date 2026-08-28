@@ -3,7 +3,6 @@ import {
   getAppCollection, 
   onSnapshot, 
   Timestamp, 
-  findPessoaByCpf,
   createAgendamento,
   cancelAgendamento,
   setAgendamentoPrioridade,
@@ -13,7 +12,6 @@ import {
 } from '../../services/firebase';
 import { 
   maskCPF, 
-  cleanDigits, 
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
@@ -23,10 +21,11 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
+import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
+import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { 
   BookOpenCheck, 
   Plus, 
-  Search, 
   UserCheck, 
   CheckCircle2,
   Star,
@@ -38,10 +37,9 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
   const [selCons, setSelCons] = useState(null);
+  const [newPersonName, setNewPersonName] = useState(null);
   const [selSrvs, setSelSrvs] = useState({});
   const [step, setStep] = useState('search');
-  const [buscaCpf, setBuscaCpf] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
   const [cancelTarget, setCancelTarget] = useState(null);
 
   const toast = useToast();
@@ -111,38 +109,12 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
       setStep('search');
       setSelCons(null);
       setSelSrvs({});
-      setBuscaCpf('');
     } catch (err) {
       console.error(err);
       if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui um atendimento nesta agenda.');
       else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
       else if (err.code === 'permission-denied' || err.code === 'firestore/permission-denied') toast.error('A operação foi bloqueada pelas regras de segurança.');
       else toast.error('Erro ao marcar presença.');
-    }
-  };
-
-  const buscarPessoa = async (e) => {
-    e.preventDefault();
-    const clean = cleanDigits(buscaCpf);
-    if (!clean) {
-      toast.error('Informe o CPF para busca.');
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const pessoa = await findPessoaByCpf(clean);
-      if (pessoa) {
-        setSelCons(pessoa);
-        setStep('services');
-      } else {
-        toast.error('Pessoa não encontrada. Cadastre-a no módulo de Pessoas primeiro.');
-      }
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao buscar pessoa.');
-    } finally {
-      setIsSearching(false);
     }
   };
 
@@ -166,7 +138,6 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
           onClick={() => {
             setModalWiz(true);
             setStep('search');
-            setBuscaCpf('');
             setSelCons(null);
             setSelSrvs({});
           }} 
@@ -233,29 +204,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
         title="Marcação Rápida de Atendimento"
       >
         {step === 'search' ? (
-          <form onSubmit={buscarPessoa} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
-                CPF do Consulente
-              </label>
-              <input 
-                value={buscaCpf} 
-                onChange={e => setBuscaCpf(maskCPF(e.target.value))} 
-                placeholder="000.000.000-00" 
-                maxLength={14}
-                required
-                className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-all" 
-              />
-            </div>
-            <Button 
-              type="submit" 
-              variant="success" 
-              disabled={isSearching}
-              className="w-full py-4"
-            >
-              <Search size={18}/> {isSearching ? 'Buscando...' : 'Buscar Pessoa'}
-            </Button>
-          </form>
+          <PessoaSearchSelector value={selCons} onChange={setSelCons} onContinue={() => setStep('services')} onCreateNew={setNewPersonName} accent="emerald" />
         ) : (
           <div className="space-y-6">
             <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center gap-3">
@@ -297,6 +246,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
           </div>
         )}
       </Modal>
+      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
 
       <ConfirmDialog
         isOpen={!!cancelTarget}

@@ -65,6 +65,9 @@ describe('C. inativo', () => {
 });
 
 describe('D. admin', () => {
+  test('pode reconstruir somente o índice de busca de pessoas', async () => {
+    await assertSucceeds(updateDoc(ref(authDb('admin-a'), paths.people), { busca: { versao: 1, nome: 'pessoa teste', telefone: '', termos: ['pe'] } }));
+  });
   test('opera Pessoas sem excluir fisicamente', async () => {
     const db = authDb('admin-a');
     await assertSucceeds(getDoc(ref(db, paths.people)));
@@ -106,6 +109,9 @@ describe('D. admin', () => {
 });
 
 describe('E. gestor', () => {
+  test('não pode executar manutenção isolada do índice de busca', async () => {
+    await assertFails(updateDoc(ref(authDb('gestor'), paths.people), { busca: { versao: 1, nome: 'fraude', telefone: '', termos: ['fr'] } }));
+  });
   test('opera Pessoas, Agendas e Fluxo', async () => {
     const db = authDb('gestor');
     await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Gestor editou' }));

@@ -7,7 +7,8 @@ import {
   Timestamp,
   runTransaction,
   doc,
-  findPessoaByCpf
+  findPessoaByCpf,
+  withPessoaSearchIndex
 } from '../../services/firebase';
 import { 
   calcularIdade, 
@@ -23,6 +24,7 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { PessoaHistoricoModal } from './PessoaHistoricoModal';
+import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { useToast } from '../../components/ui/useToast';
 import { 
   UserPlus, 
@@ -42,6 +44,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
   const [abaAtiva, setAbaAtiva] = useState('Todos');
   const [buscaTexto, setBuscaTexto] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -102,7 +105,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
 
   const openNew = () => {
     resetForm();
-    setIsModalOpen(true);
+    setIsNewModalOpen(true);
   };
 
   const openEdit = (p) => {
@@ -180,7 +183,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
             transaction.set(newIndexRef, { pessoaId: editing.id, criadoEm: Timestamp.now() });
           }
           if (oldCpf && oldCpf !== rawCpf) transaction.delete(getAppDoc('cpf_index', oldCpf));
-          transaction.update(pessoaRef, data);
+          transaction.update(pessoaRef, withPessoaSearchIndex(data));
         });
         toast.success('Cadastro atualizado com sucesso!');
       } else {
@@ -192,7 +195,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
             if (indexSnap.exists()) throw new Error('CPF_DUPLICADO');
             transaction.set(indexRef, { pessoaId: pessoaRef.id, criadoEm: Timestamp.now() });
           }
-          transaction.set(pessoaRef, { ...data, ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid });
+          transaction.set(pessoaRef, withPessoaSearchIndex({ ...data, ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid }));
         });
         toast.success('Nova pessoa cadastrada com sucesso!');
       }
@@ -465,6 +468,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
           </Button>
         </form>
       </Modal>
+      <PessoaFormModal isOpen={isNewModalOpen} user={user} onClose={() => setIsNewModalOpen(false)} onSaved={() => toast.success('Nova pessoa cadastrada com sucesso!')} />
 
       <ConfirmDialog 
         isOpen={!!itemToDelete}
