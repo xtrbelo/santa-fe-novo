@@ -63,10 +63,19 @@ try {
       write('agendas', 'agenda-b-com-historico', { ...commonAgenda, data: futureDate(2), vagasOcupadas: { 'jogo-videncia': 1 } }),
       write('agendas', 'agenda-c-cancelamento', { ...commonAgenda, data: futureDate(3) }),
       write('agendas', 'agenda-d-gestor', { ...commonAgenda, data: futureDate(4) }),
-      write('consulentes', 'agenda-b-consulente-teste', { agendaId: 'agenda-b-com-historico', pessoaBaseId: 'consulente-teste', pessoaNome: 'Consulente Teste', servicosIds: ['jogo-videncia'], servicosNomes: ['Jogo de Vidência'], status: 'Agendado', prioridade: false, criadoEm: now, criadoPor: adminUid })
+      write('agendas', 'fase6b-origem-aberta', { ...commonAgenda, data: futureDate(5), vagasOcupadas: { 'jogo-videncia': 1 } }),
+      write('agendas', 'fase6b-origem-cancelada', { ...commonAgenda, data: futureDate(6), status: 'Cancelada', vagasOcupadas: { 'jogo-videncia': 1 } }),
+      write('agendas', 'fase6b-destino-vaga', { ...commonAgenda, data: futureDate(7), vagasTotais: { 'jogo-videncia': 3 }, vagasOcupadas: { 'jogo-videncia': 0 } }),
+      write('agendas', 'fase6b-destino-cheio', { ...commonAgenda, data: futureDate(8), vagasTotais: { 'jogo-videncia': 1 }, vagasOcupadas: { 'jogo-videncia': 1 } }),
+      write('agendas', 'fase6b-destino-servico-cancelado', { ...commonAgenda, data: futureDate(9), servicosStatus: { ...commonAgenda.servicosStatus, 'jogo-videncia': 'Cancelado' } }),
+      write('consulentes', 'agenda-b-consulente-teste', { agendaId: 'agenda-b-com-historico', pessoaBaseId: 'consulente-teste', pessoaNome: 'Consulente Teste', servicosIds: ['jogo-videncia'], servicosNomes: ['Jogo de Vidência'], status: 'Agendado', prioridade: false, criadoEm: now, criadoPor: adminUid }),
+      write('consulentes', 'fase6b-atendimento-aberto', { agendaId: 'fase6b-origem-aberta', pessoaBaseId: 'consulente-teste', nome: 'Consulente Teste', servicosIds: ['atendimento-espiritual', 'jogo-videncia'], servicosNomes: ['Atendimento Espiritual', 'Jogo de Vidência'], status: 'Agendado', prioridade: false, criadoEm: now, criadoPor: adminUid }),
+      write('consulentes', 'fase6b-atendimento-cancelada', { agendaId: 'fase6b-origem-cancelada', pessoaBaseId: 'membro-teste', nome: 'Membro Teste', servicosIds: ['jogo-videncia'], servicosNomes: ['Jogo de Vidência'], status: 'Agendado', prioridade: false, criadoEm: now, criadoPor: adminUid }),
+      write('agendamentos_ativos', 'fase6b-origem-aberta_consulente-teste', { agendaId: 'fase6b-origem-aberta', pessoaBaseId: 'consulente-teste', agendamentoId: 'fase6b-atendimento-aberto', criadoEm: now, criadoPor: adminUid }),
+      write('agendamentos_ativos', 'fase6b-origem-cancelada_membro-teste', { agendaId: 'fase6b-origem-cancelada', pessoaBaseId: 'membro-teste', agendamentoId: 'fase6b-atendimento-cancelada', criadoEm: now, criadoPor: adminUid })
     ]);
   });
-  console.log('Seed local concluído: agendas A (vazia), B (com histórico), C (aberta) e D (gestor) criadas no Emulator.');
+  console.log('Seed local concluído, incluindo cenários seguros de realocação da Fase 6B.');
 } finally {
   await environment.cleanup();
 }

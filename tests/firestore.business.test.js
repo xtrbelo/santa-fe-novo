@@ -14,15 +14,17 @@ import {
   cancelarServicoAgenda,
   cancelarAgenda,
   excluirAgendaVazia,
-  corrigirStatusAtendimento
+  corrigirStatusAtendimento,
+  realocarAtendimento
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
-import { getAgendaPublicosPermitidos, getPessoaFuncoesCasa, getPessoaVinculo, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
+import { getAgendaPublicosPermitidos, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
 
 const PROJECT_ID = 'santa-fe-business-test';
 const root = `artifacts/${appId}/public/data`;
 const USER_ID = 'admin-business';
 const service = { id: 'servico-a', nome: 'Serviço A', requerVagas: true };
+const serviceB = { id: 'servico-b', nome: 'Serviço B', requerVagas: true };
 const person = (id, tipoPessoa = 'Consulente') => ({ id, nome: `Pessoa ${id}`, tipoPessoa });
 const path = (collectionName, id) => `${root}/${collectionName}/${id}`;
 
@@ -424,5 +426,91 @@ describe('transações do fluxo operacional', () => {
     await book(db, withHistory, person('1'));
     await assert.rejects(excluirAgendaVazia({ agendaId: withHistory.id, userId: USER_ID }, db), /AGENDA_POSSUI_HISTORICO/);
     assert.equal((await getDoc(agendaRef(db, withHistory.id))).exists(), true);
+  });
+
+  test('realoca atendimento completo preservando origem, vagas, locks e auditoria', async () => {
+    const db = adminDb();
+    const future = new Date(); future.setDate(future.getDate() + 10);
+    const origin = await seedAgenda('origem-completa', {
+      data: future, servicosIds: [service.id, serviceB.id], servicosNomes: { [service.id]: service.nome, [serviceB.id]: serviceB.nome },
+      servicosStatus: { [service.id]: 'Ativo', [serviceB.id]: 'Ativo' }, vagasTotais: { [service.id]: 2, [serviceB.id]: 2 }, vagasOcupadas: { [service.id]: 0, [serviceB.id]: 0 }
+    });
+    const destination = await seedAgenda('destino-completa', {
+      data: future, servicosIds: [service.id, serviceB.id], servicosNomes: { [service.id]: service.nome, [serviceB.id]: serviceB.nome },
+      servicosStatus: { [service.id]: 'Ativo', [serviceB.id]: 'Ativo' }, vagasTotais: { [service.id]: 2, [serviceB.id]: 2 }, vagasOcupadas: { [service.id]: 0, [serviceB.id]: 0 }
+    });
+    const appointmentId = await createAgendamento({ agenda: origin, pessoa: person('realocada'), servicos: [service, serviceB], userId: USER_ID, status: 'Agendado' }, db);
+    const destinationId = await realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [service.id, serviceB.id], motivo: 'Mudança de data', userId: USER_ID, role: 'admin' }, db);
+    const sourceData = (await getDoc(appointmentById(db, appointmentId))).data();
+    const destinationData = (await getDoc(appointmentById(db, destinationId))).data();
+    assert.equal(sourceData.status, 'Reagendado');
+    assert.deepEqual(sourceData.servicosIds, [service.id, serviceB.id]);
+    assert.equal(sourceData.servicosRealocados[service.id].realocacaoId, sourceData.ultimaRealocacaoId);
+    assert.equal(destinationData.origemRealocacao.realocacaoId, sourceData.ultimaRealocacaoId);
+    assert.deepEqual(getServicosAtivosAtendimento(sourceData), []);
+    assert.equal((await getDoc(activeRef(db, origin.id, 'realocada'))).exists(), false);
+    assert.equal((await getDoc(activeRef(db, destination.id, 'realocada'))).data().agendamentoId, destinationId);
+    assert.deepEqual((await getDoc(agendaRef(db, origin.id))).data().vagasOcupadas, { [service.id]: 0, [serviceB.id]: 0 });
+    assert.deepEqual((await getDoc(agendaRef(db, destination.id))).data().vagasOcupadas, { [service.id]: 1, [serviceB.id]: 1 });
+    assert.equal((await getDoc(doc(db, path('auditoria', sourceData.ultimaRealocacaoId)))).data().tipo, 'ATENDIMENTO_REAGENDADO');
+  });
+
+  test('realoca somente um serviço e cancelamento posterior devolve apenas o serviço ativo', async () => {
+    const db = adminDb();
+    const future = new Date(); future.setDate(future.getDate() + 12);
+    const origin = await seedAgenda('origem-parcial', {
+      data: future, servicosIds: [service.id, serviceB.id], servicosNomes: { [service.id]: service.nome, [serviceB.id]: serviceB.nome },
+      servicosStatus: { [service.id]: 'Ativo', [serviceB.id]: 'Ativo' }, vagasTotais: { [service.id]: 3, [serviceB.id]: 3 }, vagasOcupadas: { [service.id]: 0, [serviceB.id]: 0 }
+    });
+    const destination = await seedAgenda('destino-parcial', {
+      data: future, servicosIds: [serviceB.id], servicosNomes: { [serviceB.id]: serviceB.nome }, servicosStatus: { [serviceB.id]: 'Ativo' },
+      vagasTotais: { [serviceB.id]: 3 }, vagasOcupadas: { [serviceB.id]: 0 }
+    });
+    const appointmentId = await createAgendamento({ agenda: origin, pessoa: person('parcial'), servicos: [service, serviceB], userId: USER_ID, status: 'Agendado' }, db);
+    await updateDoc(agendaRef(db, origin.id), { servicosStatus: { [service.id]: 'Ativo', [serviceB.id]: 'Cancelado' } });
+    await realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [serviceB.id], motivo: 'Serviço cancelado', userId: USER_ID, role: 'admin' }, db);
+    const sourceData = (await getDoc(appointmentById(db, appointmentId))).data();
+    assert.equal(sourceData.status, 'Agendado');
+    assert.deepEqual(getServicosAtivosAtendimento(sourceData), [service.id]);
+    assert.equal((await getDoc(activeRef(db, origin.id, 'parcial'))).data().agendamentoId, appointmentId);
+    await cancelAgendamento({ agendaId: origin.id, agendamentoId: appointmentId, userId: USER_ID }, db);
+    assert.deepEqual((await getDoc(agendaRef(db, origin.id))).data().vagasOcupadas, { [service.id]: 0, [serviceB.id]: 0 });
+  });
+
+  test('realoca a partir de agenda cancelada sem reabri-la nem alterar suas vagas', async () => {
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 15);
+    const origin = await seedAgenda('origem-cancelada-realocacao', { data: future, status: 'Aberta', servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const destination = await seedAgenda('destino-agenda-cancelada', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const appointmentId = await book(db, origin, person('cancelada-realocada'));
+    await updateDoc(agendaRef(db, origin.id), { status: 'Cancelada' });
+    await realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Agenda cancelada', userId: USER_ID, role: 'admin' }, db);
+    const storedOrigin = (await getDoc(agendaRef(db, origin.id))).data();
+    assert.equal(storedOrigin.status, 'Cancelada');
+    assert.equal(storedOrigin.vagasOcupadas[service.id], 1);
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Reagendado');
+  });
+
+  test('falhas de destino não deixam escrita parcial', async () => {
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 16);
+    const origin = await seedAgenda('origem-falhas', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const full = await seedAgenda('destino-sem-vaga', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' }, vagasTotais: { [service.id]: 1 }, vagasOcupadas: { [service.id]: 1 } });
+    const appointmentId = await book(db, origin, person('falhas'));
+    await assert.rejects(realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: full.id, servicosIds: [service.id], motivo: 'Teste', userId: USER_ID, role: 'admin' }, db), /SEM_VAGA/);
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
+    assert.equal((await getDoc(activeRef(db, origin.id, 'falhas'))).data().agendamentoId, appointmentId);
+    assert.equal((await getDocs(collection(db, `${root}/auditoria`))).docs.filter(item => ['ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO'].includes(item.data().tipo)).length, 0);
+  });
+
+  test('concorrência permite somente uma realocação do mesmo atendimento', async () => {
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 17);
+    const origin = await seedAgenda('origem-concorrente', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const destinationA = await seedAgenda('destino-concorrente-a', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const destinationB = await seedAgenda('destino-concorrente-b', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const appointmentId = await book(db, origin, person('concorrente'));
+    const params = destination => ({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Concorrência', userId: USER_ID, role: 'admin' });
+    const results = await Promise.allSettled([realocarAtendimento(params(destinationA), db), realocarAtendimento(params(destinationB), db)]);
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter(result => result.status === 'rejected').length, 1);
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 2);
   });
 });

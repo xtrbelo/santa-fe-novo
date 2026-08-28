@@ -14,6 +14,8 @@ Raiz: `artifacts/{appId}/public/data`.
 - `config_tipos_pessoa`: catálogo legado mantido durante a transição.
 - `auditoria/{id}`: eventos administrativos imutáveis com tipo, alvo, valores anterior/novo, executor e data.
 
+Realocações usam o ID do próprio documento `auditoria/{realocacaoId}` como vínculo de integridade. A origem grava `ultimaRealocacaoId` e `servicosRealocados.{servicoId}`; o novo atendimento grava `origemRealocacao`. Uma realocação completa também grava os campos `reagendado*` e muda o status histórico para `Reagendado`. Os eventos são `ATENDIMENTO_REAGENDADO` e `SERVICO_REALOCADO`.
+
 Legados sem `ativo` continuam visíveis (`ativo !== false`). A consulta de inscritos usa `agendaId ==`; não exige índice composto.
 
 O histórico de uma pessoa consulta `consulentes` por `pessoaBaseId ==` e resolve a agenda associada sem copiar novos dados pessoais. Cada reagendamento cria um novo documento, preservando separadamente o registro cancelado. Cancelamentos usam `status`, timestamps e executor. Cancelamentos de serviço ficam em `servicosCancelamentos.{servicoId}`, permitindo na Fase 6B mover apenas parte dos serviços de um atendimento. Os eventos operacionais incluem `AGENDAMENTO_CANCELADO`, `PRIORIDADE_ALTERADA`, `AGENDA_CONCLUIDA`, `AGENDA_EDITADA`, `AGENDA_CANCELADA`, `AGENDA_EXCLUIDA` e `SERVICO_AGENDA_CANCELADO`.

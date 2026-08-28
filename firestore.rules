@@ -9,6 +9,72 @@ service cloud.firestore {
     function isGestor(appId) { return isActive(appId) && currentUser(appId).role == 'gestor'; }
     function isAtendimento(appId) { return isActive(appId) && currentUser(appId).role == 'atendimento'; }
     function isInternal(appId) { return isAdmin(appId) || isGestor(appId) || isAtendimento(appId); }
+    function canRelocate(appId) { return isAdmin(appId) || isGestor(appId); }
+    function auditPath(appId, id) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/auditoria/$(id); }
+    function appointmentPath(appId, id) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(id); }
+    function activeLockPath(appId, agendaId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/agendamentos_ativos/$(agendaId + '_' + pessoaId); }
+    function relocationEntryValid(data, ids, index, relocationId, destinationAgendaId, destinationAppointmentId, reason) {
+      return ids.size() <= index || (
+        data[ids[index]].realocacaoId == relocationId
+        && data[ids[index]].destinoAgendaId == destinationAgendaId
+        && data[ids[index]].destinoAgendamentoId == destinationAppointmentId
+        && data[ids[index]].realocadoPor == request.auth.uid
+        && data[ids[index]].motivo == reason
+      );
+    }
+    function relocationEntriesValid(data, audit) {
+      return relocationEntryValid(data, audit.servicosIds, 0, audit.realocacaoId, audit.destinoAgendaId, audit.destinoAgendamentoId, audit.motivo)
+        && relocationEntryValid(data, audit.servicosIds, 1, audit.realocacaoId, audit.destinoAgendaId, audit.destinoAgendamentoId, audit.motivo)
+        && relocationEntryValid(data, audit.servicosIds, 2, audit.realocacaoId, audit.destinoAgendaId, audit.destinoAgendamentoId, audit.motivo);
+    }
+    function validRelocationUpdate(appId, id) {
+      let relocationId = request.resource.data.ultimaRealocacaoId;
+      let audit = getAfter(auditPath(appId, relocationId)).data;
+      let destination = getAfter(appointmentPath(appId, audit.destinoAgendamentoId)).data;
+      let lock = getAfter(activeLockPath(appId, audit.destinoAgendaId, resource.data.pessoaBaseId)).data;
+      let changedServices = request.resource.data.servicosRealocados.diff(resource.data.get('servicosRealocados', {})).affectedKeys();
+      return canRelocate(appId)
+        && !exists(auditPath(appId, relocationId))
+        && audit.realocacaoId == relocationId
+        && audit.origemAgendaId == resource.data.agendaId
+        && audit.origemAgendamentoId == id
+        && audit.destinoAgendaId != resource.data.agendaId
+        && audit.executadoPor == request.auth.uid
+        && audit.motivo is string && audit.motivo.size() > 0
+        && audit.servicosIds is list && audit.servicosIds.size() > 0 && audit.servicosIds.size() <= 3
+        && changedServices.hasOnly(audit.servicosIds) && changedServices.hasAll(audit.servicosIds)
+        && relocationEntriesValid(request.resource.data.servicosRealocados, audit)
+        && !exists(appointmentPath(appId, audit.destinoAgendamentoId))
+        && destination.status == 'Agendado'
+        && destination.agendaId == audit.destinoAgendaId
+        && destination.pessoaBaseId == resource.data.pessoaBaseId
+        && destination.servicosIds.hasOnly(audit.servicosIds) && destination.servicosIds.hasAll(audit.servicosIds)
+        && destination.origemRealocacao.realocacaoId == relocationId
+        && destination.origemRealocacao.agendaId == resource.data.agendaId
+        && destination.origemRealocacao.agendamentoId == id
+        && destination.origemRealocacao.realocadoPor == request.auth.uid
+        && destination.origemRealocacao.motivo == audit.motivo
+        && lock.agendamentoId == audit.destinoAgendamentoId
+        && lock.agendaId == audit.destinoAgendaId
+        && lock.pessoaBaseId == resource.data.pessoaBaseId
+        && request.resource.data.atualizadoPor == request.auth.uid
+        && resource.data.status == 'Agendado'
+        && ((request.resource.data.status == 'Agendado'
+            && audit.tipo == 'SERVICO_REALOCADO'
+            && destination.origemRealocacao.tipo == 'parcial'
+            && !request.resource.data.servicosRealocados.keys().hasAll(resource.data.servicosIds)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'servicosRealocados', 'ultimaRealocacaoId', 'atualizadoEm', 'atualizadoPor'
+            ]))
+          || (request.resource.data.status == 'Reagendado'
+            && audit.tipo == 'ATENDIMENTO_REAGENDADO'
+            && destination.origemRealocacao.tipo == 'completa'
+            && request.resource.data.servicosRealocados.keys().hasAll(resource.data.servicosIds)
+            && request.resource.data.reagendadoPor == request.auth.uid
+            && request.resource.data.reagendadoParaAgendaId == audit.destinoAgendaId
+            && request.resource.data.reagendadoParaAgendamentoId == audit.destinoAgendamentoId
+            && request.resource.data.motivoRealocacao == audit.motivo));
+    }
 
     match /artifacts/{appId}/public/data/usuarios/{uid} {
       allow get: if isAuthenticated() && (request.auth.uid == uid || isAdmin(appId));
@@ -32,6 +98,12 @@ service cloud.firestore {
         && request.resource.data.executadoPor == request.auth.uid
         && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'])
           || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
+          || (canRelocate(appId)
+            && request.resource.data.tipo in ['ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO']
+            && id == request.resource.data.realocacaoId
+            && getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.ultimaRealocacaoId == id
+            && getAfter(appointmentPath(appId, request.resource.data.destinoAgendamentoId)).data.origemRealocacao.realocacaoId == id
+            && getAfter(activeLockPath(appId, request.resource.data.destinoAgendaId, getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.pessoaBaseId)).data.agendamentoId == request.resource.data.destinoAgendamentoId)
           || (isAdmin(appId) && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO'));
       allow update, delete: if false;
     }
@@ -79,7 +151,14 @@ service cloud.firestore {
               && !request.resource.data.keys().hasAny(['horaChegada', 'horaSaida']))
             || (resource.data.status == 'Presente' && request.resource.data.status == 'Agendado'
               && !request.resource.data.keys().hasAny(['horaChegada', 'horaSaida']))
-            || (resource.data.status == 'Faltou' && request.resource.data.status == 'Agendado'))));
+            || (resource.data.status == 'Faltou' && request.resource.data.status == 'Agendado')))
+        || (request.resource.data.agendaId == resource.data.agendaId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'servicosRealocados', 'ultimaRealocacaoId', 'reagendadoEm', 'reagendadoPor',
+            'reagendadoParaAgendaId', 'reagendadoParaAgendamentoId', 'motivoRealocacao', 'atualizadoEm', 'atualizadoPor'
+          ])
+          && request.resource.data.diff(resource.data).affectedKeys().hasAll(['servicosRealocados', 'ultimaRealocacaoId'])
+          && validRelocationUpdate(appId, id)));
       allow delete: if false;
     }
 
@@ -95,7 +174,7 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(request.resource.data.agendamentoId)).data.status in ['Agendado', 'Presente'];
       allow update: if false;
       allow delete: if isInternal(appId)
-        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(resource.data.agendamentoId)).data.status == 'Cancelado';
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(resource.data.agendamentoId)).data.status in ['Cancelado', 'Reagendado'];
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{id} {

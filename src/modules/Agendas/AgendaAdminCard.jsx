@@ -26,6 +26,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { RealocacaoModal } from './RealocacaoModal';
 import { useToast } from '../../components/ui/useToast';
 import { 
   CalendarDays, 
@@ -38,7 +39,7 @@ import {
   LockKeyhole
 } from 'lucide-react';
 
-export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, trabalhos }) => {
+export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalogo, trabalhos }) => {
   const [expanded, setExpanded] = useState(false);
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
@@ -57,6 +58,9 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
   const [correctionTarget, setCorrectionTarget] = useState(null);
   const [correctionStatus, setCorrectionStatus] = useState('');
   const [correctionReason, setCorrectionReason] = useState('');
+  const [relocationTarget, setRelocationTarget] = useState(null);
+  const [relocationServiceId, setRelocationServiceId] = useState(null);
+  const [affectedServiceId, setAffectedServiceId] = useState(null);
 
   const toast = useToast();
   const isClosed = ['Concluída', 'Cancelada'].includes(agenda.status);
@@ -121,7 +125,7 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
       toast.success('Agenda atualizada.'); setEditing(false);
     } catch (error) { console.error(error); toast.error(error.message === 'LIMITE_MENOR_QUE_OCUPACAO' ? 'O limite não pode ser menor que a ocupação.' : error.message === 'SERVICO_COM_ATENDIMENTOS' ? 'Serviço com atendimentos não pode ser removido.' : 'Não foi possível editar.'); }
   };
-  const handleCancelService = async () => { try { const count = await cancelarServicoAgenda({ agendaId: agenda.id, servicoId: serviceToCancel.id, userId: user.uid }); toast.info(`Serviço cancelado. ${count} pessoa(s) afetada(s).`); setServiceToCancel(null); } catch (error) { console.error(error); toast.error('Não foi possível cancelar o serviço.'); } };
+  const handleCancelService = async () => { try { const serviceId = serviceToCancel.id; const count = await cancelarServicoAgenda({ agendaId: agenda.id, servicoId: serviceId, userId: user.uid }); toast.info(`Serviço cancelado. ${count} pessoa(s) afetada(s).`); setAffectedServiceId(count ? serviceId : null); setServiceToCancel(null); } catch (error) { console.error(error); toast.error('Não foi possível cancelar o serviço.'); } };
   const handleCancelAgenda = async () => {
     try {
       await cancelarAgenda({ agendaId: agenda.id, userId: user.uid });
@@ -274,11 +278,14 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
           </div>
 
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-            {['Agendado', 'Presente', 'Concluído', 'Faltou', 'Cancelado'].map(status => <div key={status} className="bg-white border border-gray-100 rounded-xl p-2 text-center">
+            {['Agendado', 'Presente', 'Concluído', 'Faltou', 'Cancelado', 'Reagendado'].map(status => <div key={status} className="bg-white border border-gray-100 rounded-xl p-2 text-center">
               <strong className="block text-sm text-gray-900">{summary[status] || 0}</strong>
               <span className="text-[8px] font-black uppercase text-gray-400">{status}</span>
             </div>)}
           </div>
+
+          {agenda.status === 'Cancelada' && fila.some(item => item.status === 'Agendado') && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm"><strong>{fila.filter(item => item.status === 'Agendado').length} atendimento(s) aguardam realocação.</strong><p className="text-xs mt-1">Use “Reagendar / Realocar” em cada pessoa. Não há movimentação automática.</p></div>}
+          {affectedServiceId && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm"><strong>Pessoas afetadas pelo serviço cancelado</strong>{fila.filter(item => item.status === 'Agendado' && (item.servicosIds || []).includes(affectedServiceId) && !item.servicosRealocados?.[affectedServiceId]).map(item => <div key={item.id} className="flex justify-between items-center mt-2"><span>{item.nome}</span><button className="font-bold text-indigo-700" onClick={() => { setRelocationTarget(item); setRelocationServiceId(affectedServiceId); }}>Realocar Serviço</button></div>)}</div>}
 
           <div className="bg-white border border-gray-100 rounded-xl p-3 text-xs space-y-2">
             <p><strong>Tipo de Trabalho:</strong> {agenda.tipoTrabalhoNome || agenda.tipo}</p>
@@ -294,14 +301,13 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
                 <div key={c.id} className="bg-white p-3 rounded-xl border border-gray-100 flex justify-between items-center shadow-sm gap-2">
                   <div className="min-w-0">
                     <p className="font-bold text-gray-800 text-sm truncate">{c.nome}</p>
-                    <p className="text-[10px] text-amber-600 font-bold uppercase truncate">
-                      {c.servicosNomes?.join(', ')}
-                    </p>
+                    <div className="text-[10px] text-amber-600 font-bold uppercase">{(c.servicosIds || []).map((id, index) => { const moved = c.servicosRealocados?.[id]; const target = moved && agendas?.find(item => item.id === moved.destinoAgendaId); return <p key={id}>{c.servicosNomes?.[index] || id}{moved ? ` · REALOCADO → ${target?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra agenda'}` : ' · ATIVO'}</p>; })}{c.origemRealocacao && <p className="text-indigo-600 mt-1">Realocado da agenda de {agendas?.find(item => item.id === c.origemRealocacao.agendaId)?.data?.toDate?.().toLocaleDateString('pt-BR') || 'origem anterior'}</p>}{c.status === 'Reagendado' && <p className="text-indigo-700 mt-1">Reagendado para {agendas?.find(item => item.id === c.reagendadoParaAgendaId)?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra data'}</p>}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>
                     {['Agendado', 'Presente'].includes(c.status) && !isClosed && <button onClick={() => setCancelTarget(c)} className="text-rose-500 hover:text-rose-700" title="Cancelar agendamento"><XCircle size={18} /></button>}
                     {profile?.role === 'admin' && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
+                    {['admin', 'gestor'].includes(profile?.role) && c.status === 'Agendado' && <button onClick={() => { setRelocationTarget(c); setRelocationServiceId(null); }} className="text-xs font-bold text-indigo-700 hover:text-indigo-900">Reagendar / Realocar</button>}
                   </div>
                 </div>
               ))
@@ -402,6 +408,7 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
           <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => setCorrectionTarget(null)}>Cancelar</Button><Button variant="warning" onClick={handleCorrection}>Confirmar Correção</Button></div>
         </div>
       </Modal>
+      <RealocacaoModal atendimento={relocationTarget} origemAgenda={agenda} agendas={agendas} servicosCatalogo={servicosCatalogo} user={user} profile={profile} initialServiceId={relocationServiceId} onClose={() => { setRelocationTarget(null); setRelocationServiceId(null); }} />
     </Card>
   );
 };

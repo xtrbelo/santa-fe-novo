@@ -268,3 +268,77 @@ describe('L. lock de agendamento ativo', () => {
     await assertFails(updateDoc(ref(db, paths.appointments), { status: 'Agendado', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
 });
+
+async function seedRelocationOrigin() {
+  await environment.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    await Promise.all([
+      setDoc(ref(db, paths.agendas), { tipo: 'Origem', status: 'Aberta', vagasOcupadas: { 'servico-a': 1 } }),
+      setDoc(ref(db, paths.appointments), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', nome: 'Pessoa', status: 'Agendado', servicosIds: ['servico-a'], servicosNomes: ['Serviço A'] }),
+      setDoc(ref(db, `${root}/agendas/agenda-2`), { tipo: 'Destino', status: 'Aberta', vagasOcupadas: { 'servico-a': 0 } }),
+      setDoc(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'consulta-1' })
+    ]);
+  });
+}
+
+function relocationBatch(uid, options = {}) {
+  const db = authDb(uid);
+  const relocationId = options.relocationId || `realocacao-${uid}`;
+  const destinationId = options.auditDestinationId || 'destino-1';
+  const sourceDestinationId = options.sourceDestinationId || 'destino-1';
+  const auditedServices = options.auditServices || ['servico-a'];
+  const sourceServices = options.extraSourceService ? ['servico-a', 'servico-fraude'] : ['servico-a'];
+  const now = new Date();
+  const entry = () => ({ realocacaoId: relocationId, destinoAgendaId: 'agenda-2', destinoAgendamentoId: sourceDestinationId, realocadoEm: now, realocadoPor: uid, motivo: 'Realocação segura' });
+  const batch = writeBatch(db);
+  batch.update(ref(db, paths.appointments), {
+    status: 'Reagendado', ultimaRealocacaoId: relocationId,
+    servicosRealocados: Object.fromEntries(sourceServices.map(serviceId => [serviceId, entry(serviceId)])),
+    reagendadoEm: now, reagendadoPor: uid, reagendadoParaAgendaId: 'agenda-2',
+    reagendadoParaAgendamentoId: sourceDestinationId, motivoRealocacao: 'Realocação segura', atualizadoEm: now, atualizadoPor: uid
+  });
+  if (!options.omitDestination) batch.set(ref(db, `${root}/consulentes/destino-1`), {
+    agendaId: 'agenda-2', pessoaBaseId: 'pessoa-1', nome: 'Pessoa', status: 'Agendado', servicosIds: ['servico-a'], servicosNomes: ['Serviço A'],
+    origemRealocacao: { realocacaoId: relocationId, agendaId: 'agenda-1', agendamentoId: options.wrongOrigin ? 'outro' : 'consulta-1', tipo: 'completa', realocadoEm: now, realocadoPor: uid, motivo: 'Realocação segura' }
+  });
+  if (!options.omitDestination) batch.set(ref(db, `${root}/agendamentos_ativos/agenda-2_pessoa-1`), { agendaId: 'agenda-2', pessoaBaseId: 'pessoa-1', agendamentoId: 'destino-1', criadoEm: now, criadoPor: uid });
+  if (!options.keepOriginLock) batch.delete(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`));
+  if (!options.omitAudit) batch.set(ref(db, `${root}/auditoria/${relocationId}`), {
+    tipo: 'ATENDIMENTO_REAGENDADO', realocacaoId: relocationId, origemAgendaId: 'agenda-1', origemAgendamentoId: options.wrongAuditOrigin ? 'outro' : 'consulta-1',
+    destinoAgendaId: 'agenda-2', destinoAgendamentoId: destinationId, servicosIds: auditedServices,
+    motivo: 'Realocação segura', executadoPor: uid, criadoEm: now
+  });
+  return batch;
+}
+
+describe('M. integridade transacional da realocação', () => {
+  test('admin e gestor realocam somente com origem, destino, lock e auditoria coerentes', async () => {
+    await seedRelocationOrigin();
+    await assertSucceeds(relocationBatch('admin-a').commit());
+    await environment.clearFirestore(); await seed(); await seedRelocationOrigin();
+    await assertSucceeds(relocationBatch('gestor').commit());
+  });
+  test('atendimento e pendente não realocam', async () => {
+    await seedRelocationOrigin();
+    await assertFails(relocationBatch('atendimento').commit());
+    await assertFails(relocationBatch('pendente').commit());
+  });
+  test('bloqueia origem sem destino ou sem auditoria', async () => {
+    await seedRelocationOrigin();
+    await assertFails(relocationBatch('admin-a', { omitDestination: true }).commit());
+    await assertFails(relocationBatch('admin-a', { omitAudit: true }).commit());
+  });
+  test('bloqueia serviço extra, destinos divergentes e auditoria apontando para outra origem', async () => {
+    await seedRelocationOrigin();
+    await assertFails(relocationBatch('admin-a', { extraSourceService: true }).commit());
+    await assertFails(relocationBatch('admin-a', { sourceDestinationId: 'outro-destino' }).commit());
+    await assertFails(relocationBatch('admin-a', { wrongOrigin: true }).commit());
+    await assertFails(relocationBatch('admin-a', { wrongAuditOrigin: true }).commit());
+  });
+  test('bloqueia reutilização de realocacaoId e remoção isolada do lock', async () => {
+    await seedRelocationOrigin();
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/auditoria/reutilizado`), { tipo: 'SERVICO_REALOCADO' }));
+    await assertFails(relocationBatch('admin-a', { relocationId: 'reutilizado' }).commit());
+    await assertFails(deleteDoc(ref(authDb('admin-a'), `${root}/agendamentos_ativos/agenda-1_pessoa-1`)));
+  });
+});

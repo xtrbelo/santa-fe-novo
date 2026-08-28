@@ -26,3 +26,12 @@ Verifique também a criação correspondente em `auditoria` após mudanças de r
 - [ ] Corrigir `Presente → Agendado`; confirmar chegada removida e `vagasOcupadas` inalterado.
 - [ ] Em agenda concluída, confirmar que admin ainda pode corrigir; em agenda cancelada, confirmar bloqueio.
 - [ ] Como gestor/atendimento, confirmar que **Corrigir Status** não aparece e que as Rules recusam tentativa direta.
+
+## Fase 6B — reagendamento e realocação (somente Emulator)
+
+- [ ] Como admin e gestor, mover todos os serviços de um atendimento `Agendado`; confirmar origem `Reagendado`, destino `Agendado`, locks corretos e dois registros no histórico.
+- [ ] Mover somente um serviço; confirmar que os demais continuam ativos na origem e que o destino contém somente o serviço selecionado.
+- [ ] Repetir a partir de agenda cancelada e de serviço cancelado na origem; confirmar sucesso sem reabrir a agenda.
+- [ ] Tentar destino cheio, incompatível, cancelado ou já ocupado pela pessoa; confirmar rollback completo e mensagem específica.
+- [ ] Confirmar que perfil Atendimento não vê a ação e recebe negação das Rules em tentativa direta.
+- [ ] Após realocação parcial, cancelar a origem; confirmar devolução somente das vagas dos serviços ainda ativos.

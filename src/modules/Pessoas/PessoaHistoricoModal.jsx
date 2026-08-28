@@ -18,8 +18,15 @@ export const PessoaHistoricoModal = ({ pessoa, onClose }) => {
       const enriched = await Promise.all(snapshot.docs.map(async item => {
         const appointment = { id: item.id, ...item.data() };
         if (!appointment.agendaId) return appointment;
-        const agendaSnapshot = await getDoc(getAppDoc('agendas', appointment.agendaId));
-        return { ...appointment, agenda: agendaSnapshot.exists() ? agendaSnapshot.data() : null };
+        const relatedAgendaIds = [...new Set([
+          appointment.agendaId,
+          appointment.origemRealocacao?.agendaId,
+          appointment.reagendadoParaAgendaId,
+          ...Object.values(appointment.servicosRealocados || {}).map(value => value.destinoAgendaId)
+        ].filter(Boolean))];
+        const relatedSnapshots = await Promise.all(relatedAgendaIds.map(id => getDoc(getAppDoc('agendas', id))));
+        const relatedAgendas = Object.fromEntries(relatedAgendaIds.map((id, index) => [id, relatedSnapshots[index].exists() ? relatedSnapshots[index].data() : null]));
+        return { ...appointment, agenda: relatedAgendas[appointment.agendaId], relatedAgendas };
       }));
       setItems(enriched.sort((a, b) => toMillis(b.agenda?.data) - toMillis(a.agenda?.data)));
       setLoading(false);
@@ -38,7 +45,7 @@ export const PessoaHistoricoModal = ({ pessoa, onClose }) => {
           </div>
           <span className={`h-fit text-[9px] font-black px-2.5 py-1 rounded-full uppercase ${getStatusColor(item.status)}`}>{item.status}</span>
         </div>
-        <p className="text-[11px] font-bold text-purple-700 mt-3">{item.servicosNomes?.join(' • ') || 'Serviço não informado'}</p>
+        <div className="text-[11px] font-bold text-purple-700 mt-3 space-y-1">{(item.servicosIds || []).length ? item.servicosIds.map((id, index) => { const moved = item.servicosRealocados?.[id]; const target = moved && item.relatedAgendas?.[moved.destinoAgendaId]; return <p key={id}>{item.servicosNomes?.[index] || id}{moved ? ` · Realocado para ${target?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra agenda'}` : ''}</p>; }) : <p>Serviço não informado</p>}{item.origemRealocacao && <p className="text-indigo-600">Origem: agenda de {item.relatedAgendas?.[item.origemRealocacao.agendaId]?.data?.toDate?.().toLocaleDateString('pt-BR') || 'data indisponível'}</p>}{item.status === 'Reagendado' && <p className="text-indigo-700">Reagendado para {item.relatedAgendas?.[item.reagendadoParaAgendaId]?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra data'}</p>}</div>
         {(item.horaChegada || item.horaSaida) && <p className="text-[10px] text-gray-500 mt-2">
           {item.horaChegada && `Chegada: ${formatTime(item.horaChegada)}`}
           {item.horaChegada && item.horaSaida && ' • '}

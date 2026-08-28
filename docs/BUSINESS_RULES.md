@@ -17,6 +17,9 @@
 - Transições aceitas: `Agendado → Presente → Concluído` e `Agendado → Faltou`. Estados finais não voltam para estados anteriores.
 - `Agendado` e `Presente` podem ser cancelados; o registro passa a `Cancelado`, recebe executor/data e devolve as vagas numa transação. Não há exclusão física.
 - Um novo agendamento após cancelamento recebe outro ID. O documento cancelado permanece intacto no histórico e a nova reserva cria uma nova trava ativa.
+- Admin e gestor podem realocar atendimentos ainda `Agendado`, inclusive quando a agenda de origem ou um serviço nela foi cancelado. A operação exige motivo, destino futuro e disponível e no máximo três serviços por transação.
+- Na realocação completa a origem passa a `Reagendado`; na parcial permanece `Agendado`. `servicosIds` e `servicosNomes` originais nunca são removidos: `servicosRealocados` identifica o que deixou de ser operacional.
+- Cada realocação cria novo atendimento e lock no destino, ajusta vagas atomicamente e usa um `realocacaoId` comum na origem, destino e auditoria. Não há mesclagem com atendimento já existente no destino.
 - `Faltou` preserva a vaga utilizada no histórico da agenda; somente o cancelamento explícito devolve a reserva. Registros `Cancelado` não entram na reconciliação da ocupação real.
 - A prioridade pode ser alterada apenas em atendimentos abertos e coloca presentes prioritários primeiro na fila.
 - Horários de chegada e saída são gravados uma única vez.

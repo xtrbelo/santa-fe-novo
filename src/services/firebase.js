@@ -26,7 +26,7 @@ import {
   limit,
   deleteField
 } from 'firebase/firestore';
-import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 
 const getEnv = (key, fallback) => {
   try {
@@ -107,11 +107,11 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   });
   const existingQuery = query(getDataCollection(firestore, 'consulentes'), where('agendaId', '==', agenda.id));
   const existingSnapshot = await getDocs(existingQuery);
-  const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => item.status !== 'Cancelado');
+  const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => !['Cancelado', 'Reagendado'].includes(item.status));
   if (activeAppointments.some(item => item.pessoaBaseId === pessoa.id)) throw new Error('AGENDAMENTO_DUPLICADO');
 
   const realOccupancy = {};
-  activeAppointments.forEach(item => (item.servicosIds || []).forEach(serviceId => {
+  activeAppointments.forEach(item => getServicosAtivosAtendimento(item).forEach(serviceId => {
     realOccupancy[serviceId] = (realOccupancy[serviceId] || 0) + 1;
   }));
 
@@ -173,7 +173,7 @@ export const cancelAgendamento = async ({ agendaId, agendamentoId, userId, motiv
     const activeSnapshot = await transaction.get(activeRef);
 
     const occupied = { ...(agendaData.vagasOcupadas || {}) };
-    (appointment.servicosIds || []).forEach(serviceId => {
+    getServicosAtivosAtendimento(appointment).forEach(serviceId => {
       if (Object.hasOwn(agendaData.vagasTotais || {}, serviceId)) {
         occupied[serviceId] = Math.max(0, Number(occupied[serviceId] || 0) - 1);
       }
@@ -201,6 +201,136 @@ export const setAgendamentoPrioridade = async ({ agendaId, agendamentoId, priori
     transaction.update(appointmentRef, { prioridade: Boolean(prioridade), atualizadoEm: now, atualizadoPor: userId });
     transaction.set(createAuditRef(firestore), { tipo: 'PRIORIDADE_ALTERADA', alvoId: agendamentoId, agendaId, valorNovo: Boolean(prioridade), executadoPor: userId, criadoEm: now });
   });
+};
+
+const isPastAgenda = agenda => {
+  const date = agenda?.data?.toDate?.() || (agenda?.data instanceof Date ? agenda.data : null);
+  if (!date) return true;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return date < today;
+};
+
+export const realocarAtendimento = async ({
+  origemAgendaId, origemAgendamentoId, destinoAgendaId, servicosIds, motivo, userId, role
+}, firestore = db) => {
+  const cleanReason = motivo?.trim();
+  if (!['admin', 'gestor'].includes(role)) throw new Error('PERMISSAO_NEGADA');
+  if (!cleanReason) throw new Error('MOTIVO_OBRIGATORIO');
+  if (!origemAgendaId || !destinoAgendaId || origemAgendaId === destinoAgendaId) throw new Error('DESTINO_INVALIDO');
+  const selectedIds = [...new Set(servicosIds || [])];
+  if (!selectedIds.length) throw new Error('SERVICO_NAO_DISPONIVEL');
+  if (selectedIds.length > 3) throw new Error('LIMITE_SERVICOS_REALOCACAO');
+
+  const originAgendaRef = getDataDoc(firestore, 'agendas', origemAgendaId);
+  const originAppointmentRef = getDataDoc(firestore, 'consulentes', origemAgendamentoId);
+  const destinationAgendaRef = getDataDoc(firestore, 'agendas', destinoAgendaId);
+  const destinationAppointmentRef = doc(getDataCollection(firestore, 'consulentes'));
+  const realocacaoRef = doc(getDataCollection(firestore, 'auditoria'));
+  const realocacaoId = realocacaoRef.id;
+
+  await runTransaction(firestore, async transaction => {
+    const [originAgendaSnapshot, originAppointmentSnapshot, destinationAgendaSnapshot] = await Promise.all([
+      transaction.get(originAgendaRef), transaction.get(originAppointmentRef), transaction.get(destinationAgendaRef)
+    ]);
+    if (!originAgendaSnapshot.exists() || !originAppointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
+    if (!destinationAgendaSnapshot.exists()) throw new Error('DESTINO_INVALIDO');
+
+    const originAgenda = originAgendaSnapshot.data();
+    const origin = originAppointmentSnapshot.data();
+    const destinationAgenda = destinationAgendaSnapshot.data();
+    if (origin.agendaId !== origemAgendaId) throw new Error('DESTINO_INVALIDO');
+    if (origin.status !== 'Agendado') throw new Error('STATUS_NAO_REALOCAVEL');
+    if (['Concluída', 'Cancelada'].includes(destinationAgenda.status) || isPastAgenda(destinationAgenda)) throw new Error('AGENDA_DESTINO_INDISPONIVEL');
+
+    const activeIds = getServicosAtivosAtendimento(origin);
+    selectedIds.forEach(serviceId => {
+      if ((origin.servicosRealocados || {})[serviceId]) throw new Error('SERVICO_JA_REALOCADO');
+      if (!activeIds.includes(serviceId) || !agendaAceitaServico(destinationAgenda, serviceId)) throw new Error('SERVICO_NAO_DISPONIVEL');
+      if (!servicoAtivoNaAgenda(destinationAgenda, serviceId)) throw new Error('SERVICO_CANCELADO');
+    });
+
+    const personRef = getDataDoc(firestore, 'pessoas', origin.pessoaBaseId);
+    const originLockRef = getDataDoc(firestore, 'agendamentos_ativos', `${origemAgendaId}_${origin.pessoaBaseId}`);
+    const destinationLockRef = getDataDoc(firestore, 'agendamentos_ativos', `${destinoAgendaId}_${origin.pessoaBaseId}`);
+    const [personSnapshot, originLockSnapshot, destinationLockSnapshot] = await Promise.all([
+      transaction.get(personRef), transaction.get(originLockRef), transaction.get(destinationLockRef)
+    ]);
+    if (destinationLockSnapshot.exists()) throw new Error('DESTINO_POSSUI_ATENDIMENTO');
+    const person = personSnapshot.exists() ? personSnapshot.data() : origin;
+    const permittedTypes = getAgendaPublicosPermitidos(destinationAgenda);
+    if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(person))) throw new Error('PUBLICO_NAO_PERMITIDO');
+
+    const destinationOccupied = { ...(destinationAgenda.vagasOcupadas || {}) };
+    selectedIds.forEach(serviceId => {
+      if (Object.hasOwn(destinationAgenda.vagasTotais || {}, serviceId)) {
+        const total = Number(destinationAgenda.vagasTotais[serviceId] || 0);
+        const current = Number(destinationOccupied[serviceId] || 0);
+        if (current >= total) throw new Error(`SEM_VAGA:${serviceId}`);
+        destinationOccupied[serviceId] = current + 1;
+      }
+    });
+
+    const complete = selectedIds.length === activeIds.length;
+    const now = Timestamp.now();
+    const serviceNames = selectedIds.map(id => {
+      const index = (origin.servicosIds || []).indexOf(id);
+      return origin.servicosNomes?.[index] || destinationAgenda.servicosNomes?.[id] || id;
+    });
+    const relocationInfo = Object.fromEntries(selectedIds.map(id => [id, {
+      realocacaoId,
+      destinoAgendaId, destinoAgendamentoId: destinationAppointmentRef.id,
+      realocadoEm: now, realocadoPor: userId, motivo: cleanReason
+    }]));
+    const originChanges = {
+      status: complete ? 'Reagendado' : 'Agendado',
+      ultimaRealocacaoId: realocacaoId,
+      servicosRealocados: { ...(origin.servicosRealocados || {}), ...relocationInfo },
+      atualizadoEm: now, atualizadoPor: userId
+    };
+    if (complete) Object.assign(originChanges, {
+      reagendadoEm: now, reagendadoPor: userId, reagendadoParaAgendaId: destinoAgendaId,
+      reagendadoParaAgendamentoId: destinationAppointmentRef.id, motivoRealocacao: cleanReason
+    });
+    transaction.update(originAppointmentRef, originChanges);
+
+    if (originAgenda.status !== 'Cancelada') {
+      const originOccupied = { ...(originAgenda.vagasOcupadas || {}) };
+      selectedIds.forEach(serviceId => {
+        if (Object.hasOwn(originAgenda.vagasTotais || {}, serviceId)) {
+          originOccupied[serviceId] = Math.max(0, Number(originOccupied[serviceId] || 0) - 1);
+        }
+      });
+      transaction.update(originAgendaRef, { vagasOcupadas: originOccupied, atualizadoEm: now, atualizadoPor: userId });
+    }
+
+    transaction.set(destinationAppointmentRef, {
+      agendaId: destinoAgendaId, nome: origin.nome || '', pessoaBaseId: origin.pessoaBaseId,
+      cpf: origin.cpf || '', status: 'Agendado', servicosIds: selectedIds, servicosNomes: serviceNames,
+      criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId, prioridade: false,
+      origemRealocacao: {
+        realocacaoId,
+        agendaId: origemAgendaId, agendamentoId: origemAgendamentoId,
+        tipo: complete ? 'completa' : 'parcial', realocadoEm: now, realocadoPor: userId, motivo: cleanReason
+      }
+    });
+    transaction.update(destinationAgendaRef, { vagasOcupadas: destinationOccupied, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(destinationLockRef, {
+      agendaId: destinoAgendaId, pessoaBaseId: origin.pessoaBaseId,
+      agendamentoId: destinationAppointmentRef.id, criadoEm: now, criadoPor: userId
+    });
+    if (complete && originLockSnapshot.exists() && originLockSnapshot.data().agendamentoId === origemAgendamentoId) {
+      transaction.delete(originLockRef);
+    }
+    transaction.set(realocacaoRef, {
+      tipo: complete ? 'ATENDIMENTO_REAGENDADO' : 'SERVICO_REALOCADO',
+      realocacaoId,
+      origemAgendaId, origemAgendamentoId, destinoAgendaId,
+      destinoAgendamentoId: destinationAppointmentRef.id, servicosIds: selectedIds,
+      motivo: cleanReason, executadoPor: userId, criadoEm: now
+    });
+  });
+  return destinationAppointmentRef.id;
 };
 
 export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status, userId }, firestore = db) => {
@@ -295,7 +425,7 @@ export const editarAgenda = async ({ agendaId, changes, userId }, firestore = db
 
 export const cancelarServicoAgenda = async ({ agendaId, servicoId, userId }, firestore = db) => {
   const appointments = await getAgendaAppointments(firestore, agendaId);
-  const affected = appointments.filter(item => item.status !== 'Cancelado' && (item.servicosIds || []).includes(servicoId)).length;
+  const affected = appointments.filter(item => !['Cancelado', 'Reagendado'].includes(item.status) && getServicosAtivosAtendimento(item).includes(servicoId)).length;
   const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
   await runTransaction(firestore, async transaction => {
     const snapshot = await transaction.get(agendaRef);

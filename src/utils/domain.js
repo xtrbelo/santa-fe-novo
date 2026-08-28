@@ -23,3 +23,8 @@ export const servicoControlaVagas = servico => servico?.controlaVagas ?? servico
 export const servicoPertenceAoTrabalho = (servico, tipoTrabalhoId) => !Array.isArray(servico?.tipoTrabalhoIds) || servico.tipoTrabalhoIds.length === 0 || servico.tipoTrabalhoIds.includes(tipoTrabalhoId);
 export const agendaAceitaServico = (agenda, serviceId) => !Array.isArray(agenda?.servicosIds) || agenda.servicosIds.includes(serviceId);
 export const servicoAtivoNaAgenda = (agenda, serviceId) => agenda?.servicosStatus?.[serviceId] !== 'Cancelado';
+
+export const getServicosAtivosAtendimento = atendimento => {
+  const realocados = atendimento?.servicosRealocados || {};
+  return (atendimento?.servicosIds || []).filter(id => !Object.hasOwn(realocados, id));
+};
