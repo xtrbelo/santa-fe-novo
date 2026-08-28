@@ -51,6 +51,8 @@ async function seedAgenda(id = 'agenda-1', overrides = {}) {
 }
 
 const appointmentRef = (db, agendaId, personId) => doc(db, path('consulentes', `${agendaId}_${personId}`));
+const appointmentById = (db, id) => doc(db, path('consulentes', id));
+const activeRef = (db, agendaId, personId) => doc(db, path('agendamentos_ativos', `${agendaId}_${personId}`));
 const agendaRef = (db, agendaId) => doc(db, path('agendas', agendaId));
 const book = (db, agenda, selectedPerson) => createAgendamento({ agenda, pessoa: selectedPerson, servicos: [service], userId: USER_ID, status: 'Agendado' }, db);
 
@@ -69,15 +71,15 @@ describe('transações do fluxo operacional', () => {
   test('reserva vagas até o limite e falha atomicamente com SEM_VAGA', async () => {
     const db = adminDb();
     const agenda = await seedAgenda();
-    await book(db, agenda, person('1'));
+    const firstId = await book(db, agenda, person('1'));
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
-    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().status, 'Agendado');
+    assert.equal((await getDoc(appointmentById(db, firstId))).data().status, 'Agendado');
 
     await book(db, agenda, person('2'));
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 2);
     await assert.rejects(book(db, agenda, person('3')), /SEM_VAGA/);
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 2);
-    assert.equal((await getDoc(appointmentRef(db, agenda.id, '3'))).exists(), false);
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 2);
   });
 
   test('impede agendamento duplicado sem consumir outra vaga', async () => {
@@ -90,13 +92,47 @@ describe('transações do fluxo operacional', () => {
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
   });
 
+  test('preserva cancelado, remove lock e cria novo documento ao reagendar', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-reagendamento', { vagasTotais: { [service.id]: 1 } });
+    const firstId = await book(db, agenda, person('1'));
+    const firstLock = (await getDoc(activeRef(db, agenda.id, '1'))).data();
+    assert.equal(firstLock.agendamentoId, firstId);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
+    await cancelAgendamento({ agendaId: agenda.id, agendamentoId: firstId, userId: USER_ID }, db);
+    assert.equal((await getDoc(appointmentById(db, firstId))).data().status, 'Cancelado');
+    assert.equal((await getDoc(activeRef(db, agenda.id, '1'))).exists(), false);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 0);
+    const secondId = await book(db, agenda, person('1'));
+    assert.notEqual(secondId, firstId);
+    const appointments = (await getDocs(collection(db, `${root}/consulentes`))).docs.map(item => ({ id: item.id, ...item.data() }));
+    assert.equal(appointments.length, 2);
+    assert.equal(appointments.find(item => item.id === firstId).status, 'Cancelado');
+    assert.equal(appointments.find(item => item.id === secondId).status, 'Agendado');
+    assert.equal((await getDoc(activeRef(db, agenda.id, '1'))).data().agendamentoId, secondId);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
+    await assert.rejects(book(db, agenda, person('1')), /AGENDAMENTO_DUPLICADO/);
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 2);
+  });
+
+  test('concorrência da mesma pessoa cria somente um lock e um atendimento', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-lock-concorrente', { vagasTotais: { [service.id]: 2 } });
+    const results = await Promise.allSettled([book(db, agenda, person('1')), book(db, agenda, person('1'))]);
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter(result => result.status === 'rejected' && /AGENDAMENTO_DUPLICADO/.test(result.reason.message)).length, 1);
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 1);
+    assert.equal((await getDoc(activeRef(db, agenda.id, '1'))).exists(), true);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
+  });
+
   test('cancela, devolve vaga e cria auditoria com executor e data', async () => {
     const db = adminDb();
     const agenda = await seedAgenda();
-    await book(db, agenda, person('1'));
-    await cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db);
+    const appointmentId = await book(db, agenda, person('1'));
+    await cancelAgendamento({ agendaId: agenda.id, agendamentoId: appointmentId, userId: USER_ID }, db);
 
-    const canceled = (await getDoc(appointmentRef(db, agenda.id, '1'))).data();
+    const canceled = (await getDoc(appointmentById(db, appointmentId))).data();
     assert.equal(canceled.status, 'Cancelado');
     assert.ok(canceled.canceladoEm);
     assert.equal(canceled.canceladoPor, USER_ID);
@@ -109,8 +145,8 @@ describe('transações do fluxo operacional', () => {
   test('segundo cancelamento falha e nunca devolve a vaga duas vezes', async () => {
     const db = adminDb();
     const agenda = await seedAgenda();
-    await book(db, agenda, person('1'));
-    const params = { agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID };
+    const appointmentId = await book(db, agenda, person('1'));
+    const params = { agendaId: agenda.id, agendamentoId: appointmentId, userId: USER_ID };
     await cancelAgendamento(params, db);
     await assert.rejects(cancelAgendamento(params, db), /JA_CANCELADO/);
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 0);
@@ -129,16 +165,16 @@ describe('transações do fluxo operacional', () => {
   test('conclui agenda, audita e bloqueia reserva, cancelamento e prioridade', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-fechada');
-    await book(db, agenda, person('1'));
+    const appointmentId = await book(db, agenda, person('1'));
     await concluirAgenda({ agendaId: agenda.id, userId: USER_ID }, db);
     const closed = (await getDoc(agendaRef(db, agenda.id))).data();
     assert.equal(closed.status, 'Concluída');
     assert.ok(closed.concluidaEm);
     assert.equal(closed.concluidaPor, USER_ID);
-    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().status, 'Agendado');
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
     await assert.rejects(book(db, { ...agenda, status: 'Concluída' }, person('2')), /AGENDA_INDISPONIVEL/);
-    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
-    await assert.rejects(setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, prioridade: true, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: appointmentId, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+    await assert.rejects(setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: appointmentId, prioridade: true, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
     const audit = (await getDocs(collection(db, `${root}/auditoria`))).docs.map(item => item.data()).find(item => item.tipo === 'AGENDA_CONCLUIDA');
     assert.equal(audit.executadoPor, USER_ID);
     assert.ok(audit.criadoEm);
@@ -216,24 +252,24 @@ describe('transações do fluxo operacional', () => {
   test('registra chegada uma vez e não permite sobrescrevê-la', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-chegada');
-    await book(db, agenda, person('1'));
-    const params = { agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, status: 'Presente', userId: USER_ID };
+    const appointmentId = await book(db, agenda, person('1'));
+    const params = { agendaId: agenda.id, agendamentoId: appointmentId, status: 'Presente', userId: USER_ID };
     await updateAtendimentoStatus(params, db);
-    const original = (await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaChegada.toMillis();
+    const original = (await getDoc(appointmentById(db, appointmentId))).data().horaChegada.toMillis();
     await assert.rejects(updateAtendimentoStatus(params, db), /TRANSICAO_INVALIDA/);
-    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaChegada.toMillis(), original);
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().horaChegada.toMillis(), original);
   });
 
   test('registra saída uma vez e protege atendimento concluído', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-saida');
-    await book(db, agenda, person('1'));
-    await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, status: 'Presente', userId: USER_ID }, db);
-    const params = { agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, status: 'Concluído', userId: USER_ID };
+    const appointmentId = await book(db, agenda, person('1'));
+    await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: appointmentId, status: 'Presente', userId: USER_ID }, db);
+    const params = { agendaId: agenda.id, agendamentoId: appointmentId, status: 'Concluído', userId: USER_ID };
     await updateAtendimentoStatus(params, db);
-    const original = (await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaSaida.toMillis();
+    const original = (await getDoc(appointmentById(db, appointmentId))).data().horaSaida.toMillis();
     await assert.rejects(updateAtendimentoStatus(params, db), /TRANSICAO_INVALIDA/);
-    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().horaSaida.toMillis(), original);
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().horaSaida.toMillis(), original);
   });
 
   test('ignora cancelado e considera Faltou na reconciliação de vagas', async () => {
@@ -293,20 +329,20 @@ describe('transações do fluxo operacional', () => {
   test('cancela serviço preservando atendimentos e quantidade afetada', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-cancelar-servico', { servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
-    await book(db, agenda, person('1'));
+    const appointmentId = await book(db, agenda, person('1'));
     assert.equal(await cancelarServicoAgenda({ agendaId: agenda.id, servicoId: service.id, userId: USER_ID }, db), 1);
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().servicosStatus[service.id], 'Cancelado');
-    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().status, 'Agendado');
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
   });
 
   test('cancela agenda e bloqueia operações normais', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-cancelada');
-    await book(db, agenda, person('1'));
+    const appointmentId = await book(db, agenda, person('1'));
     await cancelarAgenda({ agendaId: agenda.id, userId: USER_ID }, db);
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().status, 'Cancelada');
     await assert.rejects(book(db, { ...agenda, status: 'Cancelada' }, person('2')), /AGENDA_INDISPONIVEL/);
-    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: appointmentId, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
   });
 
   test('cancela agenda com Agendado, Faltou ou Cancelado e bloqueia Presente ou Concluído sem auditar', async () => {

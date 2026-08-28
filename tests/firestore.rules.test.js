@@ -1,7 +1,7 @@
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 
 const PROJECT_ID = 'santa-fe-rules-test';
 const APP_ID = PROJECT_ID;
@@ -76,7 +76,10 @@ describe('D. admin', () => {
     const db = authDb('admin-a');
     await assertSucceeds(getDoc(ref(db, paths.agendas)));
     await assertSucceeds(setDoc(ref(db, `${root}/agendas/nova`), { tipo: 'Nova' }));
-    await assertSucceeds(setDoc(ref(db, `${root}/consulentes/nova`), { agendaId: 'agenda-1', status: 'Agendado' }));
+    const batch = writeBatch(db);
+    batch.set(ref(db, `${root}/consulentes/nova`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-nova', status: 'Agendado' });
+    batch.set(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-nova`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-nova', agendamentoId: 'nova', criadoEm: new Date(), criadoPor: 'admin-a' });
+    await assertSucceeds(batch.commit());
     await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
     await assertFails(deleteDoc(ref(db, paths.appointments)));
   });
@@ -236,5 +239,32 @@ describe('K. correção administrativa de status', () => {
     await assertSucceeds(setDoc(auditRef, event));
     await assertFails(updateDoc(auditRef, { motivo: 'Alterado' }));
     await assertFails(deleteDoc(auditRef));
+  });
+});
+
+describe('L. lock de agendamento ativo', () => {
+  test('cria atendimento e lock correspondentes na mesma operação', async () => {
+    const db = authDb('admin-a');
+    const batch = writeBatch(db);
+    batch.set(ref(db, `${root}/consulentes/novo-lock`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Agendado' });
+    batch.set(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'novo-lock', criadoEm: new Date(), criadoPor: 'admin-a' });
+    await assertSucceeds(batch.commit());
+  });
+  test('recusa atendimento sem lock, lock falso e update arbitrário', async () => {
+    const db = authDb('admin-a');
+    await assertFails(setDoc(ref(db, `${root}/consulentes/sem-lock`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-sem-lock', status: 'Agendado' }));
+    await assertFails(setDoc(ref(db, `${root}/agendamentos_ativos/lock-falso`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'inexistente', criadoEm: new Date(), criadoPor: 'admin-a' }));
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/agendamentos_ativos/lock-existente`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'consulta-1' }));
+    await assertFails(updateDoc(ref(db, `${root}/agendamentos_ativos/lock-existente`), { agendamentoId: 'fraude' }));
+  });
+  test('remove lock somente ao cancelar o atendimento apontado e não reativa Cancelado', async () => {
+    const db = authDb('admin-a');
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/agendamentos_ativos/agenda-1_pessoa-1`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'consulta-1' }));
+    await assertFails(deleteDoc(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`)));
+    const batch = writeBatch(db);
+    batch.update(ref(db, paths.appointments), { status: 'Cancelado', canceladoEm: new Date(), canceladoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+    batch.delete(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`));
+    await assertSucceeds(batch.commit());
+    await assertFails(updateDoc(ref(db, paths.appointments), { status: 'Agendado', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
 });

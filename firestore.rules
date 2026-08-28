@@ -59,7 +59,8 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/consulentes/{id} {
       allow read: if isInternal(appId);
       allow create: if isInternal(appId)
-        && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada']);
+        && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendamentos_ativos/$(request.resource.data.agendaId + '_' + request.resource.data.pessoaBaseId)).data.agendamentoId == id;
       allow update: if request.resource.data.agendaId == resource.data.agendaId
         && ((isInternal(appId)
           && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
@@ -80,6 +81,21 @@ service cloud.firestore {
               && !request.resource.data.keys().hasAny(['horaChegada', 'horaSaida']))
             || (resource.data.status == 'Faltou' && request.resource.data.status == 'Agendado'))));
       allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/agendamentos_ativos/{id} {
+      allow get: if isInternal(appId);
+      allow list: if false;
+      allow create: if isInternal(appId)
+        && id == request.resource.data.agendaId + '_' + request.resource.data.pessoaBaseId
+        && request.resource.data.keys().hasOnly(['agendaId', 'pessoaBaseId', 'agendamentoId', 'criadoEm', 'criadoPor'])
+        && request.resource.data.criadoPor == request.auth.uid
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(request.resource.data.agendamentoId)).data.agendaId == request.resource.data.agendaId
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(request.resource.data.agendamentoId)).data.pessoaBaseId == request.resource.data.pessoaBaseId
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(request.resource.data.agendamentoId)).data.status in ['Agendado', 'Presente'];
+      allow update: if false;
+      allow delete: if isInternal(appId)
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(resource.data.agendamentoId)).data.status == 'Cancelado';
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{id} {

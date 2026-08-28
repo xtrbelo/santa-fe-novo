@@ -16,6 +16,8 @@ Novas contas Google criam o próprio documento `usuarios/{uid}` como `pendente`,
 
 As regras negam por padrão e proíbem exclusão física de Pessoas, configurações e agendamentos. A exclusão de agenda é exclusiva do administrador; agendas concluídas ou canceladas ficam protegidas contra escrita operacional. Edição/cancelamento de agenda ou serviço, exclusão de agenda, cancelamentos, prioridade e conclusão geram auditoria imutável em nome do usuário autenticado.
 
+A criação de um atendimento exige, na mesma operação atômica, a trava correspondente em `agendamentos_ativos/{agendaId_pessoaId}` apontando para o novo documento. A remoção da trava só é aceita junto da transição do atendimento apontado para `Cancelado`. Atualizar uma trava ou reativar diretamente um atendimento cancelado continua proibido.
+
 A verificação de que uma agenda não possui histórico é feita pelo serviço antes da exclusão. Como o frontend não é um backend confiável e as Rules não executam consultas reversas, permanece uma pequena janela de concorrência entre a consulta e a transação; a proteção definitiva deve migrar para Cloud Functions/Admin SDK antes de ampliar esse fluxo.
 
 A correção retroativa de atendimento é permitida pelas Rules apenas ao administrador, em transições regressivas enumeradas e alterando somente status, horários e metadados de atualização. Agenda cancelada permanece bloqueada; agenda concluída aceita essa exceção administrativa. A operação oficial também exige motivo e cria auditoria imutável. As Rules não conseguem exigir atomicamente um documento de auditoria com ID aleatório junto de cada correção; garantir essa associação contra um cliente administrativo deliberadamente modificado exigiria backend confiável.
@@ -30,6 +32,6 @@ O perfil logado é acompanhado em tempo real. Promoções liberam a sessão, enq
 
 ## Validação automatizada
 
-`npm run test:rules` executa a suíte em `tests/firestore.rules.test.js` contra o Firestore Emulator local. Ela cobre usuários não autenticados, pendentes, inativos, todos os perfis internos, criação do próprio perfil, auditoria, autobloqueio, eventos operacionais, imutabilidade, agendas concluídas/canceladas e exclusão de agenda somente por administrador.
+`npm run test:rules` executa a suíte em `tests/firestore.rules.test.js` contra o Firestore Emulator local. Ela cobre usuários não autenticados, pendentes, inativos, todos os perfis internos, criação do próprio perfil, auditoria, autobloqueio, eventos operacionais, imutabilidade, agendas concluídas/canceladas, trava de agendamento ativo e exclusão de agenda somente por administrador.
 
 Impedir que um administrador rebaixe o último **outro** administrador exige backend confiável (por exemplo, Cloud Functions/Admin SDK) e permanece pendente.

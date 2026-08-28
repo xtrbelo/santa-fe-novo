@@ -195,9 +195,10 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
       setBuscaCpf('');
     } catch (err) {
       console.error(err);
-      if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui agendamento ativo nesta agenda.');
+      if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui um atendimento nesta agenda.');
       else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
       else if (err.message === 'AGENDA_INDISPONIVEL') toast.error('Esta agenda está concluída ou cancelada.');
+      else if (err.code === 'permission-denied' || err.code === 'firestore/permission-denied') toast.error('A operação foi bloqueada pelas regras de segurança.');
       else toast.error('Erro ao realizar o agendamento.');
     }
   };

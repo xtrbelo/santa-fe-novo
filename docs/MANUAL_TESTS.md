@@ -18,6 +18,8 @@ Verifique também a criação correspondente em `auditoria` após mudanças de r
 
 ## Fase 6 — cancelamento e correção administrativa (somente Emulator)
 
+- [ ] Agendar uma pessoa, cancelar o atendimento e agendar novamente na mesma agenda; confirmar dois registros distintos no histórico (`Cancelado` e `Agendado`), apenas uma reserva ativa e contagem de vagas correta.
+- [ ] Tentar agendar novamente a mesma pessoa enquanto o segundo atendimento estiver ativo; confirmar a mensagem “Esta pessoa já possui um atendimento nesta agenda.” e ausência de terceiro registro.
 - [ ] Agenda com apenas `Agendado`, `Faltou` ou `Cancelado`: confirmar que **Cancelar Agenda** funciona e preserva os atendimentos.
 - [ ] Agenda com `Presente` ou `Concluído`: confirmar botão desabilitado, explicação visível e ausência de `AGENDA_CANCELADA`.
 - [ ] Como admin, executar `Agendado → Presente → Concluído`, abrir **Corrigir Status** e voltar para `Presente` com motivo; confirmar chegada preservada, saída removida e auditoria `STATUS_ATENDIMENTO_CORRIGIDO`.
