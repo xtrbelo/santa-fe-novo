@@ -18,7 +18,7 @@ import {
   realocarAtendimento
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
-import { getAgendaPublicosPermitidos, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
+import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
 
 const PROJECT_ID = 'santa-fe-business-test';
 const root = `artifacts/${appId}/public/data`;
@@ -444,6 +444,8 @@ describe('transações do fluxo operacional', () => {
     const sourceData = (await getDoc(appointmentById(db, appointmentId))).data();
     const destinationData = (await getDoc(appointmentById(db, destinationId))).data();
     assert.equal(sourceData.status, 'Reagendado');
+    assert.equal(isAtendimentoOperacional(sourceData), false);
+    assert.equal(isAtendimentoOperacional(destinationData), true);
     assert.deepEqual(sourceData.servicosIds, [service.id, serviceB.id]);
     assert.equal(sourceData.servicosRealocados[service.id].realocacaoId, sourceData.ultimaRealocacaoId);
     assert.equal(destinationData.origemRealocacao.realocacaoId, sourceData.ultimaRealocacaoId);
@@ -471,10 +473,37 @@ describe('transações do fluxo operacional', () => {
     await realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [serviceB.id], motivo: 'Serviço cancelado', userId: USER_ID, role: 'admin' }, db);
     const sourceData = (await getDoc(appointmentById(db, appointmentId))).data();
     assert.equal(sourceData.status, 'Agendado');
+    assert.equal(isAtendimentoOperacional(sourceData), true);
     assert.deepEqual(getServicosAtivosAtendimento(sourceData), [service.id]);
+    assert.equal(getNomeServicoAtendimento(sourceData, service.id), service.nome);
     assert.equal((await getDoc(activeRef(db, origin.id, 'parcial'))).data().agendamentoId, appointmentId);
     await cancelAgendamento({ agendaId: origin.id, agendamentoId: appointmentId, userId: USER_ID }, db);
     assert.deepEqual((await getDoc(agendaRef(db, origin.id))).data().vagasOcupadas, { [service.id]: 0, [serviceB.id]: 0 });
+  });
+
+  test('normaliza nome legado ao realocar e recusa destino sem identificação', async () => {
+    assert.equal(getNomePessoaAtendimento({ nome: 'Nome do cadastro' }, { pessoaNome: 'Nome legado' }), 'Nome do cadastro');
+    assert.equal(getNomePessoaAtendimento({}, { pessoaNome: 'Nome legado' }), 'Nome legado');
+    assert.equal(getNomePessoaAtendimento({}, {}), '');
+
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 18);
+    const origin = await seedAgenda('origem-nome-legado', { data: future, servicosIds: [service.id], servicosNomes: { [service.id]: service.nome }, servicosStatus: { [service.id]: 'Ativo' } });
+    const destination = await seedAgenda('destino-nome-legado', { data: future, servicosIds: [service.id], servicosNomes: { [service.id]: service.nome }, servicosStatus: { [service.id]: 'Ativo' } });
+    await seedDocuments([
+      ['pessoas', 'legada', { pessoaNome: 'Pessoa Legada', tipoPessoa: 'Consulente' }],
+      ['consulentes', 'atendimento-legado', { agendaId: origin.id, pessoaBaseId: 'legada', pessoaNome: 'Nome antigo', status: 'Agendado', servicosIds: [service.id], servicosNomes: { [service.id]: service.nome } }],
+      ['agendamentos_ativos', `${origin.id}_legada`, { agendaId: origin.id, pessoaBaseId: 'legada', agendamentoId: 'atendimento-legado' }]
+    ]);
+    const destinationId = await realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: 'atendimento-legado', destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Compatibilidade legada', userId: USER_ID, role: 'admin' }, db);
+    assert.equal((await getDoc(appointmentById(db, destinationId))).data().nome, 'Pessoa Legada');
+
+    const unnamedOrigin = await seedAgenda('origem-sem-nome', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    await seedDocuments([
+      ['pessoas', 'sem-nome', { tipoPessoa: 'Consulente' }],
+      ['consulentes', 'atendimento-sem-nome', { agendaId: unnamedOrigin.id, pessoaBaseId: 'sem-nome', status: 'Agendado', servicosIds: [service.id], servicosNomes: [service.nome] }],
+      ['agendamentos_ativos', `${unnamedOrigin.id}_sem-nome`, { agendaId: unnamedOrigin.id, pessoaBaseId: 'sem-nome', agendamentoId: 'atendimento-sem-nome' }]
+    ]);
+    await assert.rejects(realocarAtendimento({ origemAgendaId: unnamedOrigin.id, origemAgendamentoId: 'atendimento-sem-nome', destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Sem nome', userId: USER_ID, role: 'admin' }, db), /PESSOA_SEM_NOME/);
   });
 
   test('realoca a partir de agenda cancelada sem reabri-la nem alterar suas vagas', async () => {

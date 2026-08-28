@@ -21,7 +21,7 @@ import {
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
-import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda, servicoControlaVagas } from '../../utils/domain';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoOperacional, servicoAtivoNaAgenda, servicoControlaVagas } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -65,8 +65,9 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
   const toast = useToast();
   const isClosed = ['Concluída', 'Cancelada'].includes(agenda.status);
   const agendaServices = servicosCatalogo.filter(service => agendaAceitaServico(agenda, service.id));
-  const summary = fila.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
-  const hasExecutedAppointment = fila.some(item => ['Presente', 'Concluído'].includes(item.status));
+  const filaOperacional = fila.filter(isAtendimentoOperacional);
+  const summary = filaOperacional.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
+  const hasExecutedAppointment = filaOperacional.some(item => ['Presente', 'Concluído'].includes(item.status));
 
   useEffect(() => {
     if (!expanded || !user) return;
@@ -260,7 +261,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
         <div className="mt-6 space-y-4 animate-in slide-in-from-top-2 duration-200">
           <div className="flex justify-between items-center px-1">
             <span className="text-[11px] font-black uppercase text-gray-400 tracking-widest">
-              {fila.length} Inscritos
+              {filaOperacional.length} Inscritos
             </span>
             {!isClosed && <Button
               onClick={() => {
@@ -278,14 +279,14 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
           </div>
 
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-            {['Agendado', 'Presente', 'Concluído', 'Faltou', 'Cancelado', 'Reagendado'].map(status => <div key={status} className="bg-white border border-gray-100 rounded-xl p-2 text-center">
+            {['Agendado', 'Presente', 'Concluído', 'Faltou', 'Cancelado'].map(status => <div key={status} className="bg-white border border-gray-100 rounded-xl p-2 text-center">
               <strong className="block text-sm text-gray-900">{summary[status] || 0}</strong>
               <span className="text-[8px] font-black uppercase text-gray-400">{status}</span>
             </div>)}
           </div>
 
-          {agenda.status === 'Cancelada' && fila.some(item => item.status === 'Agendado') && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm"><strong>{fila.filter(item => item.status === 'Agendado').length} atendimento(s) aguardam realocação.</strong><p className="text-xs mt-1">Use “Reagendar / Realocar” em cada pessoa. Não há movimentação automática.</p></div>}
-          {affectedServiceId && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm"><strong>Pessoas afetadas pelo serviço cancelado</strong>{fila.filter(item => item.status === 'Agendado' && (item.servicosIds || []).includes(affectedServiceId) && !item.servicosRealocados?.[affectedServiceId]).map(item => <div key={item.id} className="flex justify-between items-center mt-2"><span>{item.nome}</span><button className="font-bold text-indigo-700" onClick={() => { setRelocationTarget(item); setRelocationServiceId(affectedServiceId); }}>Realocar Serviço</button></div>)}</div>}
+          {agenda.status === 'Cancelada' && filaOperacional.some(item => item.status === 'Agendado') && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm"><strong>{filaOperacional.filter(item => item.status === 'Agendado').length} atendimento(s) aguardam realocação.</strong><p className="text-xs mt-1">Use “Reagendar / Realocar” em cada pessoa. Não há movimentação automática.</p></div>}
+          {affectedServiceId && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm"><strong>Pessoas afetadas pelo serviço cancelado</strong>{filaOperacional.filter(item => item.status === 'Agendado' && getServicosAtivosAtendimento(item).includes(affectedServiceId)).map(item => <div key={item.id} className="flex justify-between items-center mt-2"><span>{item.nome}</span><button className="font-bold text-indigo-700" onClick={() => { setRelocationTarget(item); setRelocationServiceId(affectedServiceId); }}>Realocar Serviço</button></div>)}</div>}
 
           <div className="bg-white border border-gray-100 rounded-xl p-3 text-xs space-y-2">
             <p><strong>Tipo de Trabalho:</strong> {agenda.tipoTrabalhoNome || agenda.tipo}</p>
@@ -294,14 +295,14 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
           </div>
 
           <div className="space-y-2">
-            {fila.length === 0 ? (
+            {filaOperacional.length === 0 ? (
               <p className="text-center text-gray-400 py-3 text-xs italic">Nenhum inscrito nesta data ainda.</p>
             ) : (
-              fila.map(c => (
+              filaOperacional.map(c => (
                 <div key={c.id} className="bg-white p-3 rounded-xl border border-gray-100 flex justify-between items-center shadow-sm gap-2">
                   <div className="min-w-0">
                     <p className="font-bold text-gray-800 text-sm truncate">{c.nome}</p>
-                    <div className="text-[10px] text-amber-600 font-bold uppercase">{(c.servicosIds || []).map((id, index) => { const moved = c.servicosRealocados?.[id]; const target = moved && agendas?.find(item => item.id === moved.destinoAgendaId); return <p key={id}>{c.servicosNomes?.[index] || id}{moved ? ` · REALOCADO → ${target?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra agenda'}` : ' · ATIVO'}</p>; })}{c.origemRealocacao && <p className="text-indigo-600 mt-1">Realocado da agenda de {agendas?.find(item => item.id === c.origemRealocacao.agendaId)?.data?.toDate?.().toLocaleDateString('pt-BR') || 'origem anterior'}</p>}{c.status === 'Reagendado' && <p className="text-indigo-700 mt-1">Reagendado para {agendas?.find(item => item.id === c.reagendadoParaAgendaId)?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra data'}</p>}</div>
+                    <div className="text-[10px] text-amber-600 font-bold uppercase">{getServicosAtivosAtendimento(c).map(id => <p key={id}>{servicosCatalogo.find(service => service.id === id)?.nome || getNomeServicoAtendimento(c, id)} · ATIVO</p>)}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>

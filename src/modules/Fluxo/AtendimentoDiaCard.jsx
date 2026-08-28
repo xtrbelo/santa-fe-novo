@@ -17,7 +17,7 @@ import {
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
-import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda } from '../../utils/domain';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoOperacional, servicoAtivoNaAgenda } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -53,6 +53,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
       setFila(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
+          .filter(isAtendimentoOperacional)
           .sort(sortQueue)
       );
     });
@@ -203,7 +204,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
                       {c.nome}
                     </p>
                     <p className="text-[10px] sm:text-xs font-bold text-emerald-600 uppercase mt-0.5 truncate">
-                      {c.servicosNomes?.join(' • ')}
+                      {getServicosAtivosAtendimento(c).map(id => servicosCatalogo.find(service => service.id === id)?.nome || getNomeServicoAtendimento(c, id)).join(' • ')}
                     </p>
                   </div>
                 </div>

@@ -26,7 +26,7 @@ import {
   limit,
   deleteField
 } from 'firebase/firestore';
-import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 
 const getEnv = (key, fallback) => {
   try {
@@ -258,6 +258,8 @@ export const realocarAtendimento = async ({
     ]);
     if (destinationLockSnapshot.exists()) throw new Error('DESTINO_POSSUI_ATENDIMENTO');
     const person = personSnapshot.exists() ? personSnapshot.data() : origin;
+    const destinationPersonName = getNomePessoaAtendimento(person, origin);
+    if (!destinationPersonName) throw new Error('PESSOA_SEM_NOME');
     const permittedTypes = getAgendaPublicosPermitidos(destinationAgenda);
     if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(person))) throw new Error('PUBLICO_NAO_PERMITIDO');
 
@@ -274,8 +276,8 @@ export const realocarAtendimento = async ({
     const complete = selectedIds.length === activeIds.length;
     const now = Timestamp.now();
     const serviceNames = selectedIds.map(id => {
-      const index = (origin.servicosIds || []).indexOf(id);
-      return origin.servicosNomes?.[index] || destinationAgenda.servicosNomes?.[id] || id;
+      const historicalName = getNomeServicoAtendimento(origin, id);
+      return historicalName !== id ? historicalName : destinationAgenda.servicosNomes?.[id] || id;
     });
     const relocationInfo = Object.fromEntries(selectedIds.map(id => [id, {
       realocacaoId,
@@ -305,7 +307,7 @@ export const realocarAtendimento = async ({
     }
 
     transaction.set(destinationAppointmentRef, {
-      agendaId: destinoAgendaId, nome: origin.nome || '', pessoaBaseId: origin.pessoaBaseId,
+      agendaId: destinoAgendaId, nome: destinationPersonName, pessoaBaseId: origin.pessoaBaseId,
       cpf: origin.cpf || '', status: 'Agendado', servicosIds: selectedIds, servicosNomes: serviceNames,
       criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId, prioridade: false,
       origemRealocacao: {

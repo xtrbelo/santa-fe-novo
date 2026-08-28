@@ -88,7 +88,8 @@ export const RealocacaoModal = ({ atendimento, origemAgenda, agendas, servicosCa
     } catch (error) {
       console.error(error);
       const key = error.message?.split(':')[0];
-      toast.error(errorMessages[key] || (key === 'SEM_VAGA' ? 'Não há vagas disponíveis no destino.' : 'Não foi possível concluir a realocação.'));
+      if (key === 'PESSOA_SEM_NOME') toast.error('Não foi possível identificar o nome da pessoa para o novo atendimento.');
+      else toast.error(errorMessages[key] || (key === 'SEM_VAGA' ? 'Não há vagas disponíveis no destino.' : 'Não foi possível concluir a realocação.'));
     } finally { setSaving(false); }
   };
 

@@ -28,3 +28,15 @@ export const getServicosAtivosAtendimento = atendimento => {
   const realocados = atendimento?.servicosRealocados || {};
   return (atendimento?.servicosIds || []).filter(id => !Object.hasOwn(realocados, id));
 };
+
+export const isAtendimentoOperacional = atendimento => atendimento?.status !== 'Reagendado';
+
+export const getNomeServicoAtendimento = (atendimento, serviceId) => {
+  const names = atendimento?.servicosNomes;
+  if (names && !Array.isArray(names) && names[serviceId]) return names[serviceId];
+  const index = (atendimento?.servicosIds || []).indexOf(serviceId);
+  return (Array.isArray(names) && names[index]) || serviceId;
+};
+
+export const getNomePessoaAtendimento = (person, atendimento) =>
+  person?.nome || person?.pessoaNome || atendimento?.nome || atendimento?.pessoaNome || '';
