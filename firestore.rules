@@ -31,7 +31,7 @@ service cloud.firestore {
       allow create: if isInternal(appId)
         && request.resource.data.executadoPor == request.auth.uid
         && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'])
-          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA']);
+          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']);
       allow update, delete: if false;
     }
 
@@ -48,7 +48,7 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/agendas/{id} {
       allow read: if isInternal(appId);
       allow create: if isAdmin(appId) || isGestor(appId);
-      allow update: if resource.data.get('status', 'Aberta') != 'Concluída'
+      allow update: if !(resource.data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
         && (isAdmin(appId) || isGestor(appId)
           || (isAtendimento(appId) && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['vagasOcupadas', 'atualizadoEm', 'atualizadoPor'])));
@@ -58,16 +58,16 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/consulentes/{id} {
       allow read: if isInternal(appId);
       allow create: if isInternal(appId)
-        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') != 'Concluída';
+        && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada']);
       allow update: if isInternal(appId)
         && request.resource.data.agendaId == resource.data.agendaId
-        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') != 'Concluída';
+        && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada']);
       allow delete: if false;
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{id} {
-      allow read: if collectionName in ['config_tipos_pessoa', 'config_eventos', 'config_servicos'] && isInternal(appId);
-      allow create, update: if collectionName in ['config_tipos_pessoa', 'config_eventos', 'config_servicos'] && isAdmin(appId);
+      allow read: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_eventos', 'config_servicos'] && isInternal(appId);
+      allow create, update: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_eventos', 'config_servicos'] && isAdmin(appId);
       allow delete: if false;
     }
 

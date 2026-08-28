@@ -28,7 +28,7 @@ export const FluxoModule = ({ user }) => {
       setAgendasHoje(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(a => isToday(a.data) && a.status !== 'Concluída')
+          .filter(a => isToday(a.data) && !['Concluída', 'Cancelada'].includes(a.status))
       );
     });
 

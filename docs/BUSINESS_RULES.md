@@ -3,8 +3,10 @@
 - CPF é opcional; informado, deve ser válido e único.
 - Pessoas e configurações são desativadas, não excluídas.
 - Uma pessoa não pode ter dois agendamentos ativos na mesma agenda.
-- Lista de tipos permitidos vazia significa sem restrição.
-- Serviços com `requerVagas` reservam vaga atomicamente. Para legados, usa-se o maior valor entre contador salvo e ocupação real observada.
+- Pessoa usa `vinculo` (`consulente` ou `membro`) e `funcoesCasa`. Membros podem exercer várias funções e também receber atendimento.
+- Os adaptadores centrais interpretam `tipoPessoa`, `tiposPessoaPermitidos` e `requerVagas` legados; lista de públicos permitidos vazia significa sem restrição.
+- Serviços novos pertencem a um ou mais tipos de trabalho por `tipoTrabalhoIds`. O controle de vagas é definido por `controlaVagas` e o limite pertence à combinação agenda + serviço.
+- Serviços com controle de vagas reservam vaga atomicamente. Para legados, usa-se o maior valor entre contador salvo e ocupação real observada.
 - `prioridade` e `sortQueue` são preservados.
 - Alterações relevantes registram UID e Timestamp.
 - Apenas administradores gerenciam usuários; não podem desativar nem rebaixar a própria conta pela interface.
@@ -17,11 +19,13 @@
 - `Faltou` preserva a vaga utilizada no histórico da agenda; somente o cancelamento explícito devolve a reserva. Registros `Cancelado` não entram na reconciliação da ocupação real.
 - A prioridade pode ser alterada apenas em atendimentos abertos e coloca presentes prioritários primeiro na fila.
 - Horários de chegada e saída são gravados uma única vez.
-- Uma agenda `Concluída` fica somente para consulta: novos agendamentos, cancelamentos e demais alterações são bloqueados.
+- Uma agenda `Concluída` ou `Cancelada` fica somente para consulta: novos agendamentos e alterações operacionais são bloqueados.
+- Editar uma agenda permite data, horário, público, serviços e limites. O tipo de trabalho só muda sem histórico; um serviço com atendimentos ativos não pode ser removido; o limite não pode ficar abaixo da ocupação.
+- Cancelar um serviço impede novas reservas, preserva os atendimentos vinculados e informa a quantidade afetada. Excluir fisicamente uma agenda exige perfil administrador e ausência total de histórico.
 - Reagendamento entre agendas permanece pendente até existir uma operação atômica que preserve vagas e evite duplicidade nos dois lados.
 
 ## Validação transacional
 
-- A validação de `tiposPessoaPermitidos` pertence também ao serviço transacional, não somente à interface.
+- Público, disponibilidade e status do serviço na agenda são validados também pelo serviço transacional, não somente pela interface.
 - Reserva, limite de vagas, duplicidade, cancelamento, dupla devolução, agenda concluída, prioridade, ordenação da fila, horários, compatibilidade legada e concorrência da última vaga são exercitados contra o Firebase Emulator por `npm run test:business`.
 - A suíte usa o projeto fictício `santa-fe-business-test` e chama as mesmas funções utilizadas pelo frontend por meio de injeção opcional do Firestore.

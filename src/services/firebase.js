@@ -24,6 +24,7 @@ import {
   where,
   limit
 } from 'firebase/firestore';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 
 const getEnv = (key, fallback) => {
   try {
@@ -89,9 +90,13 @@ export const findPessoaByCpf = async (cpfClean, includeInactive = false) => {
 };
 
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
-  if (agenda.status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
-  const permittedTypes = agenda.tiposPessoaPermitidos || [];
-  if (permittedTypes.length && !permittedTypes.includes(pessoa.tipoPessoa)) throw new Error('TIPO_PESSOA_NAO_PERMITIDO');
+  if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
+  const permittedTypes = getAgendaPublicosPermitidos(agenda);
+  if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(pessoa))) throw new Error('PUBLICO_NAO_PERMITIDO');
+  servicos.forEach(service => {
+    if (!agendaAceitaServico(agenda, service.id)) throw new Error(`SERVICO_NAO_DISPONIVEL:${service.nome}`);
+    if (!servicoAtivoNaAgenda(agenda, service.id)) throw new Error(`SERVICO_CANCELADO:${service.nome}`);
+  });
   const existingQuery = query(getDataCollection(firestore, 'consulentes'), where('agendaId', '==', agenda.id));
   const existingSnapshot = await getDocs(existingQuery);
   const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => item.status !== 'Cancelado');
@@ -107,14 +112,18 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
-    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (['Concluída', 'Cancelada'].includes(agendaSnapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
     if (appointmentSnapshot.exists() && appointmentSnapshot.data().status !== 'Cancelado') throw new Error('AGENDAMENTO_DUPLICADO');
 
     const agendaData = agendaSnapshot.data();
-    const transactionPermittedTypes = agendaData.tiposPessoaPermitidos || [];
-    if (transactionPermittedTypes.length && !transactionPermittedTypes.includes(pessoa.tipoPessoa)) throw new Error('TIPO_PESSOA_NAO_PERMITIDO');
+    const transactionPermittedTypes = getAgendaPublicosPermitidos(agendaData);
+    if (transactionPermittedTypes.length && !transactionPermittedTypes.includes(getPessoaVinculo(pessoa))) throw new Error('PUBLICO_NAO_PERMITIDO');
+    servicos.forEach(service => {
+      if (!agendaAceitaServico(agendaData, service.id)) throw new Error(`SERVICO_NAO_DISPONIVEL:${service.nome}`);
+      if (!servicoAtivoNaAgenda(agendaData, service.id)) throw new Error(`SERVICO_CANCELADO:${service.nome}`);
+    });
     const occupied = { ...(agendaData.vagasOcupadas || {}) };
-    servicos.filter(service => service.requerVagas).forEach(service => {
+    servicos.filter(servicoControlaVagas).forEach(service => {
       const total = Number(agendaData.vagasTotais?.[service.id] || 0);
       const current = Math.max(Number(occupied[service.id] || 0), Number(realOccupancy[service.id] || 0));
       if (current >= total) throw new Error(`SEM_VAGA:${service.nome}`);
@@ -142,7 +151,7 @@ export const cancelAgendamento = async ({ agendaId, agendamentoId, userId, motiv
     if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
     const agendaData = agendaSnapshot.data();
     const appointment = appointmentSnapshot.data();
-    if (agendaData.status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (['Concluída', 'Cancelada'].includes(agendaData.status)) throw new Error('AGENDA_INDISPONIVEL');
     if (appointment.status === 'Cancelado') throw new Error('JA_CANCELADO');
     if (appointment.status === 'Concluído') throw new Error('ATENDIMENTO_CONCLUIDO');
     if (!['Agendado', 'Presente'].includes(appointment.status)) throw new Error('STATUS_NAO_CANCELAVEL');
@@ -169,7 +178,7 @@ export const setAgendamentoPrioridade = async ({ agendaId, agendamentoId, priori
   await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
-    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (['Concluída', 'Cancelada'].includes(agendaSnapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
     if (!['Agendado', 'Presente'].includes(appointmentSnapshot.data().status)) throw new Error('STATUS_SEM_PRIORIDADE');
     const now = Timestamp.now();
     transaction.update(appointmentRef, { prioridade: Boolean(prioridade), atualizadoEm: now, atualizadoPor: userId });
@@ -183,7 +192,7 @@ export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status,
   await runTransaction(firestore, async transaction => {
     const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
     if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
-    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (['Concluída', 'Cancelada'].includes(agendaSnapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
     const current = appointmentSnapshot.data();
     const allowed = current.status === 'Agendado' ? ['Presente', 'Faltou'] : current.status === 'Presente' ? ['Concluído'] : [];
     if (!allowed.includes(status)) throw new Error('TRANSICAO_INVALIDA');
@@ -200,10 +209,86 @@ export const concluirAgenda = async ({ agendaId, userId }, firestore = db) => {
   await runTransaction(firestore, async transaction => {
     const agendaSnapshot = await transaction.get(agendaRef);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
-    if (agendaSnapshot.data().status === 'Concluída') throw new Error('AGENDA_CONCLUIDA');
+    if (['Concluída', 'Cancelada'].includes(agendaSnapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
     const now = Timestamp.now();
     transaction.update(agendaRef, { status: 'Concluída', concluidaEm: now, concluidaPor: userId, atualizadoEm: now, atualizadoPor: userId });
     transaction.set(createAuditRef(firestore), { tipo: 'AGENDA_CONCLUIDA', alvoId: agendaId, executadoPor: userId, criadoEm: now });
+  });
+};
+
+const getAgendaAppointments = async (firestore, agendaId) => {
+  const snapshot = await getDocs(query(getDataCollection(firestore, 'consulentes'), where('agendaId', '==', agendaId)));
+  return snapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+};
+
+export const editarAgenda = async ({ agendaId, changes, userId }, firestore = db) => {
+  const appointments = await getAgendaAppointments(firestore, agendaId);
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(agendaRef);
+    if (!snapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    const current = snapshot.data();
+    if (['Concluída', 'Cancelada'].includes(current.status)) throw new Error('AGENDA_INDISPONIVEL');
+    if (changes.tipoTrabalhoId && changes.tipoTrabalhoId !== current.tipoTrabalhoId && appointments.length) throw new Error('TIPO_COM_ATENDIMENTOS');
+    const currentServiceIds = current.servicosIds?.length
+      ? current.servicosIds
+      : [...new Set(appointments.flatMap(item => item.servicosIds || []))];
+    const removed = currentServiceIds.filter(id => !(changes.servicosIds || []).includes(id));
+    if (removed.some(id => appointments.some(item => item.status !== 'Cancelado' && (item.servicosIds || []).includes(id)))) throw new Error('SERVICO_COM_ATENDIMENTOS');
+    Object.entries(changes.vagasTotais || {}).forEach(([id, total]) => {
+      if (Number(total) < Number(current.vagasOcupadas?.[id] || 0)) throw new Error('LIMITE_MENOR_QUE_OCUPACAO');
+    });
+    const now = Timestamp.now();
+    const vagasOcupadas = changes.vagasTotais
+      ? Object.fromEntries(Object.keys(changes.vagasTotais).map(id => [id, Number(current.vagasOcupadas?.[id] || 0)]))
+      : current.vagasOcupadas;
+    transaction.update(agendaRef, { ...changes, vagasOcupadas, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(createAuditRef(firestore), { tipo: 'AGENDA_EDITADA', agendaId, executadoPor: userId, criadoEm: now });
+  });
+};
+
+export const cancelarServicoAgenda = async ({ agendaId, servicoId, userId }, firestore = db) => {
+  const appointments = await getAgendaAppointments(firestore, agendaId);
+  const affected = appointments.filter(item => item.status !== 'Cancelado' && (item.servicosIds || []).includes(servicoId)).length;
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(agendaRef);
+    if (!snapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    const agenda = snapshot.data();
+    if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
+    const now = Timestamp.now();
+    transaction.update(agendaRef, {
+      servicosStatus: { ...(agenda.servicosStatus || {}), [servicoId]: 'Cancelado' },
+      servicosCancelamentos: { ...(agenda.servicosCancelamentos || {}), [servicoId]: { canceladoEm: now, canceladoPor: userId } },
+      atualizadoEm: now, atualizadoPor: userId
+    });
+    transaction.set(createAuditRef(firestore), { tipo: 'SERVICO_AGENDA_CANCELADO', agendaId, servicoId, pessoasAfetadas: affected, executadoPor: userId, criadoEm: now });
+  });
+  return affected;
+};
+
+export const cancelarAgenda = async ({ agendaId, userId }, firestore = db) => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(agendaRef);
+    if (!snapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    if (['Concluída', 'Cancelada'].includes(snapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
+    const now = Timestamp.now();
+    transaction.update(agendaRef, { status: 'Cancelada', canceladaEm: now, canceladaPor: userId, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(createAuditRef(firestore), { tipo: 'AGENDA_CANCELADA', agendaId, executadoPor: userId, criadoEm: now });
+  });
+};
+
+export const excluirAgendaVazia = async ({ agendaId, userId }, firestore = db) => {
+  const appointments = await getAgendaAppointments(firestore, agendaId);
+  if (appointments.length) throw new Error('AGENDA_POSSUI_HISTORICO');
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(agendaRef);
+    if (!snapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    const now = Timestamp.now();
+    transaction.delete(agendaRef);
+    transaction.set(createAuditRef(firestore), { tipo: 'AGENDA_EXCLUIDA', agendaId, executadoPor: userId, criadoEm: now });
   });
 };
 

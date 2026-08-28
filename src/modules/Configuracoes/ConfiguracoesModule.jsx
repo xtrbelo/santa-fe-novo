@@ -1,298 +1,79 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  getAppCollection, 
-  getAppDoc, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc,
-  Timestamp
-} from '../../services/firebase';
+import React, { useEffect, useState } from 'react';
+import { addDoc, getAppCollection, getAppDoc, onSnapshot, Timestamp, updateDoc } from '../../services/firebase';
+import { getPublicosPermitidosTrabalho, servicoControlaVagas } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
-import { 
-  UserSquare2, 
-  CalendarDays, 
-  Tag, 
-  Plus, 
-  Trash2, 
-  X 
-} from 'lucide-react';
+import { CalendarDays, Plus, Tag, Trash2, Users } from 'lucide-react';
+
+const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
+const initialFunctions = [{ id: 'medium', nome: 'Médium' }, { id: 'cambone', nome: 'Cambone' }];
 
 export const ConfiguracoesModule = ({ user }) => {
-  const [tiposPessoa, setTiposPessoa] = useState([]);
-  const [eventos, setEventos] = useState([]);
+  const [funcoes, setFuncoes] = useState([]);
+  const [trabalhos, setTrabalhos] = useState([]);
   const [servicos, setServicos] = useState([]);
-  const [novoTP, setNovoTP] = useState('');
-  const [novoEV, setNovoEV] = useState({ nome: '', tiposPessoaPermitidos: [] });
-  const [novoSV, setNovoSV] = useState({ nome: '', requerVagas: false });
+  const [novaFuncao, setNovaFuncao] = useState({ codigo: '', nome: '' });
+  const [novoTrabalho, setNovoTrabalho] = useState({ nome: '', publicosPermitidos: ['consulente', 'membro'] });
+  const [novoServico, setNovoServico] = useState({ nome: '', tipoTrabalhoIds: [], controlaVagas: false });
   const [itemToDelete, setItemToDelete] = useState(null);
-
   const toast = useToast();
 
   useEffect(() => {
-    if (!user) return;
-    const unsubT = onSnapshot(getAppCollection('config_tipos_pessoa'), (s) => 
-      setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
-    );
-    const unsubE = onSnapshot(getAppCollection('config_eventos'), (s) => 
-      setEventos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
-    );
-    const unsubS = onSnapshot(getAppCollection('config_servicos'), (s) => 
-      setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false))
-    );
-    return () => {
-      unsubT();
-      unsubE();
-      unsubS();
-    };
+    if (!user) return undefined;
+    const unsubs = [
+      onSnapshot(getAppCollection('config_funcoes_membro'), snap => setFuncoes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false))),
+      onSnapshot(getAppCollection('config_eventos'), snap => setTrabalhos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false))),
+      onSnapshot(getAppCollection('config_servicos'), snap => setServicos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false)))
+    ];
+    return () => unsubs.forEach(unsub => unsub());
   }, [user]);
 
-  const addTipoPessoa = async () => {
-    if (!novoTP.trim()) return;
-    try {
-      const now = Timestamp.now();
-      await addDoc(getAppCollection('config_tipos_pessoa'), { nome: novoTP.trim(), ativo: true, criadoEm: now, criadoPor: user.uid, atualizadoEm: now, atualizadoPor: user.uid });
-      toast.success(`Tipo de pessoa "${novoTP}" cadastrado com sucesso!`);
-      setNovoTP('');
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao adicionar tipo de pessoa.');
-    }
+  const metadata = () => ({ ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+  const toggle = (list, id) => list.includes(id) ? list.filter(item => item !== id) : [...list, id];
+  const addFunction = async () => {
+    if (!novaFuncao.codigo.trim() || !novaFuncao.nome.trim()) return;
+    await addDoc(getAppCollection('config_funcoes_membro'), { codigo: novaFuncao.codigo.trim().toLowerCase(), nome: novaFuncao.nome.trim(), ...metadata() });
+    setNovaFuncao({ codigo: '', nome: '' }); toast.success('Função de membro cadastrada.');
   };
-
-  const addEvento = async () => {
-    if (!novoEV.nome.trim()) return;
-    try {
-      await addDoc(getAppCollection('config_eventos'), {
-        nome: novoEV.nome.trim(),
-        tiposPessoaPermitidos: novoEV.tiposPessoaPermitidos,
-        ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid
-      });
-      toast.success(`Tipo de agenda "${novoEV.nome}" cadastrado com sucesso!`);
-      setNovoEV({ nome: '', tiposPessoaPermitidos: [] });
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao cadastrar tipo de agenda.');
-    }
+  const addWork = async () => {
+    if (!novoTrabalho.nome.trim()) return;
+    await addDoc(getAppCollection('config_eventos'), { nome: novoTrabalho.nome.trim(), publicosPermitidos: novoTrabalho.publicosPermitidos, ...metadata() });
+    setNovoTrabalho({ nome: '', publicosPermitidos: ['consulente', 'membro'] }); toast.success('Tipo de trabalho cadastrado.');
   };
-
-  const addServico = async () => {
-    if (!novoSV.nome.trim()) return;
-    try {
-      await addDoc(getAppCollection('config_servicos'), {
-        nome: novoSV.nome.trim(),
-        requerVagas: novoSV.requerVagas,
-        ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid
-      });
-      toast.success(`Serviço "${novoSV.nome}" adicionado com sucesso!`);
-      setNovoSV({ nome: '', requerVagas: false });
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao cadastrar serviço.');
-    }
+  const addService = async () => {
+    if (!novoServico.nome.trim() || !novoServico.tipoTrabalhoIds.length) { toast.error('Selecione ao menos um tipo de trabalho.'); return; }
+    await addDoc(getAppCollection('config_servicos'), { ...novoServico, nome: novoServico.nome.trim(), requerVagas: novoServico.controlaVagas, ...metadata() });
+    setNovoServico({ nome: '', tipoTrabalhoIds: [], controlaVagas: false }); toast.success('Serviço cadastrado.');
   };
-
-  const confirmDelete = async () => {
+  const deactivate = async () => {
     if (!itemToDelete) return;
-    try {
-      await updateDoc(getAppDoc(itemToDelete.coll, itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
-      toast.success(`Item "${itemToDelete.name}" desativado.`);
-      setItemToDelete(null);
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao remover item de configuração.');
-    }
+    await updateDoc(getAppDoc(itemToDelete.collection, itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+    toast.success('Configuração desativada.'); setItemToDelete(null);
   };
 
-  return (
-    <div className="space-y-6 animate-in fade-in duration-500 pb-10">
-      <header className="px-1">
-        <h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tighter uppercase italic leading-none">
-          Ajustes
-        </h2>
-        <p className="text-gray-500 font-medium text-xs sm:text-sm mt-1">
-          Configuração de parâmetros e catálogos do sistema
-        </p>
-      </header>
-
-      {/* 1. Tipos de Pessoa */}
-      <Card className="!border-none shadow-md">
-        <h3 className="text-sm font-black uppercase text-purple-600 mb-4 flex items-center gap-2">
-          <UserSquare2 size={18}/> 1. Tipos de Pessoa (Ex: Médium, Consulente, Membro)
-        </h3>
-        <div className="flex gap-2 mb-4">
-          <input 
-            value={novoTP} 
-            onChange={e => setNovoTP(e.target.value)} 
-            placeholder="Ex: Médium da Casa" 
-            className="flex-1 bg-gray-50 px-4 py-2.5 rounded-xl border border-transparent text-sm font-bold outline-none focus:border-purple-500 focus:bg-white" 
-          />
-          <Button 
-            onClick={addTipoPessoa} 
-            className="px-4 py-2.5 h-auto text-xs bg-purple-600 hover:bg-purple-700 text-white"
-          >
-            <Plus size={16}/> Adicionar
-          </Button>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {tiposPessoa.map(t => (
-            <div 
-              key={t.id} 
-              className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 transition-colors px-3 py-1.5 rounded-xl text-xs font-bold text-gray-700 uppercase tracking-wider"
-            >
-              <span>{t.nome}</span>
-              <button 
-                onClick={() => setItemToDelete({ coll: 'config_tipos_pessoa', id: t.id, name: t.nome })} 
-                className="text-gray-400 hover:text-rose-600 transition-colors p-0.5 rounded"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* 2. Tipos de Agenda */}
-      <Card className="!border-none shadow-md">
-        <h3 className="text-sm font-black uppercase text-amber-500 mb-4 flex items-center gap-2">
-          <CalendarDays size={18}/> 2. Tipos de Agenda / Trabalhos
-        </h3>
-        <div className="space-y-4">
-          <input 
-            value={novoEV.nome} 
-            onChange={e => setNovoEV({ ...novoEV, nome: e.target.value })} 
-            placeholder="Nome do Trabalho (Ex: Gira de Atendimento, Sessão Festiva)" 
-            className="w-full bg-gray-50 px-4 py-2.5 rounded-xl border border-transparent text-sm font-bold outline-none focus:border-amber-500 focus:bg-white" 
-          />
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
-              Pessoas autorizadas a participar:
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {tiposPessoa.map(t => {
-                const isSelected = novoEV.tiposPessoaPermitidos.includes(t.nome);
-                return (
-                  <label 
-                    key={t.id} 
-                    className={`px-3 py-1.5 rounded-xl border cursor-pointer text-xs font-black uppercase transition-all ${
-                      isSelected 
-                        ? 'bg-amber-500 border-amber-500 text-white shadow-sm' 
-                        : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'
-                    }`}
-                  >
-                    <input 
-                      type="checkbox" 
-                      className="hidden" 
-                      onChange={() => setNovoEV(p => ({
-                        ...p,
-                        tiposPessoaPermitidos: isSelected 
-                          ? p.tiposPessoaPermitidos.filter(x => x !== t.nome) 
-                          : [...p.tiposPessoaPermitidos, t.nome]
-                      }))} 
-                    />
-                    {t.nome}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-          <Button 
-            onClick={addEvento} 
-            variant="warning" 
-            className="w-full py-3.5 text-xs"
-          >
-            <Plus size={16}/> Salvar Tipo de Agenda
-          </Button>
-        </div>
-        <div className="mt-4 space-y-2">
-          {eventos.map(e => (
-            <div 
-              key={e.id} 
-              className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex justify-between items-center"
-            >
-              <div>
-                <span className="text-xs font-bold text-gray-800">{e.nome}</span>
-                {e.tiposPessoaPermitidos?.length > 0 && (
-                  <p className="text-[10px] text-gray-400 font-medium mt-0.5">
-                    Permitido: {e.tiposPessoaPermitidos.join(', ')}
-                  </p>
-                )}
-              </div>
-              <button 
-                onClick={() => setItemToDelete({ coll: 'config_eventos', id: e.id, name: e.nome })} 
-                className="text-gray-400 hover:text-rose-600 transition-colors p-1"
-              >
-                <Trash2 size={16}/>
-              </button>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* 3. Catálogo de Serviços */}
-      <Card className="!border-none shadow-md">
-        <h3 className="text-sm font-black uppercase text-emerald-600 mb-4 flex items-center gap-2">
-          <Tag size={18}/> 3. Catálogo de Serviços Prestados
-        </h3>
-        <div className="flex flex-col gap-3 mb-4">
-          <input 
-            value={novoSV.nome} 
-            onChange={e => setNovoSV({ ...novoSV, nome: e.target.value })} 
-            placeholder="Nome do Serviço (Ex: Passe, Consulta Geral, Orientação)" 
-            className="w-full bg-gray-50 px-4 py-2.5 rounded-xl border border-transparent text-sm font-bold outline-none focus:border-emerald-500 focus:bg-white" 
-          />
-          <label className="flex items-center gap-2 text-xs font-bold text-gray-600 px-1 cursor-pointer select-none">
-            <input 
-              type="checkbox" 
-              checked={novoSV.requerVagas} 
-              onChange={e => setNovoSV({ ...novoSV, requerVagas: e.target.checked })} 
-              className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" 
-            /> 
-            Requer controle de limite de vagas por dia
-          </label>
-          <Button 
-            onClick={addServico} 
-            variant="success" 
-            className="w-full py-3.5 text-xs"
-          >
-            <Plus size={16}/> Adicionar Serviço
-          </Button>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {servicos.map(s => (
-            <div 
-              key={s.id} 
-              className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex justify-between items-center"
-            >
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-gray-800">{s.nome}</span>
-                {s.requerVagas && (
-                  <span className="text-[9px] font-black text-amber-600 uppercase mt-0.5">
-                    Vagas Limitadas
-                  </span>
-                )}
-              </div>
-              <button 
-                onClick={() => setItemToDelete({ coll: 'config_servicos', id: s.id, name: s.nome })} 
-                className="text-gray-400 hover:text-rose-600 transition-colors p-1"
-              >
-                <Trash2 size={16}/>
-              </button>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <ConfirmDialog 
-        isOpen={!!itemToDelete}
-        onClose={() => setItemToDelete(null)}
-        onConfirm={confirmDelete}
-        title="Desativar Configuração"
-        message={`Deseja desativar "${itemToDelete?.name}"? Agendamentos existentes serão preservados.`}
-        confirmText="Sim, Desativar"
-      />
-    </div>
-  );
+  const effectiveFunctions = funcoes.length ? funcoes : initialFunctions;
+  return <div className="space-y-6 pb-10">
+    <header><h2 className="text-3xl font-black uppercase italic">Configurações</h2><p className="text-sm text-gray-500">Modelo operacional da Casa</p></header>
+    <Card className="space-y-4"><h3 className="font-black uppercase text-purple-700 flex gap-2"><Users size={18}/> 1. Vínculos e Funções da Casa</h3>
+      <div className="grid sm:grid-cols-2 gap-3">{publics.map(item => <div key={item.id} className="bg-purple-50 p-4 rounded-xl"><strong>{item.nome}</strong><p className="text-xs text-gray-500 mt-1">{item.id === 'consulente' ? 'Pessoa atendida pela Casa.' : 'Integrante da Casa; pode atuar em funções e também receber atendimento.'}</p></div>)}</div>
+      <div className="flex flex-col sm:flex-row gap-2"><input value={novaFuncao.codigo} onChange={e => setNovaFuncao({ ...novaFuncao, codigo: e.target.value })} placeholder="Código (ex: dirigente)" className="flex-1 bg-gray-50 p-3 rounded-xl"/><input value={novaFuncao.nome} onChange={e => setNovaFuncao({ ...novaFuncao, nome: e.target.value })} placeholder="Nome exibido" className="flex-1 bg-gray-50 p-3 rounded-xl"/><Button onClick={addFunction}><Plus size={16}/> Função</Button></div>
+      <div className="flex flex-wrap gap-2">{effectiveFunctions.map(f => <span key={f.id} className="bg-gray-100 px-3 py-2 rounded-xl text-xs font-bold">{f.nome}</span>)}</div>
+    </Card>
+    <Card className="space-y-4"><h3 className="font-black uppercase text-amber-600 flex gap-2"><CalendarDays size={18}/> 2. Tipos de Trabalho</h3>
+      <input value={novoTrabalho.nome} onChange={e => setNovoTrabalho({ ...novoTrabalho, nome: e.target.value })} placeholder="Ex: Atendimento" className="w-full bg-gray-50 p-3 rounded-xl"/>
+      <div className="flex gap-2">{publics.map(p => <label key={p.id} className="text-xs font-bold"><input type="checkbox" checked={novoTrabalho.publicosPermitidos.includes(p.id)} onChange={() => setNovoTrabalho({ ...novoTrabalho, publicosPermitidos: toggle(novoTrabalho.publicosPermitidos, p.id) })}/> {p.nome}</label>)}</div>
+      <Button onClick={addWork} variant="warning" className="w-full"><Plus size={16}/> Salvar Trabalho</Button>
+      {trabalhos.map(t => <div key={t.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{t.nome}</strong><p className="text-[10px] text-gray-500">Público: {getPublicosPermitidosTrabalho(t).join(', ') || 'sem restrição'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_eventos', id: t.id })}><Trash2 size={16}/></button></div>)}
+    </Card>
+    <Card className="space-y-4"><h3 className="font-black uppercase text-emerald-700 flex gap-2"><Tag size={18}/> 3. Catálogo de Serviços</h3>
+      <input value={novoServico.nome} onChange={e => setNovoServico({ ...novoServico, nome: e.target.value })} placeholder="Nome do serviço" className="w-full bg-gray-50 p-3 rounded-xl"/>
+      <div><p className="text-[10px] uppercase font-black text-gray-400 mb-2">Tipos de Trabalho *</p>{trabalhos.map(t => <label key={t.id} className="block text-xs font-bold mb-1"><input type="checkbox" checked={novoServico.tipoTrabalhoIds.includes(t.id)} onChange={() => setNovoServico({ ...novoServico, tipoTrabalhoIds: toggle(novoServico.tipoTrabalhoIds, t.id) })}/> {t.nome}</label>)}</div>
+      <label className="text-xs font-bold"><input type="checkbox" checked={novoServico.controlaVagas} onChange={e => setNovoServico({ ...novoServico, controlaVagas: e.target.checked })}/> Controla quantidade de atendimentos?</label>
+      <Button onClick={addService} variant="success" className="w-full"><Plus size={16}/> Adicionar Serviço</Button>
+      {servicos.map(s => <div key={s.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{s.nome}</strong><p className="text-[10px] text-gray-500">{servicoControlaVagas(s) ? 'Controla vagas' : 'Sem limite'} · {(s.tipoTrabalhoIds || []).map(id => trabalhos.find(t => t.id === id)?.nome).filter(Boolean).join(', ') || 'Legado/global'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_servicos', id: s.id })}><Trash2 size={16}/></button></div>)}
+    </Card>
+    <ConfirmDialog isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={deactivate} title="Desativar configuração" message="Registros existentes serão preservados." confirmText="Desativar"/>
+  </div>;
 };

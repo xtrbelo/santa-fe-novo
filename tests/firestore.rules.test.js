@@ -182,3 +182,32 @@ describe('I. integridade operacional', () => {
     await assertFails(deleteDoc(ref(authDb('atendimento'), paths.appointments)));
   });
 });
+
+describe('J. modelo operacional da Casa', () => {
+  test('admin cria configuração de função de membro', async () => {
+    await assertSucceeds(setDoc(ref(authDb('admin-a'), `${root}/config_funcoes_membro/medium`), { codigo: 'medium', nome: 'Médium', ativo: true }));
+    await assertFails(setDoc(ref(authDb('gestor'), `${root}/config_funcoes_membro/cambone`), { codigo: 'cambone', nome: 'Cambone', ativo: true }));
+  });
+  test('agenda cancelada fica protegida contra atualizações e agendamentos', async () => {
+    const db = authDb('admin-a');
+    await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Cancelada', canceladaPor: 'admin-a', canceladaEm: new Date() }));
+    await assertFails(updateDoc(ref(db, paths.agendas), { tipo: 'Alterada' }));
+    await assertFails(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
+    await assertFails(setDoc(ref(db, `${root}/consulentes/novo-cancelada`), { agendaId: 'agenda-1', status: 'Agendado' }));
+  });
+  test('somente admin exclui fisicamente agenda', async () => {
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(ref(context.firestore(), `${root}/agendas/vazia-admin`), { tipo: 'Vazia', status: 'Agendada' });
+      await setDoc(ref(context.firestore(), `${root}/agendas/vazia-gestor`), { tipo: 'Vazia', status: 'Agendada' });
+    });
+    await assertFails(deleteDoc(ref(authDb('gestor'), `${root}/agendas/vazia-gestor`)));
+    await assertSucceeds(deleteDoc(ref(authDb('admin-a'), `${root}/agendas/vazia-admin`)));
+  });
+  test('eventos operacionais novos são imutáveis', async () => {
+    const db = authDb('gestor');
+    const auditRef = ref(db, `${root}/auditoria/agenda-editada`);
+    await assertSucceeds(setDoc(auditRef, { tipo: 'AGENDA_EDITADA', agendaId: 'agenda-1', executadoPor: 'gestor', criadoEm: new Date() }));
+    await assertFails(updateDoc(auditRef, { agendaId: 'fraude' }));
+    await assertFails(deleteDoc(auditRef));
+  });
+});

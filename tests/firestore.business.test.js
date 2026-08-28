@@ -9,9 +9,14 @@ import {
   concluirAgenda,
   createAgendamento,
   setAgendamentoPrioridade,
-  updateAtendimentoStatus
+  updateAtendimentoStatus,
+  editarAgenda,
+  cancelarServicoAgenda,
+  cancelarAgenda,
+  excluirAgendaVazia
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
+import { getAgendaPublicosPermitidos, getPessoaFuncoesCasa, getPessoaVinculo, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
 
 const PROJECT_ID = 'santa-fe-business-test';
 const root = `artifacts/${appId}/public/data`;
@@ -130,9 +135,9 @@ describe('transações do fluxo operacional', () => {
     assert.ok(closed.concluidaEm);
     assert.equal(closed.concluidaPor, USER_ID);
     assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().status, 'Agendado');
-    await assert.rejects(book(db, { ...agenda, status: 'Concluída' }, person('2')), /AGENDA_CONCLUIDA/);
-    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_CONCLUIDA/);
-    await assert.rejects(setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, prioridade: true, userId: USER_ID }, db), /AGENDA_CONCLUIDA/);
+    await assert.rejects(book(db, { ...agenda, status: 'Concluída' }, person('2')), /AGENDA_INDISPONIVEL/);
+    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+    await assert.rejects(setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, prioridade: true, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
     const audit = (await getDocs(collection(db, `${root}/auditoria`))).docs.map(item => item.data()).find(item => item.tipo === 'AGENDA_CONCLUIDA');
     assert.equal(audit.executadoPor, USER_ID);
     assert.ok(audit.criadoEm);
@@ -160,7 +165,7 @@ describe('transações do fluxo operacional', () => {
   test('valida tipos permitidos e aceita qualquer tipo quando a lista está vazia', async () => {
     const db = adminDb();
     const restricted = await seedAgenda('agenda-restrita');
-    await assert.rejects(book(db, restricted, person('medium', 'Médium')), /TIPO_PESSOA_NAO_PERMITIDO/);
+    await assert.rejects(book(db, restricted, person('medium', 'Médium')), /PUBLICO_NAO_PERMITIDO/);
     await book(db, restricted, person('consulente'));
     const unrestricted = await seedAgenda('agenda-livre', { tiposPessoaPermitidos: [] });
     await book(db, unrestricted, person('medium', 'Médium'));
@@ -244,5 +249,73 @@ describe('transações do fluxo operacional', () => {
     await seedDocuments([['consulentes', 'faltou-1', { agendaId: faltouAgenda.id, pessoaBaseId: 'faltou-1', status: 'Faltou', servicosIds: [service.id] }]]);
     await assert.rejects(book(db, faltouAgenda, person('outra')), /SEM_VAGA/);
     assert.equal((await getDoc(agendaRef(db, faltouAgenda.id))).data().vagasOcupadas[service.id], 0);
+  });
+
+  test('adapta pessoas, públicos e serviços legados sem migração', () => {
+    assert.equal(getPessoaVinculo({ tipoPessoa: 'Consulente' }), 'consulente');
+    assert.equal(getPessoaVinculo({ tipoPessoa: 'Médium' }), 'membro');
+    assert.deepEqual(getPessoaFuncoesCasa({ tipoPessoa: 'Médium / Cambone' }), ['medium', 'cambone']);
+    assert.deepEqual(getAgendaPublicosPermitidos({ tiposPessoaPermitidos: ['Consulente', 'Médium'] }), ['consulente', 'membro']);
+    assert.equal(servicoControlaVagas({ requerVagas: true }), true);
+    assert.equal(servicoPertenceAoTrabalho({ nome: 'Legado' }, 'trabalho-a'), true);
+  });
+
+  test('permite membro receber atendimento e bloqueia público incompatível', async () => {
+    const db = adminDb();
+    const memberAgenda = await seedAgenda('agenda-membros', { publicosPermitidos: ['membro'] });
+    await book(db, memberAgenda, { ...person('membro'), vinculo: 'membro', funcoesCasa: ['medium'] });
+    await assert.rejects(book(db, memberAgenda, { ...person('consulente'), vinculo: 'consulente' }), /PUBLICO_NAO_PERMITIDO/);
+    const publicAgenda = await seedAgenda('agenda-publica', { publicosPermitidos: ['consulente', 'membro'] });
+    await book(db, publicAgenda, { ...person('consulente-ok'), vinculo: 'consulente' });
+  });
+
+  test('exige serviço disponível e ativo na agenda', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-servicos', { servicosIds: ['permitido'], servicosStatus: { permitido: 'Ativo' } });
+    await assert.rejects(createAgendamento({ agenda, pessoa: person('1'), servicos: [{ ...service, id: 'fora' }], userId: USER_ID, status: 'Agendado' }, db), /SERVICO_NAO_DISPONIVEL/);
+    const canceled = { ...agenda, servicosIds: [service.id], servicosStatus: { [service.id]: 'Cancelado' } };
+    await seedDocuments([['agendas', canceled.id, { ...canceled, id: null }]]);
+    await assert.rejects(book(db, canceled, person('2')), /SERVICO_CANCELADO/);
+  });
+
+  test('edita agenda e protege ocupação, tipo e serviços com atendimentos', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-edicao', { tipoTrabalhoId: 'trabalho-a', servicosIds: [service.id], publicosPermitidos: ['consulente'] });
+    await book(db, agenda, person('1'));
+    await editarAgenda({ agendaId: agenda.id, userId: USER_ID, changes: { servicosIds: [service.id], vagasTotais: { [service.id]: 3 }, publicosPermitidos: ['consulente', 'membro'] } }, db);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasTotais[service.id], 3);
+    await assert.rejects(editarAgenda({ agendaId: agenda.id, userId: USER_ID, changes: { servicosIds: [service.id], vagasTotais: { [service.id]: 0 } } }, db), /LIMITE_MENOR_QUE_OCUPACAO/);
+    await assert.rejects(editarAgenda({ agendaId: agenda.id, userId: USER_ID, changes: { servicosIds: [], vagasTotais: {} } }, db), /SERVICO_COM_ATENDIMENTOS/);
+    await assert.rejects(editarAgenda({ agendaId: agenda.id, userId: USER_ID, changes: { tipoTrabalhoId: 'trabalho-b', servicosIds: [service.id], vagasTotais: { [service.id]: 3 } } }, db), /TIPO_COM_ATENDIMENTOS/);
+  });
+
+  test('cancela serviço preservando atendimentos e quantidade afetada', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-cancelar-servico', { servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    await book(db, agenda, person('1'));
+    assert.equal(await cancelarServicoAgenda({ agendaId: agenda.id, servicoId: service.id, userId: USER_ID }, db), 1);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().servicosStatus[service.id], 'Cancelado');
+    assert.equal((await getDoc(appointmentRef(db, agenda.id, '1'))).data().status, 'Agendado');
+  });
+
+  test('cancela agenda e bloqueia operações normais', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-cancelada');
+    await book(db, agenda, person('1'));
+    await cancelarAgenda({ agendaId: agenda.id, userId: USER_ID }, db);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().status, 'Cancelada');
+    await assert.rejects(book(db, { ...agenda, status: 'Cancelada' }, person('2')), /AGENDA_INDISPONIVEL/);
+    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+  });
+
+  test('exclui agenda vazia e bloqueia exclusão quando existe histórico', async () => {
+    const db = adminDb();
+    const empty = await seedAgenda('agenda-vazia');
+    await excluirAgendaVazia({ agendaId: empty.id, userId: USER_ID }, db);
+    assert.equal((await getDoc(agendaRef(db, empty.id))).exists(), false);
+    const withHistory = await seedAgenda('agenda-historico');
+    await book(db, withHistory, person('1'));
+    await assert.rejects(excluirAgendaVazia({ agendaId: withHistory.id, userId: USER_ID }, db), /AGENDA_POSSUI_HISTORICO/);
+    assert.equal((await getDoc(agendaRef(db, withHistory.id))).exists(), true);
   });
 });

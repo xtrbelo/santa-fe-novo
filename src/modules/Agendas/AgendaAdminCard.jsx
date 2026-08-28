@@ -6,6 +6,11 @@ import {
   createAgendamento,
   cancelAgendamento,
   concluirAgenda,
+  editarAgenda,
+  cancelarServicoAgenda,
+  cancelarAgenda,
+  excluirAgendaVazia,
+  Timestamp,
   query,
   where
 } from '../../services/firebase';
@@ -15,6 +20,7 @@ import {
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda, servicoControlaVagas } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -31,7 +37,7 @@ import {
   LockKeyhole
 } from 'lucide-react';
 
-export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
+export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, trabalhos }) => {
   const [expanded, setExpanded] = useState(false);
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
@@ -42,9 +48,15 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
   const [selSrvs, setSelSrvs] = useState({});
   const [cancelTarget, setCancelTarget] = useState(null);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [confirmCancelAgenda, setConfirmCancelAgenda] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [serviceToCancel, setServiceToCancel] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState(null);
 
   const toast = useToast();
-  const isClosed = agenda.status === 'Concluída';
+  const isClosed = ['Concluída', 'Cancelada'].includes(agenda.status);
+  const agendaServices = servicosCatalogo.filter(service => agendaAceitaServico(agenda, service.id));
   const summary = fila.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
 
   useEffect(() => {
@@ -81,16 +93,43 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
     }
   };
 
+  const startEdit = () => {
+    setEditDraft({
+      data: agenda.data?.toDate().toISOString().slice(0, 10) || '', horario: agenda.horario || '12:00',
+      tipoTrabalhoId: agenda.tipoTrabalhoId || '', publicosPermitidos: getAgendaPublicosPermitidos(agenda),
+      servicosIds: agenda.servicosIds || agendaServices.map(item => item.id), vagasTotais: { ...(agenda.vagasTotais || {}) }
+    });
+    setEditing(true);
+  };
+  const saveEdit = async () => {
+    const work = trabalhos.find(item => item.id === editDraft.tipoTrabalhoId);
+    const selected = servicosCatalogo.filter(item => editDraft.servicosIds.includes(item.id));
+    try {
+      await editarAgenda({ agendaId: agenda.id, userId: user.uid, changes: {
+        data: Timestamp.fromDate(new Date(`${editDraft.data}T${editDraft.horario}:00`)), horario: editDraft.horario,
+        tipoTrabalhoId: work?.id || agenda.tipoTrabalhoId, tipoTrabalhoNome: work?.nome || agenda.tipo, tipo: work?.nome || agenda.tipo,
+        publicosPermitidos: editDraft.publicosPermitidos, servicosIds: editDraft.servicosIds,
+        servicosNomes: Object.fromEntries(selected.map(item => [item.id, item.nome])),
+        servicosStatus: Object.fromEntries(selected.map(item => [item.id, agenda.servicosStatus?.[item.id] || 'Ativo'])),
+        vagasTotais: editDraft.vagasTotais
+      }});
+      toast.success('Agenda atualizada.'); setEditing(false);
+    } catch (error) { console.error(error); toast.error(error.message === 'LIMITE_MENOR_QUE_OCUPACAO' ? 'O limite não pode ser menor que a ocupação.' : error.message === 'SERVICO_COM_ATENDIMENTOS' ? 'Serviço com atendimentos não pode ser removido.' : 'Não foi possível editar.'); }
+  };
+  const handleCancelService = async () => { try { const count = await cancelarServicoAgenda({ agendaId: agenda.id, servicoId: serviceToCancel.id, userId: user.uid }); toast.info(`Serviço cancelado. ${count} pessoa(s) afetada(s).`); setServiceToCancel(null); } catch (error) { console.error(error); toast.error('Não foi possível cancelar o serviço.'); } };
+  const handleCancelAgenda = async () => { try { await cancelarAgenda({ agendaId: agenda.id, userId: user.uid }); toast.success('Agenda cancelada e preservada no histórico.'); setConfirmCancelAgenda(false); } catch (error) { console.error(error); toast.error('Não foi possível cancelar a agenda.'); } };
+  const handleDelete = async () => { try { await excluirAgendaVazia({ agendaId: agenda.id, userId: user.uid }); toast.success('Agenda vazia excluída definitivamente.'); setConfirmDelete(false); } catch (error) { console.error(error); toast.error(error.message === 'AGENDA_POSSUI_HISTORICO' ? 'Esta agenda possui atendimentos e não pode ser excluída. Utilize Cancelar Agenda.' : 'Não foi possível excluir.'); } };
+
   const confirmAgendamento = async () => {
-    const srvs = servicosCatalogo.filter(s => selSrvs[s.id]);
+    const srvs = agendaServices.filter(s => selSrvs[s.id] && servicoAtivoNaAgenda(agenda, s.id));
     if (!srvs.length) {
       toast.error('Selecione pelo menos um serviço para agendar.');
       return;
     }
 
-    const permittedTypes = agenda.tiposPessoaPermitidos || [];
-    if (permittedTypes.length && !permittedTypes.includes(selCons.tipoPessoa)) {
-      toast.error(`O tipo de pessoa "${selCons.tipoPessoa || 'não informado'}" não é permitido nesta agenda.`);
+    const permittedTypes = getAgendaPublicosPermitidos(agenda);
+    if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(selCons))) {
+      toast.error('O vínculo desta pessoa não é permitido nesta agenda.');
       return;
     }
 
@@ -106,7 +145,7 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
       console.error(err);
       if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui agendamento ativo nesta agenda.');
       else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
-      else if (err.message === 'AGENDA_CONCLUIDA') toast.error('Esta agenda já foi concluída.');
+      else if (err.message === 'AGENDA_INDISPONIVEL') toast.error('Esta agenda está concluída ou cancelada.');
       else toast.error('Erro ao realizar o agendamento.');
     }
   };
@@ -188,6 +227,12 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
             </div>)}
           </div>
 
+          <div className="bg-white border border-gray-100 rounded-xl p-3 text-xs space-y-2">
+            <p><strong>Tipo de Trabalho:</strong> {agenda.tipoTrabalhoNome || agenda.tipo}</p>
+            <p><strong>Público:</strong> {getAgendaPublicosPermitidos(agenda).map(x => x === 'membro' ? 'Membros' : 'Consulentes').join(' + ') || 'Sem restrição'}</p>
+            <div><strong>Serviços:</strong>{agendaServices.map(service => <div key={service.id} className="flex justify-between mt-1"><span>{service.nome} {servicoControlaVagas(service) ? `· ${agenda.vagasOcupadas?.[service.id] || 0} / ${agenda.vagasTotais?.[service.id] || 0} vagas` : ''} · {agenda.servicosStatus?.[service.id] || 'Ativo'}</span>{!isClosed && servicoAtivoNaAgenda(agenda, service.id) && <button onClick={() => setServiceToCancel(service)} className="text-rose-600 font-bold">Cancelar nesta data</button>}</div>)}</div>
+          </div>
+
           <div className="space-y-2">
             {fila.length === 0 ? (
               <p className="text-center text-gray-400 py-3 text-xs italic">Nenhum inscrito nesta data ainda.</p>
@@ -209,7 +254,7 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
             )}
           </div>
 
-          {!isClosed ? <Button variant="secondary" onClick={() => setConfirmClose(true)} className="w-full text-gray-700"><LockKeyhole size={16} /> Concluir Agenda</Button> : <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda concluída e protegida</div>}
+          {!isClosed ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" onClick={() => setConfirmCancelAgenda(true)}>Cancelar Agenda</Button>{profile?.role === 'admin' && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}</div> : <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div>}
         </div>
       )}
 
@@ -255,7 +300,7 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 mb-1">
                 Selecione os Serviços
               </p>
-              {servicosCatalogo.map(s => (
+              {agendaServices.filter(s => servicoAtivoNaAgenda(agenda, s.id)).map(s => (
                 <label 
                   key={s.id} 
                   className={`flex items-center gap-3 p-3 bg-white border rounded-xl cursor-pointer transition-colors ${
@@ -284,8 +329,15 @@ export const AgendaAdminCard = ({ agenda, user, servicosCatalogo }) => {
         )}
       </Modal>
 
+      <Modal isOpen={editing} onClose={() => setEditing(false)} title="Editar Agenda">
+        {editDraft && <div className="space-y-4"><div className="grid grid-cols-2 gap-2"><input type="date" value={editDraft.data} onChange={e => setEditDraft({ ...editDraft, data: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/><input type="time" value={editDraft.horario} onChange={e => setEditDraft({ ...editDraft, horario: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/></div><select value={editDraft.tipoTrabalhoId} onChange={e => setEditDraft({ ...editDraft, tipoTrabalhoId: e.target.value })} className="w-full bg-gray-50 p-3 rounded-xl"><option value="">Legado: {agenda.tipo}</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select><div>{['consulente', 'membro'].map(id => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={editDraft.publicosPermitidos.includes(id)} onChange={() => setEditDraft({ ...editDraft, publicosPermitidos: editDraft.publicosPermitidos.includes(id) ? editDraft.publicosPermitidos.filter(x => x !== id) : [...editDraft.publicosPermitidos, id] })}/> {id}</label>)}</div>{servicosCatalogo.filter(s => !editDraft.tipoTrabalhoId || !s.tipoTrabalhoIds?.length || s.tipoTrabalhoIds.includes(editDraft.tipoTrabalhoId)).map(s => <div key={s.id} className="bg-gray-50 p-3 rounded-xl"><label className="text-sm font-bold"><input type="checkbox" checked={editDraft.servicosIds.includes(s.id)} onChange={() => setEditDraft({ ...editDraft, servicosIds: editDraft.servicosIds.includes(s.id) ? editDraft.servicosIds.filter(x => x !== s.id) : [...editDraft.servicosIds, s.id] })}/> {s.nome}</label>{editDraft.servicosIds.includes(s.id) && servicoControlaVagas(s) && <input type="number" min={agenda.vagasOcupadas?.[s.id] || 0} value={editDraft.vagasTotais[s.id] || ''} onChange={e => setEditDraft({ ...editDraft, vagasTotais: { ...editDraft.vagasTotais, [s.id]: Number(e.target.value) } })} className="w-full bg-white p-2 mt-2 rounded-lg"/>}</div>)}<Button onClick={saveEdit} variant="warning" className="w-full">Salvar Alterações</Button></div>}
+      </Modal>
+
       <ConfirmDialog isOpen={!!cancelTarget} onClose={() => setCancelTarget(null)} onConfirm={handleCancel} title="Cancelar Agendamento" message={`Cancelar o agendamento de "${cancelTarget?.nome}"? A vaga será devolvida automaticamente.`} confirmText="Sim, Cancelar" />
       <ConfirmDialog isOpen={confirmClose} onClose={() => setConfirmClose(false)} onConfirm={handleClose} title="Concluir Agenda" message={`Concluir esta agenda? Existem ${(summary.Agendado || 0) + (summary.Presente || 0)} atendimentos ainda abertos. Após concluir, nenhuma alteração será permitida.`} confirmText="Sim, Concluir" />
+      <ConfirmDialog isOpen={!!serviceToCancel} onClose={() => setServiceToCancel(null)} onConfirm={handleCancelService} title="Cancelar Serviço" message={`Cancelar "${serviceToCancel?.nome}" nesta data? Atendimentos serão preservados para futura realocação.`} confirmText="Cancelar Serviço" />
+      <ConfirmDialog isOpen={confirmCancelAgenda} onClose={() => setConfirmCancelAgenda(false)} onConfirm={handleCancelAgenda} title="Cancelar Agenda" message="A agenda ficará no histórico e não aceitará novas operações." confirmText="Cancelar Agenda" />
+      <ConfirmDialog isOpen={confirmDelete} onClose={() => setConfirmDelete(false)} onConfirm={handleDelete} title="Excluir Agenda" message="Esta agenda somente será excluída definitivamente se não possuir nenhum atendimento vinculado." confirmText="Excluir Definitivamente" />
     </Card>
   );
 };

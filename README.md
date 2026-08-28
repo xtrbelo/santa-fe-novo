@@ -1,6 +1,6 @@
 # Sistema Santa Fé
 
-Aplicação interna para cadastro de pessoas, criação de agendas e controle do fluxo diário de atendimentos. O frontend usa React, Vite, Tailwind CSS e Firebase Authentication/Firestore.
+Aplicação interna para cadastro de consulentes e membros, configuração de trabalhos/serviços, criação de agendas e controle do fluxo diário de atendimentos. O frontend usa React, Vite, Tailwind CSS e Firebase Authentication/Firestore.
 
 ## Desenvolvimento
 
@@ -22,4 +22,4 @@ Antes de qualquer publicação, siga `docs/FIRST_ADMIN.md` e `docs/DEPLOY.md`.
 
 ## Operação
 
-O fluxo diário usa transições controladas de chegada, falta e conclusão. Cancelamentos preservam o registro, devolvem vagas atomicamente e geram auditoria. A tela de Pessoas oferece histórico de atendimentos, e agendas encerradas permanecem consultáveis com resumo por status, sem aceitar novas alterações.
+O fluxo diário usa transições controladas de chegada, falta e conclusão. Agendas definem o tipo de trabalho, público e serviços disponíveis; limites são configurados por agenda e serviço. Cancelamentos preservam o histórico e geram auditoria. A tela de Pessoas oferece histórico de atendimentos, e agendas encerradas permanecem consultáveis sem aceitar novas alterações.

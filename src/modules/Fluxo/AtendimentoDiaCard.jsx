@@ -17,6 +17,7 @@ import {
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
+import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -44,6 +45,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
   const [cancelTarget, setCancelTarget] = useState(null);
 
   const toast = useToast();
+  const agendaServices = servicosCatalogo.filter(service => agendaAceitaServico(agenda, service.id) && servicoAtivoNaAgenda(agenda, service.id));
 
   useEffect(() => {
     if (!user) return;
@@ -89,15 +91,15 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
   };
 
   const confirmAgendamento = async () => {
-    const srvs = servicosCatalogo.filter(s => selSrvs[s.id]);
+    const srvs = agendaServices.filter(s => selSrvs[s.id]);
     if (!srvs.length) {
       toast.error('Selecione pelo menos um serviço.');
       return;
     }
 
-    const permittedTypes = agenda.tiposPessoaPermitidos || [];
-    if (permittedTypes.length && !permittedTypes.includes(selCons.tipoPessoa)) {
-      toast.error(`O tipo de pessoa "${selCons.tipoPessoa || 'não informado'}" não é permitido nesta agenda.`);
+    const permittedTypes = getAgendaPublicosPermitidos(agenda);
+    if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(selCons))) {
+      toast.error('O vínculo desta pessoa não é permitido nesta agenda.');
       return;
     }
 
@@ -265,7 +267,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 mb-1">
                 Selecione os Serviços
               </p>
-              {servicosCatalogo.map(s => (
+              {agendaServices.map(s => (
                 <label 
                   key={s.id} 
                   className={`flex items-center gap-3 p-3 border rounded-xl cursor-pointer transition-colors ${

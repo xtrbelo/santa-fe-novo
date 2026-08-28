@@ -17,6 +17,7 @@ import {
   cleanDigits,
   validateCPF
 } from '../../utils/formatters';
+import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -37,6 +38,7 @@ import {
 export const PessoasModule = ({ user, readOnly = false }) => {
   const [pessoas, setPessoas] = useState([]);
   const [tiposPessoa, setTiposPessoa] = useState([]);
+  const [funcoesMembro, setFuncoesMembro] = useState([]);
   const [abaAtiva, setAbaAtiva] = useState('Todos');
   const [buscaTexto, setBuscaTexto] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -46,7 +48,8 @@ export const PessoasModule = ({ user, readOnly = false }) => {
   const [historyPerson, setHistoryPerson] = useState(null);
 
   // Estados do formulário
-  const [eTipoPessoa, setETipoPessoa] = useState('');
+  const [eVinculo, setEVinculo] = useState('consulente');
+  const [eFuncoes, setEFuncoes] = useState([]);
   const [eDataNasc, setEDataNasc] = useState('');
   const [eIdade, setEIdade] = useState(null);
   const [eNome, setENome] = useState('');
@@ -72,9 +75,13 @@ export const PessoasModule = ({ user, readOnly = false }) => {
     const unsubT = onSnapshot(getAppCollection('config_tipos_pessoa'), (s) => {
       setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(t => t.ativo !== false));
     });
+    const unsubF = onSnapshot(getAppCollection('config_funcoes_membro'), (s) => {
+      setFuncoesMembro(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false));
+    });
     return () => {
       unsubP();
       unsubT();
+      unsubF();
     };
   }, [user]);
 
@@ -89,7 +96,8 @@ export const PessoasModule = ({ user, readOnly = false }) => {
     setERespCpf('');
     setERespNome('');
     setERespContato('');
-    setETipoPessoa(tiposPessoa[0]?.nome || 'Consulente');
+    setEVinculo('consulente');
+    setEFuncoes([]);
   };
 
   const openNew = () => {
@@ -99,7 +107,8 @@ export const PessoasModule = ({ user, readOnly = false }) => {
 
   const openEdit = (p) => {
     setEditing(p);
-    setETipoPessoa(p.tipoPessoa || tiposPessoa[0]?.nome || '');
+    setEVinculo(getPessoaVinculo(p));
+    setEFuncoes(getPessoaFuncoesCasa(p));
     setEDataNasc(p.dataNascimento || '');
     setEIdade(calcularIdade(p.dataNascimento));
     setENome(p.nome || '');
@@ -144,7 +153,9 @@ export const PessoasModule = ({ user, readOnly = false }) => {
 
     setIsSubmitting(true);
     const data = {
-      tipoPessoa: eTipoPessoa,
+      vinculo: eVinculo,
+      funcoesCasa: eVinculo === 'membro' ? eFuncoes : [],
+      tipoPessoa: eVinculo === 'membro' ? (eFuncoes.includes('medium') ? 'Médium' : eFuncoes.includes('cambone') ? 'Cambone' : 'Membro') : 'Consulente',
       nome: eNome.trim(),
       dataNascimento: eDataNasc || null,
       cpf: rawCpf || null,
@@ -290,7 +301,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
                     <span className="text-[9px] font-black uppercase bg-purple-50 text-purple-700 px-2.5 py-0.5 rounded-full">
-                      {p.tipoPessoa || 'Consulente'}
+                      {getPessoaVinculo(p) === 'membro' ? `Membro${getPessoaFuncoesCasa(p).length ? ` · ${getPessoaFuncoesCasa(p).join(' / ')}` : ''}` : 'Consulente'}
                     </span>
                     {p.cpf && (
                       <span className="text-[11px] font-bold text-gray-400">
@@ -342,14 +353,13 @@ export const PessoasModule = ({ user, readOnly = false }) => {
                 Tipo *
               </label>
               <select 
-                value={eTipoPessoa} 
-                onChange={e => setETipoPessoa(e.target.value)} 
+                value={eVinculo}
+                onChange={e => { setEVinculo(e.target.value); if (e.target.value === 'consulente') setEFuncoes([]); }}
                 required 
                 className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none cursor-pointer"
               >
-                {tiposPessoa.map(t => (
-                  <option key={t.id} value={t.nome}>{t.nome}</option>
-                ))}
+                <option value="consulente">Consulente</option>
+                <option value="membro">Membro</option>
               </select>
             </div>
             <div className="space-y-1.5">
@@ -367,6 +377,11 @@ export const PessoasModule = ({ user, readOnly = false }) => {
               />
             </div>
           </div>
+
+          {eVinculo === 'membro' && <div className="bg-purple-50 p-4 rounded-2xl">
+            <p className="text-[10px] font-black uppercase text-purple-700 mb-2">Funções na Casa</p>
+            {(funcoesMembro.length ? funcoesMembro.map(item => [item.slug || item.id, item.nome]) : [['medium', 'Médium'], ['cambone', 'Cambone']]).map(([id, nome]) => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={eFuncoes.includes(id)} onChange={() => setEFuncoes(eFuncoes.includes(id) ? eFuncoes.filter(x => x !== id) : [...eFuncoes, id])}/> {nome}</label>)}
+          </div>}
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
