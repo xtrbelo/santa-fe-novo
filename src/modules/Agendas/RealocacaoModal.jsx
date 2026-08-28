@@ -32,10 +32,27 @@ export const RealocacaoModal = ({ atendimento, origemAgenda, agendas, servicosCa
 
   useEffect(() => {
     if (!atendimento) return;
+    let active = true;
     setStep(1); setMode(initialServiceId ? 'parcial' : 'completa');
     setSelectedIds(initialServiceId ? [initialServiceId] : activeIds); setDestinationId(''); setReason('');
-    getDoc(getAppDoc('pessoas', atendimento.pessoaBaseId)).then(snapshot => setPerson(snapshot.exists() ? snapshot.data() : atendimento));
+    getDoc(getAppDoc('pessoas', atendimento.pessoaBaseId)).then(snapshot => {
+      if (active) setPerson(snapshot.exists() ? snapshot.data() : atendimento);
+    });
+    return () => { active = false; };
   }, [atendimento, initialServiceId, activeIds]);
+
+  if (!atendimento) return null;
+
+  const handleClose = () => {
+    setStep(1);
+    setMode(initialServiceId ? 'parcial' : 'completa');
+    setSelectedIds([]);
+    setDestinationId('');
+    setReason('');
+    setPerson(null);
+    setSaving(false);
+    onClose();
+  };
 
   const services = activeIds.map(id => servicosCatalogo.find(item => item.id === id) || { id, nome: atendimento?.servicosNomes?.[(atendimento?.servicosIds || []).indexOf(id)] || id });
   const selected = mode === 'completa' ? activeIds : selectedIds;
@@ -67,7 +84,7 @@ export const RealocacaoModal = ({ atendimento, origemAgenda, agendas, servicosCa
         userId: user.uid, role: profile.role
       });
       toast.success(mode === 'completa' ? 'Atendimento reagendado com sucesso.' : 'Serviço(s) realocado(s) com sucesso.');
-      onClose();
+      handleClose();
     } catch (error) {
       console.error(error);
       const key = error.message?.split(':')[0];
@@ -75,7 +92,7 @@ export const RealocacaoModal = ({ atendimento, origemAgenda, agendas, servicosCa
     } finally { setSaving(false); }
   };
 
-  return <Modal isOpen={!!atendimento} onClose={onClose} title={`Reagendar / Realocar Atendimento · ${step}/4`}>
+  return <Modal isOpen onClose={handleClose} title={`Reagendar / Realocar Atendimento · ${step}/4`}>
     <div className="space-y-4">
       {step === 1 && <>
         <p className="text-sm font-bold">O que deseja fazer?</p>
@@ -86,7 +103,7 @@ export const RealocacaoModal = ({ atendimento, origemAgenda, agendas, servicosCa
       {step === 2 && <div className="space-y-2"><p className="text-sm font-bold">Selecione a nova agenda</p>{options.length === 0 && <p className="text-sm text-gray-500">Nenhuma agenda compatível encontrada.</p>}{options.map(option => <button type="button" key={option.id} disabled={option.unavailable} onClick={() => setDestinationId(option.id)} className={`w-full text-left border rounded-xl p-3 ${destinationId === option.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'} ${option.unavailable ? 'opacity-50' : ''}`}><strong className="block">{formatAgenda(option)}</strong><span className="text-xs text-gray-500">{option.tipoTrabalhoNome || option.tipo} · {option.unavailable ? 'Sem vagas ou serviço cancelado' : 'Disponível'}</span></button>)}</div>}
       {step === 3 && <label className="block text-sm font-bold">Motivo da realocação<textarea value={reason} onChange={event => setReason(event.target.value)} className="mt-2 w-full min-h-28 bg-gray-50 rounded-xl p-3" placeholder="Descreva por que o atendimento será realocado." /></label>}
       {step === 4 && <div className="space-y-2 text-sm"><p><strong>Pessoa:</strong> {atendimento.nome}</p><p><strong>Origem:</strong> {formatAgenda(origemAgenda)}</p><p><strong>Destino:</strong> {formatAgenda(destination)}</p><p><strong>Serviços:</strong> {services.filter(item => selected.includes(item.id)).map(item => item.nome).join(', ')}</p><p><strong>Tipo:</strong> {mode === 'completa' ? 'Reagendamento completo' : 'Realocação parcial'}</p><p><strong>Motivo:</strong> {reason}</p><p className="bg-amber-50 text-amber-900 p-3 rounded-xl">Esta operação preservará o registro original e criará um novo agendamento no destino.</p></div>}
-      <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => step === 1 ? onClose() : setStep(current => current - 1)}>Voltar</Button>{step < 4 ? <Button onClick={next}>Continuar</Button> : <Button onClick={confirm} disabled={saving}>{saving ? 'Realocando...' : 'Confirmar Realocação'}</Button>}</div>
+      <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => step === 1 ? handleClose() : setStep(current => current - 1)}>Voltar</Button>{step < 4 ? <Button onClick={next}>Continuar</Button> : <Button onClick={confirm} disabled={saving}>{saving ? 'Realocando...' : 'Confirmar Realocação'}</Button>}</div>
     </div>
   </Modal>;
 };
