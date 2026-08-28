@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "emulator": "firebase emulators:start --only firestore --project santa-fe-v2",
+    "seed:emulator": "node scripts/seed-emulator.js",
+    "validate:emulator": "node scripts/validate-phase6-emulator.js",
     "build": "vite build",
     "lint": "eslint .",
     "test:rules": "firebase emulators:exec --only firestore --project santa-fe-rules-test \"node --test tests/firestore.rules.test.js\"",

@@ -8,6 +8,7 @@ import {
 } from 'firebase/auth';
 import { 
   getFirestore, 
+  connectFirestoreEmulator,
   collection, 
   doc, 
   addDoc, 
@@ -54,6 +55,12 @@ if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
+  const useFirestoreEmulator = import.meta.env?.DEV === true
+    && getEnv('VITE_USE_FIRESTORE_EMULATOR', 'false') === 'true';
+  if (useFirestoreEmulator && !globalThis.__santaFeFirestoreEmulatorConnected) {
+    connectFirestoreEmulator(db, '127.0.0.1', 8080);
+    globalThis.__santaFeFirestoreEmulatorConnected = true;
+  }
 }
 
 export const appId = firebaseConfig.projectId || 'santa-fe-v2';

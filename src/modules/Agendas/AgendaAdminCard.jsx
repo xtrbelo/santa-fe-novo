@@ -117,8 +117,32 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
     } catch (error) { console.error(error); toast.error(error.message === 'LIMITE_MENOR_QUE_OCUPACAO' ? 'O limite não pode ser menor que a ocupação.' : error.message === 'SERVICO_COM_ATENDIMENTOS' ? 'Serviço com atendimentos não pode ser removido.' : 'Não foi possível editar.'); }
   };
   const handleCancelService = async () => { try { const count = await cancelarServicoAgenda({ agendaId: agenda.id, servicoId: serviceToCancel.id, userId: user.uid }); toast.info(`Serviço cancelado. ${count} pessoa(s) afetada(s).`); setServiceToCancel(null); } catch (error) { console.error(error); toast.error('Não foi possível cancelar o serviço.'); } };
-  const handleCancelAgenda = async () => { try { await cancelarAgenda({ agendaId: agenda.id, userId: user.uid }); toast.success('Agenda cancelada e preservada no histórico.'); setConfirmCancelAgenda(false); } catch (error) { console.error(error); toast.error('Não foi possível cancelar a agenda.'); } };
-  const handleDelete = async () => { try { await excluirAgendaVazia({ agendaId: agenda.id, userId: user.uid }); toast.success('Agenda vazia excluída definitivamente.'); setConfirmDelete(false); } catch (error) { console.error(error); toast.error(error.message === 'AGENDA_POSSUI_HISTORICO' ? 'Esta agenda possui atendimentos e não pode ser excluída. Utilize Cancelar Agenda.' : 'Não foi possível excluir.'); } };
+  const handleCancelAgenda = async () => {
+    try {
+      await cancelarAgenda({ agendaId: agenda.id, userId: user.uid });
+      toast.success('Agenda cancelada e preservada no histórico.');
+      setConfirmCancelAgenda(false);
+    } catch (error) {
+      console.error(error);
+      if (error.message === 'AGENDA_INDISPONIVEL') toast.error('Esta agenda já está concluída ou cancelada.');
+      else if (error.message === 'AGENDA_NAO_ENCONTRADA') toast.error('Agenda não encontrada.');
+      else if (error.code === 'permission-denied' || error.code === 'firestore/permission-denied') toast.error('Sua sessão não possui permissão para realizar esta operação.');
+      else toast.error('Não foi possível cancelar a agenda.');
+    }
+  };
+  const handleDelete = async () => {
+    try {
+      await excluirAgendaVazia({ agendaId: agenda.id, userId: user.uid });
+      toast.success('Agenda vazia excluída definitivamente.');
+      setConfirmDelete(false);
+    } catch (error) {
+      console.error(error);
+      if (error.message === 'AGENDA_POSSUI_HISTORICO') toast.error('Esta agenda possui atendimentos e não pode ser excluída. Utilize Cancelar Agenda.');
+      else if (error.message === 'AGENDA_NAO_ENCONTRADA') toast.error('Agenda não encontrada.');
+      else if (error.code === 'permission-denied' || error.code === 'firestore/permission-denied') toast.error('Apenas um administrador pode excluir uma agenda.');
+      else toast.error('Não foi possível excluir.');
+    }
+  };
 
   const confirmAgendamento = async () => {
     const srvs = agendaServices.filter(s => selSrvs[s.id] && servicoAtivoNaAgenda(agenda, s.id));
