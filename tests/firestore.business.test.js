@@ -13,7 +13,8 @@ import {
   editarAgenda,
   cancelarServicoAgenda,
   cancelarAgenda,
-  excluirAgendaVazia
+  excluirAgendaVazia,
+  corrigirStatusAtendimento
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
 import { getAgendaPublicosPermitidos, getPessoaFuncoesCasa, getPessoaVinculo, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
@@ -306,6 +307,76 @@ describe('transações do fluxo operacional', () => {
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().status, 'Cancelada');
     await assert.rejects(book(db, { ...agenda, status: 'Cancelada' }, person('2')), /AGENDA_INDISPONIVEL/);
     await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: `${agenda.id}_1`, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+  });
+
+  test('cancela agenda com Agendado, Faltou ou Cancelado e bloqueia Presente ou Concluído sem auditar', async () => {
+    const db = adminDb();
+    for (const status of ['Agendado', 'Faltou', 'Cancelado']) {
+      const agenda = await seedAgenda(`agenda-cancelavel-${status}`);
+      await seedDocuments([['consulentes', `${agenda.id}_1`, { agendaId: agenda.id, pessoaBaseId: '1', status }]]);
+      await cancelarAgenda({ agendaId: agenda.id, userId: USER_ID }, db);
+      assert.equal((await getDoc(agendaRef(db, agenda.id))).data().status, 'Cancelada');
+    }
+    for (const status of ['Presente', 'Concluído']) {
+      const agenda = await seedAgenda(`agenda-bloqueada-${status}`);
+      await seedDocuments([['consulentes', `${agenda.id}_1`, { agendaId: agenda.id, pessoaBaseId: '1', status }]]);
+      await assert.rejects(cancelarAgenda({ agendaId: agenda.id, userId: USER_ID }, db), /AGENDA_POSSUI_ATENDIMENTO_EXECUTADO/);
+      assert.equal((await getDoc(agendaRef(db, agenda.id))).data().status, 'Aberta');
+      const audits = (await getDocs(collection(db, `${root}/auditoria`))).docs.filter(item => item.data().tipo === 'AGENDA_CANCELADA' && item.data().agendaId === agenda.id);
+      assert.equal(audits.length, 0);
+    }
+  });
+
+  test('corrige somente transições administrativas válidas, limpa horários e preserva vagas', async () => {
+    const db = adminDb();
+    const cases = [
+      ['Concluído', 'Presente', true, false],
+      ['Concluído', 'Agendado', false, false],
+      ['Presente', 'Agendado', false, false],
+      ['Faltou', 'Agendado', false, false]
+    ];
+    for (const [from, to, keepsArrival, keepsDeparture] of cases) {
+      const agenda = await seedAgenda(`agenda-correcao-${from}-${to}`, { status: 'Concluída', vagasOcupadas: { [service.id]: 1 } });
+      const appointmentId = `${agenda.id}_1`;
+      const timestamps = from === 'Concluído' ? { horaChegada: new Date(), horaSaida: new Date() } : from === 'Presente' ? { horaChegada: new Date() } : {};
+      await seedDocuments([['consulentes', appointmentId, { agendaId: agenda.id, pessoaBaseId: '1', status: from, ...timestamps, servicosIds: [service.id] }]]);
+      await corrigirStatusAtendimento({ agendaId: agenda.id, agendamentoId: appointmentId, status: to, motivo: 'Correção de teste', userId: USER_ID }, db);
+      const corrected = (await getDoc(appointmentRef(db, agenda.id, '1'))).data();
+      assert.equal(corrected.status, to);
+      assert.equal(Boolean(corrected.horaChegada), keepsArrival);
+      assert.equal(Boolean(corrected.horaSaida), keepsDeparture);
+      assert.deepEqual((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas, { [service.id]: 1 });
+    }
+    const audits = (await getDocs(collection(db, `${root}/auditoria`))).docs.map(item => item.data()).filter(item => item.tipo === 'STATUS_ATENDIMENTO_CORRIGIDO');
+    assert.equal(audits.length, 4);
+    assert.ok(audits.every(item => item.motivo === 'Correção de teste' && item.executadoPor === USER_ID && item.criadoEm));
+  });
+
+  test('bloqueia correções inválidas, motivo vazio, agenda cancelada e perfis não-admin', async () => {
+    const db = adminDb();
+    const invalidCases = [['Concluído', 'Faltou'], ['Cancelado', 'Agendado'], ['Agendado', 'Concluído']];
+    for (const [from, to] of invalidCases) {
+      const agenda = await seedAgenda(`agenda-invalida-${from}-${to}`);
+      const appointmentId = `${agenda.id}_1`;
+      await seedDocuments([['consulentes', appointmentId, { agendaId: agenda.id, pessoaBaseId: '1', status: from }]]);
+      await assert.rejects(corrigirStatusAtendimento({ agendaId: agenda.id, agendamentoId: appointmentId, status: to, motivo: 'Teste', userId: USER_ID }, db), /CORRECAO_STATUS_INVALIDA/);
+    }
+    const emptyReasonAgenda = await seedAgenda('agenda-motivo-vazio');
+    await seedDocuments([['consulentes', 'motivo-vazio-1', { agendaId: emptyReasonAgenda.id, status: 'Faltou' }]]);
+    await assert.rejects(corrigirStatusAtendimento({ agendaId: emptyReasonAgenda.id, agendamentoId: 'motivo-vazio-1', status: 'Agendado', motivo: '  ', userId: USER_ID }, db), /MOTIVO_OBRIGATORIO/);
+    const canceledAgenda = await seedAgenda('agenda-correcao-cancelada', { status: 'Cancelada' });
+    await seedDocuments([['consulentes', 'cancelada-1', { agendaId: canceledAgenda.id, status: 'Concluído' }]]);
+    await assert.rejects(corrigirStatusAtendimento({ agendaId: canceledAgenda.id, agendamentoId: 'cancelada-1', status: 'Presente', motivo: 'Teste', userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
+    await seedDocuments([
+      ['usuarios', 'gestor-business', { uid: 'gestor-business', role: 'gestor', ativo: true }],
+      ['usuarios', 'atendimento-business', { uid: 'atendimento-business', role: 'atendimento', ativo: true }]
+    ]);
+    const permissionAgenda = await seedAgenda('agenda-permissao-correcao', { status: 'Concluída' });
+    await seedDocuments([['consulentes', 'permissao-1', { agendaId: permissionAgenda.id, status: 'Concluído', horaChegada: new Date(), horaSaida: new Date() }]]);
+    for (const [uid, role] of [['gestor-business', 'gestor'], ['atendimento-business', 'atendimento']]) {
+      const roleDb = environment.authenticatedContext(uid).firestore();
+      await assert.rejects(corrigirStatusAtendimento({ agendaId: permissionAgenda.id, agendamentoId: 'permissao-1', status: 'Presente', motivo: role, userId: uid }, roleDb), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
+    }
   });
 
   test('exclui agenda vazia e bloqueia exclusão quando existe histórico', async () => {

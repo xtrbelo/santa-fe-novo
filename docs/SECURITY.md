@@ -18,6 +18,8 @@ As regras negam por padrão e proíbem exclusão física de Pessoas, configuraç
 
 A verificação de que uma agenda não possui histórico é feita pelo serviço antes da exclusão. Como o frontend não é um backend confiável e as Rules não executam consultas reversas, permanece uma pequena janela de concorrência entre a consulta e a transação; a proteção definitiva deve migrar para Cloud Functions/Admin SDK antes de ampliar esse fluxo.
 
+A correção retroativa de atendimento é permitida pelas Rules apenas ao administrador, em transições regressivas enumeradas e alterando somente status, horários e metadados de atualização. Agenda cancelada permanece bloqueada; agenda concluída aceita essa exceção administrativa. A operação oficial também exige motivo e cria auditoria imutável. As Rules não conseguem exigir atomicamente um documento de auditoria com ID aleatório junto de cada correção; garantir essa associação contra um cliente administrativo deliberadamente modificado exigiria backend confiável.
+
 ## Administração dentro do sistema
 
 O menu Usuários aparece somente para `admin`. O administrador pode alterar outros usuários entre `admin`, `gestor`, `atendimento` e `pendente`, além de ativá-los ou desativá-los. As alterações têm confirmação, `atualizadoEm`, `atualizadoPor` e registro em `auditoria`.

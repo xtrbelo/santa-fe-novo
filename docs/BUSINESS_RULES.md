@@ -19,6 +19,8 @@
 - `Faltou` preserva a vaga utilizada no histórico da agenda; somente o cancelamento explícito devolve a reserva. Registros `Cancelado` não entram na reconciliação da ocupação real.
 - A prioridade pode ser alterada apenas em atendimentos abertos e coloca presentes prioritários primeiro na fila.
 - Horários de chegada e saída são gravados uma única vez.
+- Uma agenda só pode ser cancelada enquanto não houver atendimento `Presente` ou `Concluído`; `Agendado`, `Faltou` e `Cancelado` não bloqueiam o cancelamento.
+- A correção administrativa de status é exclusiva do administrador e aceita somente `Concluído → Presente/Agendado`, `Presente → Agendado` e `Faltou → Agendado`, sempre com motivo e auditoria. Ela limpa horários incompatíveis e não altera vagas.
 - Uma agenda `Concluída` ou `Cancelada` fica somente para consulta: novos agendamentos e alterações operacionais são bloqueados.
 - Editar uma agenda permite data, horário, público, serviços e limites. O tipo de trabalho só muda sem histórico; um serviço com atendimentos ativos não pode ser removido; o limite não pode ficar abaixo da ocupação.
 - Cancelar um serviço impede novas reservas, preserva os atendimentos vinculados e informa a quantidade afetada. Excluir fisicamente uma agenda exige perfil administrador e ausência total de histórico.
@@ -27,5 +29,5 @@
 ## Validação transacional
 
 - Público, disponibilidade e status do serviço na agenda são validados também pelo serviço transacional, não somente pela interface.
-- Reserva, limite de vagas, duplicidade, cancelamento, dupla devolução, agenda concluída, prioridade, ordenação da fila, horários, compatibilidade legada e concorrência da última vaga são exercitados contra o Firebase Emulator por `npm run test:business`.
+- Reserva, limite de vagas, duplicidade, cancelamento, dupla devolução, bloqueio por atendimento executado, correção administrativa, agenda concluída, prioridade, ordenação da fila, horários, compatibilidade legada e concorrência da última vaga são exercitados contra o Firebase Emulator por `npm run test:business`.
 - A suíte usa o projeto fictício `santa-fe-business-test` e chama as mesmas funções utilizadas pelo frontend por meio de injeção opcional do Firestore.

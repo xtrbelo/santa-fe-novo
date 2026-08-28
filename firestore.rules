@@ -31,7 +31,8 @@ service cloud.firestore {
       allow create: if isInternal(appId)
         && request.resource.data.executadoPor == request.auth.uid
         && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'])
-          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']);
+          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
+          || (isAdmin(appId) && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO'));
       allow update, delete: if false;
     }
 
@@ -59,9 +60,25 @@ service cloud.firestore {
       allow read: if isInternal(appId);
       allow create: if isInternal(appId)
         && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada']);
-      allow update: if isInternal(appId)
-        && request.resource.data.agendaId == resource.data.agendaId
-        && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada']);
+      allow update: if request.resource.data.agendaId == resource.data.agendaId
+        && ((isInternal(appId)
+          && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'prioridade', 'horaChegada', 'horaSaida', 'canceladoEm', 'canceladoPor', 'motivoCancelamento', 'atualizadoEm', 'atualizadoPor'])
+          && (request.resource.data.status == resource.data.status
+            || (resource.data.status == 'Agendado' && request.resource.data.status in ['Presente', 'Faltou', 'Cancelado'])
+            || (resource.data.status == 'Presente' && request.resource.data.status in ['Concluído', 'Cancelado'])))
+        || (isAdmin(appId)
+          && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') != 'Cancelada'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'horaChegada', 'horaSaida', 'atualizadoEm', 'atualizadoPor'])
+          && request.resource.data.atualizadoPor == request.auth.uid
+          && ((resource.data.status == 'Concluído' && request.resource.data.status == 'Presente'
+              && !request.resource.data.keys().hasAny(['horaSaida'])
+              && request.resource.data.horaChegada == resource.data.horaChegada)
+            || (resource.data.status == 'Concluído' && request.resource.data.status == 'Agendado'
+              && !request.resource.data.keys().hasAny(['horaChegada', 'horaSaida']))
+            || (resource.data.status == 'Presente' && request.resource.data.status == 'Agendado'
+              && !request.resource.data.keys().hasAny(['horaChegada', 'horaSaida']))
+            || (resource.data.status == 'Faltou' && request.resource.data.status == 'Agendado'))));
       allow delete: if false;
     }
 

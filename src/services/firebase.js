@@ -23,7 +23,8 @@ import {
   writeBatch,
   query,
   where,
-  limit
+  limit,
+  deleteField
 } from 'firebase/firestore';
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getPessoaVinculo, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 
@@ -211,6 +212,35 @@ export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status,
   });
 };
 
+const CORRECOES_STATUS_PERMITIDAS = {
+  'Concluído': ['Presente', 'Agendado'],
+  Presente: ['Agendado'],
+  Faltou: ['Agendado']
+};
+
+export const corrigirStatusAtendimento = async ({ agendaId, agendamentoId, status, motivo, userId }, firestore = db) => {
+  const cleanReason = motivo?.trim();
+  if (!cleanReason) throw new Error('MOTIVO_OBRIGATORIO');
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const appointmentRef = getDataDoc(firestore, 'consulentes', agendamentoId);
+  await runTransaction(firestore, async transaction => {
+    const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
+    if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
+    if (agendaSnapshot.data().status === 'Cancelada') throw new Error('AGENDA_INDISPONIVEL');
+    const current = appointmentSnapshot.data();
+    if (!(CORRECOES_STATUS_PERMITIDAS[current.status] || []).includes(status)) throw new Error('CORRECAO_STATUS_INVALIDA');
+    const now = Timestamp.now();
+    const changes = { status, atualizadoEm: now, atualizadoPor: userId };
+    if (current.status === 'Concluído') changes.horaSaida = deleteField();
+    if (status === 'Agendado' && ['Concluído', 'Presente'].includes(current.status)) changes.horaChegada = deleteField();
+    transaction.update(appointmentRef, changes);
+    transaction.set(createAuditRef(firestore), {
+      tipo: 'STATUS_ATENDIMENTO_CORRIGIDO', agendaId, alvoId: agendamentoId, agendamentoId,
+      statusAnterior: current.status, statusNovo: status, motivo: cleanReason, executadoPor: userId, criadoEm: now
+    });
+  });
+};
+
 export const concluirAgenda = async ({ agendaId, userId }, firestore = db) => {
   const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
   await runTransaction(firestore, async transaction => {
@@ -275,6 +305,10 @@ export const cancelarServicoAgenda = async ({ agendaId, servicoId, userId }, fir
 };
 
 export const cancelarAgenda = async ({ agendaId, userId }, firestore = db) => {
+  const appointments = await getAgendaAppointments(firestore, agendaId);
+  if (appointments.some(item => ['Presente', 'Concluído'].includes(item.status))) {
+    throw new Error('AGENDA_POSSUI_ATENDIMENTO_EXECUTADO');
+  }
   const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
   await runTransaction(firestore, async transaction => {
     const snapshot = await transaction.get(agendaRef);
@@ -318,5 +352,6 @@ export {
   writeBatch,
   query,
   where,
-  limit
+  limit,
+  deleteField
 };

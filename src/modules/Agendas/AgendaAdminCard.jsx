@@ -10,6 +10,7 @@ import {
   cancelarServicoAgenda,
   cancelarAgenda,
   excluirAgendaVazia,
+  corrigirStatusAtendimento,
   Timestamp,
   query,
   where
@@ -53,11 +54,15 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
   const [serviceToCancel, setServiceToCancel] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(null);
+  const [correctionTarget, setCorrectionTarget] = useState(null);
+  const [correctionStatus, setCorrectionStatus] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
 
   const toast = useToast();
   const isClosed = ['Concluída', 'Cancelada'].includes(agenda.status);
   const agendaServices = servicosCatalogo.filter(service => agendaAceitaServico(agenda, service.id));
   const summary = fila.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
+  const hasExecutedAppointment = fila.some(item => ['Presente', 'Concluído'].includes(item.status));
 
   useEffect(() => {
     if (!expanded || !user) return;
@@ -125,6 +130,7 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
     } catch (error) {
       console.error(error);
       if (error.message === 'AGENDA_INDISPONIVEL') toast.error('Esta agenda já está concluída ou cancelada.');
+      else if (error.message === 'AGENDA_POSSUI_ATENDIMENTO_EXECUTADO') toast.error('Esta agenda já possui atendimento iniciado ou concluído e não pode ser cancelada. Utilize Concluir Agenda.');
       else if (error.message === 'AGENDA_NAO_ENCONTRADA') toast.error('Agenda não encontrada.');
       else if (error.code === 'permission-denied' || error.code === 'firestore/permission-denied') toast.error('Sua sessão não possui permissão para realizar esta operação.');
       else toast.error('Não foi possível cancelar a agenda.');
@@ -141,6 +147,28 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
       else if (error.message === 'AGENDA_NAO_ENCONTRADA') toast.error('Agenda não encontrada.');
       else if (error.code === 'permission-denied' || error.code === 'firestore/permission-denied') toast.error('Apenas um administrador pode excluir uma agenda.');
       else toast.error('Não foi possível excluir.');
+    }
+  };
+  const correctionOptions = status => ({ 'Concluído': ['Presente', 'Agendado'], Presente: ['Agendado'], Faltou: ['Agendado'] }[status] || []);
+  const openCorrection = appointment => {
+    const options = correctionOptions(appointment.status);
+    setCorrectionTarget(appointment);
+    setCorrectionStatus(options[0] || '');
+    setCorrectionReason('');
+  };
+  const handleCorrection = async () => {
+    if (!correctionReason.trim()) { toast.error('Informe o motivo da correção.'); return; }
+    try {
+      await corrigirStatusAtendimento({ agendaId: agenda.id, agendamentoId: correctionTarget.id, status: correctionStatus, motivo: correctionReason, userId: user.uid });
+      toast.success(`Status corrigido para ${correctionStatus}.`);
+      setCorrectionTarget(null);
+    } catch (error) {
+      console.error(error);
+      if (error.message === 'MOTIVO_OBRIGATORIO') toast.error('Informe o motivo da correção.');
+      else if (error.message === 'CORRECAO_STATUS_INVALIDA') toast.error('Esta correção de status não é permitida.');
+      else if (error.message === 'AGENDA_INDISPONIVEL') toast.error('Não é possível corrigir atendimentos de uma agenda cancelada.');
+      else if (error.code === 'permission-denied' || error.code === 'firestore/permission-denied') toast.error('Apenas um administrador pode corrigir o status.');
+      else toast.error('Não foi possível corrigir o status.');
     }
   };
 
@@ -272,13 +300,14 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>
                     {['Agendado', 'Presente'].includes(c.status) && !isClosed && <button onClick={() => setCancelTarget(c)} className="text-rose-500 hover:text-rose-700" title="Cancelar agendamento"><XCircle size={18} /></button>}
+                    {profile?.role === 'admin' && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
                   </div>
                 </div>
               ))
             )}
           </div>
 
-          {!isClosed ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" onClick={() => setConfirmCancelAgenda(true)}>Cancelar Agenda</Button>{profile?.role === 'admin' && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}</div> : <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div>}
+          {!isClosed ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{profile?.role === 'admin' && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.</p>}</div> : <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div>}
         </div>
       )}
 
@@ -362,6 +391,16 @@ export const AgendaAdminCard = ({ agenda, user, profile, servicosCatalogo, traba
       <ConfirmDialog isOpen={!!serviceToCancel} onClose={() => setServiceToCancel(null)} onConfirm={handleCancelService} title="Cancelar Serviço" message={`Cancelar "${serviceToCancel?.nome}" nesta data? Atendimentos serão preservados para futura realocação.`} confirmText="Cancelar Serviço" />
       <ConfirmDialog isOpen={confirmCancelAgenda} onClose={() => setConfirmCancelAgenda(false)} onConfirm={handleCancelAgenda} title="Cancelar Agenda" message="A agenda ficará no histórico e não aceitará novas operações." confirmText="Cancelar Agenda" />
       <ConfirmDialog isOpen={confirmDelete} onClose={() => setConfirmDelete(false)} onConfirm={handleDelete} title="Excluir Agenda" message="Esta agenda somente será excluída definitivamente se não possuir nenhum atendimento vinculado." confirmText="Excluir Definitivamente" />
+      <Modal isOpen={!!correctionTarget} onClose={() => setCorrectionTarget(null)} title="Corrigir Status">
+        <div className="space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-900">Esta é uma correção administrativa e ficará registrada na auditoria.</div>
+          <p className="text-sm"><strong>Pessoa:</strong> {correctionTarget?.nome}</p>
+          <p className="text-sm"><strong>Status atual:</strong> {correctionTarget?.status}</p>
+          <label className="block text-sm font-bold">Novo status<select value={correctionStatus} onChange={event => setCorrectionStatus(event.target.value)} className="mt-1 w-full bg-gray-50 p-3 rounded-xl">{correctionOptions(correctionTarget?.status).map(status => <option key={status}>{status}</option>)}</select></label>
+          <label className="block text-sm font-bold">Motivo<textarea value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Ex.: Marcado como concluído por engano." className="mt-1 w-full bg-gray-50 p-3 rounded-xl min-h-24" /></label>
+          <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => setCorrectionTarget(null)}>Cancelar</Button><Button variant="warning" onClick={handleCorrection}>Confirmar Correção</Button></div>
+        </div>
+      </Modal>
     </Card>
   );
 };
