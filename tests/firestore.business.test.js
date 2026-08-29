@@ -18,7 +18,9 @@ import {
   realocarAtendimento,
   rebuildPessoaSearchIndex,
   searchPessoas,
-  withPessoaSearchIndex
+  withPessoaSearchIndex,
+  autorizarUsuario,
+  vincularUsuarioPessoa
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
 import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
@@ -63,6 +65,42 @@ const book = (db, agenda, selectedPerson) => createAgendamento({ agenda, pessoa:
 
 before(async () => {
   environment = await initializeTestEnvironment({ projectId: PROJECT_ID, firestore: { rules: readFileSync('firestore.rules', 'utf8') } });
+});
+
+describe('Fase 8A - autorização e vínculo de acesso', () => {
+  test('autoriza pendente de forma atômica com membro, índice e auditoria', async () => {
+    const db = adminDb();
+    await seedDocuments([
+      ['usuarios', 'pendente-8a', { uid: 'pendente-8a', role: 'pendente', ativo: true }],
+      ['pessoas', 'membro-8a', { nome: 'Membro Oito', vinculo: 'membro', ativo: true }]
+    ]);
+    await autorizarUsuario({ uid: 'pendente-8a', pessoaBaseId: 'membro-8a', role: 'atendimento', executadoPor: USER_ID }, db);
+    const usuario = (await getDoc(doc(db, path('usuarios', 'pendente-8a')))).data();
+    assert.equal(usuario.role, 'atendimento'); assert.equal(usuario.pessoaBaseId, 'membro-8a');
+    assert.equal((await getDoc(doc(db, path('usuario_pessoa_index', 'membro-8a')))).data().uid, 'pendente-8a');
+    assert.equal((await getDoc(doc(db, path('auditoria', 'usuario_acesso_pendente-8a_membro-8a')))).data().tipo, 'USUARIO_AUTORIZADO');
+  });
+  test('recusa consulente, membro inativo e vínculo duplicado', async () => {
+    const db = adminDb();
+    await seedDocuments([
+      ['usuarios', 'pendente-a', { uid: 'pendente-a', role: 'pendente', ativo: true }],
+      ['usuarios', 'pendente-b', { uid: 'pendente-b', role: 'pendente', ativo: true }],
+      ['pessoas', 'consulente-8a', { nome: 'Consulente', vinculo: 'consulente', ativo: true }],
+      ['pessoas', 'inativo-8a', { nome: 'Inativo', vinculo: 'membro', ativo: false }],
+      ['pessoas', 'membro-unico', { nome: 'Membro', vinculo: 'membro', ativo: true }]
+    ]);
+    await assert.rejects(autorizarUsuario({ uid: 'pendente-a', pessoaBaseId: 'consulente-8a', role: 'atendimento', executadoPor: USER_ID }, db), /PESSOA_NAO_E_MEMBRO_ATIVO/);
+    await assert.rejects(autorizarUsuario({ uid: 'pendente-a', pessoaBaseId: 'inativo-8a', role: 'atendimento', executadoPor: USER_ID }, db), /PESSOA_NAO_E_MEMBRO_ATIVO/);
+    await autorizarUsuario({ uid: 'pendente-a', pessoaBaseId: 'membro-unico', role: 'gestor', executadoPor: USER_ID }, db);
+    await assert.rejects(autorizarUsuario({ uid: 'pendente-b', pessoaBaseId: 'membro-unico', role: 'atendimento', executadoPor: USER_ID }, db), /PESSOA_JA_POSSUI_ACESSO/);
+  });
+  test('admin legado vincula a si mesmo sem alterar role ou status', async () => {
+    const db = adminDb();
+    await seedDocuments([['pessoas', 'membro-admin', { nome: 'Admin Membro', tipoPessoa: 'Membro', ativo: true }]]);
+    await vincularUsuarioPessoa({ uid: USER_ID, pessoaBaseId: 'membro-admin', executadoPor: USER_ID }, db);
+    const usuario = (await getDoc(doc(db, path('usuarios', USER_ID)))).data();
+    assert.equal(usuario.role, 'admin'); assert.equal(usuario.ativo, true); assert.equal(usuario.pessoaBaseId, 'membro-admin');
+  });
 });
 
 describe('Fase 7A - índice e busca de pessoas', () => {

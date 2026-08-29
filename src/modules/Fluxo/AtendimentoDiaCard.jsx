@@ -33,7 +33,7 @@ import {
   UserX
 } from 'lucide-react';
 
-export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
+export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) => {
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
   const [selCons, setSelCons] = useState(null);
@@ -246,7 +246,7 @@ export const AtendimentoDiaCard = ({ agenda, user, servicosCatalogo }) => {
           </div>
         )}
       </Modal>
-      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
+      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' ? ['consulente'] : ['consulente', 'membro']} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
 
       <ConfirmDialog
         isOpen={!!cancelTarget}

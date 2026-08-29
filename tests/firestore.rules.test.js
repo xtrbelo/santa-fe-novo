@@ -27,9 +27,12 @@ async function seed() {
       ['admin-a', 'admin', true], ['admin-b', 'admin', true], ['gestor', 'gestor', true],
       ['atendimento', 'atendimento', true], ['pendente', 'pendente', true], ['inativo-admin', 'admin', false]
     ];
-    await Promise.all(users.map(([uid, role, ativo]) => setDoc(ref(db, paths.user(uid)), { uid, nome: uid, email: `${uid}@example.test`, role, ativo, criadoEm: new Date(), atualizadoEm: new Date() })));
+    await Promise.all(users.map(([uid, role, ativo]) => setDoc(ref(db, paths.user(uid)), { uid, nome: uid, email: `${uid}@example.test`, role, ativo, ...(role !== 'pendente' ? { pessoaBaseId: `membro-${uid}` } : {}), criadoEm: new Date(), atualizadoEm: new Date() })));
     await Promise.all([
-      setDoc(ref(db, paths.people), { nome: 'Pessoa', ativo: true }),
+      setDoc(ref(db, paths.people), { nome: 'Pessoa', vinculo: 'consulente', tipoPessoa: 'Consulente', funcoesCasa: [], ativo: true }),
+      setDoc(ref(db, `${root}/pessoas/membro-autorizacao`), { nome: 'Membro Autorização', vinculo: 'membro', ativo: true }),
+      setDoc(ref(db, `${root}/pessoas/consulente-acesso`), { nome: 'Consulente', vinculo: 'consulente', ativo: true }),
+      setDoc(ref(db, `${root}/pessoas/membro-inativo`), { nome: 'Membro Inativo', vinculo: 'membro', ativo: false }),
       setDoc(ref(db, paths.agendas), { tipo: 'Agenda', status: 'Aberta', vagasOcupadas: {}, ativo: true }),
       setDoc(ref(db, paths.appointments), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Agendado' }),
       setDoc(ref(db, paths.config), { nome: 'Serviço', ativo: true }),
@@ -65,6 +68,23 @@ describe('C. inativo', () => {
 });
 
 describe('D. admin', () => {
+  test('autoriza pendente somente com membro ativo, índice coerente e auditoria', async () => {
+    const db = authDb('admin-a');
+    const batch = writeBatch(db);
+    batch.update(ref(db, paths.user('pendente')), { role: 'atendimento', ativo: true, pessoaBaseId: 'membro-autorizacao', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/usuario_pessoa_index/membro-autorizacao`), { pessoaBaseId: 'membro-autorizacao', uid: 'pendente', criadoEm: new Date(), criadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/auditoria/usuario_acesso_pendente_membro-autorizacao`), { tipo: 'USUARIO_AUTORIZADO', alvoUid: 'pendente', pessoaBaseId: 'membro-autorizacao', role: 'atendimento', executadoPor: 'admin-a', criadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+  });
+  test('recusa autorização sem índice, com consulente ou membro inativo', async () => {
+    await assertFails(updateDoc(ref(authDb('admin-a'), paths.user('pendente')), { role: 'atendimento', pessoaBaseId: 'membro-autorizacao', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    for (const pessoaBaseId of ['consulente-acesso', 'membro-inativo']) {
+      const db = authDb('admin-a'); const batch = writeBatch(db);
+      batch.update(ref(db, paths.user('pendente')), { role: 'atendimento', pessoaBaseId, atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+      batch.set(ref(db, `${root}/usuario_pessoa_index/${pessoaBaseId}`), { pessoaBaseId, uid: 'pendente', criadoEm: new Date(), criadoPor: 'admin-a' });
+      await assertFails(batch.commit());
+    }
+  });
   test('pode reconstruir somente o índice de busca de pessoas', async () => {
     await assertSucceeds(updateDoc(ref(authDb('admin-a'), paths.people), { busca: { versao: 1, nome: 'pessoa teste', telefone: '', termos: ['pe'] } }));
   });
@@ -98,6 +118,11 @@ describe('D. admin', () => {
     await assertSucceeds(updateDoc(ref(db, paths.user('gestor')), { role: 'atendimento', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
   test('altera o status de outro usuário', async () => assertSucceeds(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
+  test('pode desativar usuário legado sem vínculo, sem alterar seu role', async () => {
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/usuarios/legado-sem-vinculo`), { uid: 'legado-sem-vinculo', role: 'atendimento', ativo: true }));
+    await assertSucceeds(updateDoc(ref(authDb('admin-a'), `${root}/usuarios/legado-sem-vinculo`), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(updateDoc(ref(authDb('admin-a'), `${root}/usuarios/legado-sem-vinculo`), { role: 'gestor', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+  });
   test('não exclui usuário', async () => assertFails(deleteDoc(ref(authDb('admin-a'), paths.user('gestor')))));
   test('não altera UID de usuário', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { uid: 'fraude', atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
   test('não cria role inválido', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { role: 'superadmin', atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
@@ -136,10 +161,12 @@ describe('F. atendimento', () => {
     await assertSucceeds(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
     await assertSucceeds(updateDoc(ref(db, paths.agendas), { vagasOcupadas: { s1: 1 }, atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
   });
-  test('não cria nem edita Pessoas', async () => {
+  test('cadastra e edita somente dados básicos de Consulente', async () => {
     const db = authDb('atendimento');
-    await assertFails(setDoc(ref(db, `${root}/pessoas/nova`), { nome: 'Nova' }));
-    await assertFails(updateDoc(ref(db, paths.people), { nome: 'Fraude' }));
+    await assertSucceeds(setDoc(ref(db, `${root}/pessoas/nova`), { nome: 'Nova', vinculo: 'consulente', tipoPessoa: 'Consulente', funcoesCasa: [], ativo: true }));
+    await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Nome corrigido', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
+    await assertFails(setDoc(ref(db, `${root}/pessoas/membro-proibido`), { nome: 'Membro', vinculo: 'membro', tipoPessoa: 'Membro', funcoesCasa: [], ativo: true }));
+    await assertFails(updateDoc(ref(db, paths.people), { vinculo: 'membro', tipoPessoa: 'Membro', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
   });
   test('não cria agendas', async () => assertFails(setDoc(ref(authDb('atendimento'), `${root}/agendas/nova`), { tipo: 'Nova' })));
   test('não administra configurações nem usuários', async () => {

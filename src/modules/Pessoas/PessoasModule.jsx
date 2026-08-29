@@ -37,7 +37,8 @@ import {
   History
 } from 'lucide-react';
 
-export const PessoasModule = ({ user, readOnly = false }) => {
+export const PessoasModule = ({ user, profile }) => {
+  const readOnly = profile?.role === 'atendimento';
   const [pessoas, setPessoas] = useState([]);
   const [tiposPessoa, setTiposPessoa] = useState([]);
   const [funcoesMembro, setFuncoesMembro] = useState([]);
@@ -156,9 +157,9 @@ export const PessoasModule = ({ user, readOnly = false }) => {
 
     setIsSubmitting(true);
     const data = {
-      vinculo: eVinculo,
-      funcoesCasa: eVinculo === 'membro' ? eFuncoes : [],
-      tipoPessoa: eVinculo === 'membro' ? (eFuncoes.includes('medium') ? 'Médium' : eFuncoes.includes('cambone') ? 'Cambone' : 'Membro') : 'Consulente',
+      vinculo: readOnly ? 'consulente' : eVinculo,
+      funcoesCasa: readOnly ? [] : eVinculo === 'membro' ? eFuncoes : [],
+      tipoPessoa: readOnly ? 'Consulente' : eVinculo === 'membro' ? (eFuncoes.includes('medium') ? 'Médium' : eFuncoes.includes('cambone') ? 'Cambone' : 'Membro') : 'Consulente',
       nome: eNome.trim(),
       dataNascimento: eDataNasc || null,
       cpf: rawCpf || null,
@@ -242,12 +243,12 @@ export const PessoasModule = ({ user, readOnly = false }) => {
             Cadastro unificado de membros e consulentes
           </p>
         </div>
-        {!readOnly && <Button
+        <Button
           onClick={openNew} 
           className="rounded-full w-12 h-12 p-0 shadow-lg shadow-purple-500/30 shrink-0 bg-purple-600 hover:bg-purple-700 text-white"
         >
           <UserPlus size={22} />
-        </Button>}
+        </Button>
       </header>
 
       <div className="flex flex-col gap-3">
@@ -322,22 +323,20 @@ export const PessoasModule = ({ user, readOnly = false }) => {
 
               <div className="flex gap-2 border-t border-gray-50 pt-3">
                 <Button variant="secondary" onClick={() => setHistoryPerson(p)} className="flex-1 py-2 text-xs h-10 rounded-xl text-blue-700 hover:bg-blue-50"><History size={14} /> Histórico</Button>
-                {!readOnly && <>
-                <Button 
+                {(!readOnly || getPessoaVinculo(p) === 'consulente') && <Button
                   variant="secondary" 
                   onClick={() => openEdit(p)} 
                   className="flex-1 py-2 text-xs h-10 rounded-xl text-purple-700 hover:bg-purple-50"
                 >
                   <Edit size={14} /> Editar
-                </Button>
-                <Button 
+                </Button>}
+                {!readOnly && <Button
                   variant="danger" 
                   onClick={() => setItemToDelete(p)} 
                   className="px-4 py-2 h-10 rounded-xl"
                 >
                   <Trash2 size={16} />
-                </Button>
-                </>}
+                </Button>}
               </div>
             </Card>
           ))
@@ -357,6 +356,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
               </label>
               <select 
                 value={eVinculo}
+                disabled={readOnly}
                 onChange={e => { setEVinculo(e.target.value); if (e.target.value === 'consulente') setEFuncoes([]); }}
                 required 
                 className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none cursor-pointer"
@@ -381,7 +381,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
             </div>
           </div>
 
-          {eVinculo === 'membro' && <div className="bg-purple-50 p-4 rounded-2xl">
+          {!readOnly && eVinculo === 'membro' && <div className="bg-purple-50 p-4 rounded-2xl">
             <p className="text-[10px] font-black uppercase text-purple-700 mb-2">Funções na Casa</p>
             {(funcoesMembro.length ? funcoesMembro.map(item => [item.slug || item.id, item.nome]) : [['medium', 'Médium'], ['cambone', 'Cambone']]).map(([id, nome]) => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={eFuncoes.includes(id)} onChange={() => setEFuncoes(eFuncoes.includes(id) ? eFuncoes.filter(x => x !== id) : [...eFuncoes, id])}/> {nome}</label>)}
           </div>}
@@ -468,7 +468,7 @@ export const PessoasModule = ({ user, readOnly = false }) => {
           </Button>
         </form>
       </Modal>
-      <PessoaFormModal isOpen={isNewModalOpen} user={user} onClose={() => setIsNewModalOpen(false)} onSaved={() => toast.success('Nova pessoa cadastrada com sucesso!')} />
+      <PessoaFormModal isOpen={isNewModalOpen} user={user} allowedVinculos={readOnly ? ['consulente'] : ['consulente', 'membro']} onClose={() => setIsNewModalOpen(false)} onSaved={() => toast.success('Nova pessoa cadastrada com sucesso!')} />
 
       <ConfirmDialog 
         isOpen={!!itemToDelete}

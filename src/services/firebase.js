@@ -189,6 +189,43 @@ export const rebuildPessoaSearchIndex = async ({ pageSize = 200, cursor = null }
   };
 };
 
+const ACCESS_ROLES = ['admin', 'gestor', 'atendimento'];
+const isActiveMember = pessoa => pessoa?.ativo !== false && getPessoaVinculo(pessoa) === 'membro';
+
+const linkUserToPessoa = async ({ uid, pessoaBaseId, role = null, executadoPor, requirePending = false }, firestore = db) => {
+  if (!uid || !pessoaBaseId || (role !== null && !ACCESS_ROLES.includes(role))) throw new Error('AUTORIZACAO_INVALIDA');
+  const userRef = getDataDoc(firestore, 'usuarios', uid);
+  const personRef = getDataDoc(firestore, 'pessoas', pessoaBaseId);
+  const indexRef = getDataDoc(firestore, 'usuario_pessoa_index', pessoaBaseId);
+  const auditRef = getDataDoc(firestore, 'auditoria', `usuario_acesso_${uid}_${pessoaBaseId}`);
+  await runTransaction(firestore, async transaction => {
+    const [userSnapshot, personSnapshot, indexSnapshot] = await Promise.all([
+      transaction.get(userRef), transaction.get(personRef), transaction.get(indexRef)
+    ]);
+    if (!userSnapshot.exists()) throw new Error('USUARIO_NAO_ENCONTRADO');
+    if (!personSnapshot.exists() || !isActiveMember(personSnapshot.data())) throw new Error('PESSOA_NAO_E_MEMBRO_ATIVO');
+    if (requirePending && userSnapshot.data().role !== 'pendente') throw new Error('USUARIO_NAO_PENDENTE');
+    if (!requirePending && userSnapshot.data().role === 'pendente') throw new Error('USUARIO_PENDENTE');
+    if (indexSnapshot.exists() && indexSnapshot.data().uid !== uid) throw new Error('PESSOA_JA_POSSUI_ACESSO');
+    const now = Timestamp.now();
+    if (!indexSnapshot.exists()) transaction.set(indexRef, { pessoaBaseId, uid, criadoEm: now, criadoPor: executadoPor });
+    transaction.update(userRef, {
+      pessoaBaseId,
+      ...(role ? { role } : {}),
+      ...(requirePending ? { ativo: true } : {}),
+      atualizadoEm: now,
+      atualizadoPor: executadoPor
+    });
+    transaction.set(auditRef, {
+      tipo: requirePending ? 'USUARIO_AUTORIZADO' : 'USUARIO_VINCULADO', alvoUid: uid,
+      pessoaBaseId, ...(role ? { role } : {}), executadoPor, criadoEm: now
+    });
+  });
+};
+
+export const autorizarUsuario = (params, firestore = db) => linkUserToPessoa({ ...params, requirePending: true }, firestore);
+export const vincularUsuarioPessoa = (params, firestore = db) => linkUserToPessoa({ ...params, requirePending: false }, firestore);
+
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
   if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
   const permittedTypes = getAgendaPublicosPermitidos(agenda);

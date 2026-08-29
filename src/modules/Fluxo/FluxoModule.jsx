@@ -6,7 +6,7 @@ import {
 import { AtendimentoDiaCard } from './AtendimentoDiaCard';
 import { AlertCircle } from 'lucide-react';
 
-export const FluxoModule = ({ user }) => {
+export const FluxoModule = ({ user, profile }) => {
   const [agendasHoje, setAgendasHoje] = useState([]);
   const [servicos, setServicos] = useState([]);
 
@@ -70,6 +70,7 @@ export const FluxoModule = ({ user }) => {
               key={a.id} 
               agenda={a} 
               user={user} 
+              profile={profile}
               servicosCatalogo={servicos} 
             />
           ))

@@ -84,8 +84,8 @@ function AppContent() {
   const renderContent = () => {
     if (!allowedTabs.includes(tab)) return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;
     if (tab === 'agendas') return <AgendasModule user={user} profile={profile} />;
-    if (tab === 'fluxo') return <FluxoModule user={user} />;
-    if (tab === 'pessoas') return <PessoasModule user={user} readOnly={profile.role === ROLES.ATENDIMENTO} />;
+    if (tab === 'fluxo') return <FluxoModule user={user} profile={profile} />;
+    if (tab === 'pessoas') return <PessoasModule user={user} profile={profile} />;
     if (tab === 'usuarios') return profile.role === ROLES.ADMIN ? <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} /> : <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} />;
     if (tab === 'config') return <ConfiguracoesModule user={user} profile={profile} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;

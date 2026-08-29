@@ -27,6 +27,7 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { RealocacaoModal } from './RealocacaoModal';
 import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
+import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { useToast } from '../../components/ui/useToast';
 import { 
   CalendarDays, 
@@ -66,6 +67,8 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
   const filaOperacional = fila.filter(isAtendimentoOperacional);
   const summary = filaOperacional.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
   const hasExecutedAppointment = filaOperacional.some(item => ['Presente', 'Concluído'].includes(item.status));
+  const canManageAgenda = hasPermission(profile, PERMISSIONS.MANAGE_AGENDAS);
+  const canRelocate = hasPermission(profile, PERMISSIONS.RELOCATE);
 
   useEffect(() => {
     if (!expanded || !user) return;
@@ -257,12 +260,12 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
           </div>
 
           {agenda.status === 'Cancelada' && filaOperacional.some(item => item.status === 'Agendado') && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm"><strong>{filaOperacional.filter(item => item.status === 'Agendado').length} atendimento(s) aguardam realocação.</strong><p className="text-xs mt-1">Use “Reagendar / Realocar” em cada pessoa. Não há movimentação automática.</p></div>}
-          {affectedServiceId && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm"><strong>Pessoas afetadas pelo serviço cancelado</strong>{filaOperacional.filter(item => item.status === 'Agendado' && getServicosAtivosAtendimento(item).includes(affectedServiceId)).map(item => <div key={item.id} className="flex justify-between items-center mt-2"><span>{item.nome}</span><button className="font-bold text-indigo-700" onClick={() => { setRelocationTarget(item); setRelocationServiceId(affectedServiceId); }}>Realocar Serviço</button></div>)}</div>}
+          {canRelocate && affectedServiceId && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm"><strong>Pessoas afetadas pelo serviço cancelado</strong>{filaOperacional.filter(item => item.status === 'Agendado' && getServicosAtivosAtendimento(item).includes(affectedServiceId)).map(item => <div key={item.id} className="flex justify-between items-center mt-2"><span>{item.nome}</span><button className="font-bold text-indigo-700" onClick={() => { setRelocationTarget(item); setRelocationServiceId(affectedServiceId); }}>Realocar Serviço</button></div>)}</div>}
 
           <div className="bg-white border border-gray-100 rounded-xl p-3 text-xs space-y-2">
             <p><strong>Tipo de Trabalho:</strong> {agenda.tipoTrabalhoNome || agenda.tipo}</p>
             <p><strong>Público:</strong> {getAgendaPublicosPermitidos(agenda).map(x => x === 'membro' ? 'Membros' : 'Consulentes').join(' + ') || 'Sem restrição'}</p>
-            <div><strong>Serviços:</strong>{agendaServices.map(service => <div key={service.id} className="flex justify-between mt-1"><span>{service.nome} {servicoControlaVagas(service) ? `· ${agenda.vagasOcupadas?.[service.id] || 0} / ${agenda.vagasTotais?.[service.id] || 0} vagas` : ''} · {agenda.servicosStatus?.[service.id] || 'Ativo'}</span>{!isClosed && servicoAtivoNaAgenda(agenda, service.id) && <button onClick={() => setServiceToCancel(service)} className="text-rose-600 font-bold">Cancelar nesta data</button>}</div>)}</div>
+            <div><strong>Serviços:</strong>{agendaServices.map(service => <div key={service.id} className="flex justify-between mt-1"><span>{service.nome} {servicoControlaVagas(service) ? `· ${agenda.vagasOcupadas?.[service.id] || 0} / ${agenda.vagasTotais?.[service.id] || 0} vagas` : ''} · {agenda.servicosStatus?.[service.id] || 'Ativo'}</span>{canManageAgenda && !isClosed && servicoAtivoNaAgenda(agenda, service.id) && <button onClick={() => setServiceToCancel(service)} className="text-rose-600 font-bold">Cancelar nesta data</button>}</div>)}</div>
           </div>
 
           <div className="space-y-2">
@@ -278,15 +281,15 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>
                     {['Agendado', 'Presente'].includes(c.status) && !isClosed && <button onClick={() => setCancelTarget(c)} className="text-rose-500 hover:text-rose-700" title="Cancelar agendamento"><XCircle size={18} /></button>}
-                    {profile?.role === 'admin' && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
-                    {['admin', 'gestor'].includes(profile?.role) && c.status === 'Agendado' && <button onClick={() => { setRelocationTarget(c); setRelocationServiceId(null); }} className="text-xs font-bold text-indigo-700 hover:text-indigo-900">Reagendar / Realocar</button>}
+                    {hasPermission(profile, PERMISSIONS.CORRECT_STATUS) && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
+                    {canRelocate && c.status === 'Agendado' && <button onClick={() => { setRelocationTarget(c); setRelocationServiceId(null); }} className="text-xs font-bold text-indigo-700 hover:text-indigo-900">Reagendar / Realocar</button>}
                   </div>
                 </div>
               ))
             )}
           </div>
 
-          {!isClosed ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{profile?.role === 'admin' && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.</p>}</div> : <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div>}
+          {!isClosed && canManageAgenda ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{hasPermission(profile, PERMISSIONS.DELETE_AGENDA) && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.</p>}</div> : isClosed ? <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div> : null}
         </div>
       )}
 
@@ -338,7 +341,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
           </div>
         )}
       </Modal>
-      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
+      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' ? ['consulente'] : ['consulente', 'membro']} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
 
       <Modal isOpen={editing} onClose={() => setEditing(false)} title="Editar Agenda">
         {editDraft && <div className="space-y-4"><div className="grid grid-cols-2 gap-2"><input type="date" value={editDraft.data} onChange={e => setEditDraft({ ...editDraft, data: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/><input type="time" value={editDraft.horario} onChange={e => setEditDraft({ ...editDraft, horario: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/></div><select value={editDraft.tipoTrabalhoId} onChange={e => setEditDraft({ ...editDraft, tipoTrabalhoId: e.target.value })} className="w-full bg-gray-50 p-3 rounded-xl"><option value="">Legado: {agenda.tipo}</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select><div>{['consulente', 'membro'].map(id => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={editDraft.publicosPermitidos.includes(id)} onChange={() => setEditDraft({ ...editDraft, publicosPermitidos: editDraft.publicosPermitidos.includes(id) ? editDraft.publicosPermitidos.filter(x => x !== id) : [...editDraft.publicosPermitidos, id] })}/> {id}</label>)}</div>{servicosCatalogo.filter(s => !editDraft.tipoTrabalhoId || !s.tipoTrabalhoIds?.length || s.tipoTrabalhoIds.includes(editDraft.tipoTrabalhoId)).map(s => <div key={s.id} className="bg-gray-50 p-3 rounded-xl"><label className="text-sm font-bold"><input type="checkbox" checked={editDraft.servicosIds.includes(s.id)} onChange={() => setEditDraft({ ...editDraft, servicosIds: editDraft.servicosIds.includes(s.id) ? editDraft.servicosIds.filter(x => x !== s.id) : [...editDraft.servicosIds, s.id] })}/> {s.nome}</label>{editDraft.servicosIds.includes(s.id) && servicoControlaVagas(s) && <input type="number" min={agenda.vagasOcupadas?.[s.id] || 0} value={editDraft.vagasTotais[s.id] || ''} onChange={e => setEditDraft({ ...editDraft, vagasTotais: { ...editDraft.vagasTotais, [s.id]: Number(e.target.value) } })} className="w-full bg-white p-2 mt-2 rounded-lg"/>}</div>)}<Button onClick={saveEdit} variant="warning" className="w-full">Salvar Alterações</Button></div>}

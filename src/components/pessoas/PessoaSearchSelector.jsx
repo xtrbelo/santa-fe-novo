@@ -25,7 +25,7 @@ const PessoaRow = ({ pessoa, active, onSelect }) => <button
   </span>
 </button>;
 
-export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew, accent = 'purple' }) => {
+export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew, accent = 'purple', allowedVinculos = null }) => {
   const [term, setTerm] = useState('');
   const [results, setResults] = useState([]);
   const [recent, setRecent] = useState([]);
@@ -35,9 +35,9 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
 
   useEffect(() => {
     let mounted = true;
-    getRecentPessoas().then(items => { if (mounted) setRecent(items); }).catch(() => {});
+    getRecentPessoas().then(items => { if (mounted) setRecent(allowedVinculos ? items.filter(item => allowedVinculos.includes(getPessoaVinculo(item))) : items); }).catch(() => {});
     return () => { mounted = false; };
-  }, []);
+  }, [allowedVinculos]);
 
   useEffect(() => {
     if (value) return undefined;
@@ -53,7 +53,8 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
     const timer = setTimeout(async () => {
       setState('searching');
       try {
-        const items = await searchPessoas(raw, { limitResults: 12 });
+        const found = await searchPessoas(raw, { limitResults: 12 });
+        const items = allowedVinculos ? found.filter(item => allowedVinculos.includes(getPessoaVinculo(item))) : found;
         if (requestId.current !== currentRequest) return;
         setResults(items); setHighlighted(0); setState(items.length ? 'results' : 'empty');
       } catch (error) {
@@ -62,7 +63,7 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [term, value]);
+  }, [term, value, allowedVinculos]);
 
   const select = pessoa => { requestId.current += 1; setResults([]); onChange(pessoa); setState('selected'); };
   const clear = () => { requestId.current += 1; onChange(null); setTerm(''); setResults([]); setState('initial'); };
