@@ -34,7 +34,7 @@ const person = (id, tipoPessoa = 'Consulente') => ({ id, nome: `Pessoa ${id}`, t
 const path = (collectionName, id) => `${root}/${collectionName}/${id}`;
 
 let environment;
-const adminDb = () => environment.authenticatedContext(USER_ID).firestore();
+const adminDb = () => environment.authenticatedContext(USER_ID, { email_verified: true }).firestore();
 
 async function seedDocuments(entries) {
   await environment.withSecurityRulesDisabled(async context => {
@@ -491,7 +491,7 @@ describe('transações do fluxo operacional', () => {
     const permissionAgenda = await seedAgenda('agenda-permissao-correcao', { status: 'Concluída' });
     await seedDocuments([['consulentes', 'permissao-1', { agendaId: permissionAgenda.id, status: 'Concluído', horaChegada: new Date(), horaSaida: new Date() }]]);
     for (const [uid, role] of [['gestor-business', 'gestor'], ['atendimento-business', 'atendimento']]) {
-      const roleDb = environment.authenticatedContext(uid).firestore();
+      const roleDb = environment.authenticatedContext(uid, { email_verified: true }).firestore();
       await assert.rejects(corrigirStatusAtendimento({ agendaId: permissionAgenda.id, agendamentoId: 'permissao-1', status: 'Presente', motivo: role, userId: uid }, roleDb), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
     }
   });

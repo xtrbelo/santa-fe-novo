@@ -111,7 +111,12 @@ function AppContent() {
   const refreshVerification = async () => {
     if (!user) return;
     setIsCheckingAccess(true);
-    try { await user.reload(); setVerificationVersion(value => value + 1); toast.info(user.emailVerified ? 'E-mail confirmado.' : 'A confirmação ainda não foi identificada.'); }
+    try {
+      await user.reload();
+      if (user.emailVerified) await user.getIdToken(true);
+      setVerificationVersion(value => value + 1);
+      toast.info(user.emailVerified ? 'E-mail confirmado.' : 'A confirmação ainda não foi identificada.');
+    }
     catch (error) { console.error(error); toast.error('Não foi possível atualizar a verificação.'); }
     finally { setIsCheckingAccess(false); }
   };

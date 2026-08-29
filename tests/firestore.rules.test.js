@@ -16,7 +16,7 @@ const paths = {
 };
 
 let environment;
-const authDb = uid => environment.authenticatedContext(uid).firestore();
+const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();
 const anonymousDb = () => environment.unauthenticatedContext().firestore();
 const ref = (db, path) => doc(db, path);
 
@@ -59,6 +59,39 @@ describe('B. pendente', () => {
   for (const [name, path] of Object.entries({ pessoas: paths.people, agendas: paths.agendas, consulentes: paths.appointments, configuracoes: paths.config, terceiro: paths.user('gestor'), auditoria: paths.audit })) {
     test(`não acessa ${name}`, async () => assertFails(getDoc(ref(authDb('pendente'), path))));
   }
+});
+
+describe('B2. verificação de e-mail', () => {
+  test('usuário Atendimento não verificado não lê nem altera dados operacionais', async () => {
+    const db = authDb('atendimento', { email_verified: false });
+    for (const path of [paths.people, paths.agendas, paths.appointments, paths.config]) {
+      await assertFails(getDoc(ref(db, path)));
+    }
+    await assertFails(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
+    const batch = writeBatch(db);
+    batch.set(ref(db, `${root}/consulentes/nao-verificado`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Agendado' });
+    batch.set(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'nao-verificado', criadoEm: new Date(), criadoPor: 'atendimento' });
+    await assertFails(batch.commit());
+  });
+
+  test('usuário Atendimento verificado acessa somente sua operação permitida', async () => {
+    const db = authDb('atendimento', { email_verified: true });
+    await assertSucceeds(getDoc(ref(db, paths.people)));
+    await assertSucceeds(getDoc(ref(db, paths.agendas)));
+    await assertSucceeds(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
+    await assertFails(getDocs(collection(db, `${root}/usuarios`)));
+    await assertFails(updateDoc(ref(db, paths.config), { ativo: false }));
+  });
+
+  test('pendente não verificado cria e lê o próprio perfil, sem acessar dados ou terceiros', async () => {
+    const db = authDb('novo-nao-verificado', { email_verified: false });
+    const profile = { uid: 'novo-nao-verificado', nome: 'Novo', email: 'novo@santafe.local', role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() };
+    await assertSucceeds(setDoc(ref(db, paths.user('novo-nao-verificado')), profile));
+    await assertSucceeds(getDoc(ref(db, paths.user('novo-nao-verificado'))));
+    for (const path of [paths.people, paths.agendas, paths.appointments, paths.config, paths.user('gestor')]) {
+      await assertFails(getDoc(ref(db, path)));
+    }
+  });
 });
 
 describe('C. inativo', () => {

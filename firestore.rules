@@ -2,14 +2,15 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isAuthenticated() { return request.auth != null; }
+    function hasVerifiedEmail() { return isAuthenticated() && request.auth.token.get('email_verified', false) == true; }
     function userPath(appId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(request.auth.uid); }
     function currentUser(appId) { return get(userPath(appId)).data; }
-    function isActive(appId) { return isAuthenticated() && exists(userPath(appId)) && currentUser(appId).ativo == true; }
+    function isActive(appId) { return hasVerifiedEmail() && exists(userPath(appId)) && currentUser(appId).ativo == true; }
     function isAdmin(appId) { return isActive(appId) && currentUser(appId).role == 'admin'; }
     function isGestor(appId) { return isActive(appId) && currentUser(appId).role == 'gestor'; }
     function isAtendimento(appId) { return isActive(appId) && currentUser(appId).role == 'atendimento'; }
-    function isInternal(appId) { return isAdmin(appId) || isGestor(appId) || isAtendimento(appId); }
-    function canRelocate(appId) { return isAdmin(appId) || isGestor(appId); }
+    function isInternal(appId) { return isActive(appId) && currentUser(appId).role in ['admin', 'gestor', 'atendimento']; }
+    function canRelocate(appId) { return isActive(appId) && currentUser(appId).role in ['admin', 'gestor']; }
     function auditPath(appId, id) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/auditoria/$(id); }
     function arbitraryUserPath(appId, uid) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(uid); }
     function personPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/pessoas/$(pessoaId); }
