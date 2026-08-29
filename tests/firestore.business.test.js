@@ -71,32 +71,42 @@ describe('Fase 8A - autorização e vínculo de acesso', () => {
   test('autoriza pendente de forma atômica com membro, índice e auditoria', async () => {
     const db = adminDb();
     await seedDocuments([
-      ['usuarios', 'pendente-8a', { uid: 'pendente-8a', role: 'pendente', ativo: true }],
-      ['pessoas', 'membro-8a', { nome: 'Membro Oito', vinculo: 'membro', ativo: true }]
+      ['usuarios', 'pendente-8a', { uid: 'pendente-8a', email: 'joao@email.com', role: 'pendente', ativo: true }],
+      ['pessoas', 'membro-8a', { nome: 'Membro Oito', email: 'joao@email.com', vinculo: 'membro', ativo: true }]
     ]);
     await autorizarUsuario({ uid: 'pendente-8a', pessoaBaseId: 'membro-8a', role: 'atendimento', executadoPor: USER_ID }, db);
     const usuario = (await getDoc(doc(db, path('usuarios', 'pendente-8a')))).data();
-    assert.equal(usuario.role, 'atendimento'); assert.equal(usuario.pessoaBaseId, 'membro-8a');
+    assert.equal(usuario.role, 'atendimento'); assert.equal(usuario.pessoaBaseId, 'membro-8a'); assert.equal(usuario.email, 'joao@email.com');
     assert.equal((await getDoc(doc(db, path('usuario_pessoa_index', 'membro-8a')))).data().uid, 'pendente-8a');
     assert.equal((await getDoc(doc(db, path('auditoria', 'usuario_acesso_pendente-8a_membro-8a')))).data().tipo, 'USUARIO_AUTORIZADO');
   });
   test('recusa consulente, membro inativo e vínculo duplicado', async () => {
     const db = adminDb();
     await seedDocuments([
-      ['usuarios', 'pendente-a', { uid: 'pendente-a', role: 'pendente', ativo: true }],
-      ['usuarios', 'pendente-b', { uid: 'pendente-b', role: 'pendente', ativo: true }],
+      ['usuarios', 'pendente-a', { uid: 'pendente-a', email: 'unico@email.com', role: 'pendente', ativo: true }],
+      ['usuarios', 'pendente-b', { uid: 'pendente-b', email: 'unico@email.com', role: 'pendente', ativo: true }],
       ['pessoas', 'consulente-8a', { nome: 'Consulente', vinculo: 'consulente', ativo: true }],
       ['pessoas', 'inativo-8a', { nome: 'Inativo', vinculo: 'membro', ativo: false }],
-      ['pessoas', 'membro-unico', { nome: 'Membro', vinculo: 'membro', ativo: true }]
+      ['pessoas', 'membro-unico', { nome: 'Membro', email: 'unico@email.com', vinculo: 'membro', ativo: true }]
     ]);
     await assert.rejects(autorizarUsuario({ uid: 'pendente-a', pessoaBaseId: 'consulente-8a', role: 'atendimento', executadoPor: USER_ID }, db), /PESSOA_NAO_E_MEMBRO_ATIVO/);
     await assert.rejects(autorizarUsuario({ uid: 'pendente-a', pessoaBaseId: 'inativo-8a', role: 'atendimento', executadoPor: USER_ID }, db), /PESSOA_NAO_E_MEMBRO_ATIVO/);
     await autorizarUsuario({ uid: 'pendente-a', pessoaBaseId: 'membro-unico', role: 'gestor', executadoPor: USER_ID }, db);
     await assert.rejects(autorizarUsuario({ uid: 'pendente-b', pessoaBaseId: 'membro-unico', role: 'atendimento', executadoPor: USER_ID }, db), /PESSOA_JA_POSSUI_ACESSO/);
   });
+  test('recusa e-mail divergente e membro sem e-mail para acesso', async () => {
+    const db = adminDb();
+    await seedDocuments([
+      ['usuarios', 'pendente-email', { uid: 'pendente-email', email: 'conta@email.com', role: 'pendente', ativo: true }],
+      ['pessoas', 'membro-divergente', { nome: 'Divergente', email: 'outro@email.com', vinculo: 'membro', ativo: true }],
+      ['pessoas', 'membro-sem-email', { nome: 'Sem e-mail', vinculo: 'membro', ativo: true }]
+    ]);
+    await assert.rejects(autorizarUsuario({ uid: 'pendente-email', pessoaBaseId: 'membro-divergente', role: 'atendimento', executadoPor: USER_ID }, db), /EMAIL_MEMBRO_DIVERGENTE/);
+    await assert.rejects(autorizarUsuario({ uid: 'pendente-email', pessoaBaseId: 'membro-sem-email', role: 'atendimento', executadoPor: USER_ID }, db), /MEMBRO_SEM_EMAIL_ACESSO/);
+  });
   test('admin legado vincula a si mesmo sem alterar role ou status', async () => {
     const db = adminDb();
-    await seedDocuments([['pessoas', 'membro-admin', { nome: 'Admin Membro', tipoPessoa: 'Membro', ativo: true }]]);
+    await seedDocuments([['pessoas', 'membro-admin', { nome: 'Admin Membro', email: 'admin@santafe.local', tipoPessoa: 'Membro', ativo: true }]]);
     await vincularUsuarioPessoa({ uid: USER_ID, pessoaBaseId: 'membro-admin', executadoPor: USER_ID }, db);
     const usuario = (await getDoc(doc(db, path('usuarios', USER_ID)))).data();
     assert.equal(usuario.role, 'admin'); assert.equal(usuario.ativo, true); assert.equal(usuario.pessoaBaseId, 'membro-admin');
@@ -134,7 +144,7 @@ describe('Fase 7A - índice e busca de pessoas', () => {
 
 beforeEach(async () => {
   await environment.clearFirestore();
-  await seedDocuments([['usuarios', USER_ID, { uid: USER_ID, role: 'admin', ativo: true }]]);
+  await seedDocuments([['usuarios', USER_ID, { uid: USER_ID, email: 'admin@santafe.local', role: 'admin', ativo: true }]]);
 });
 
 after(async () => environment.cleanup());

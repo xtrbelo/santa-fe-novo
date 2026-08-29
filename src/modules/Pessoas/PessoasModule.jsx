@@ -19,6 +19,8 @@ import {
   validateCPF
 } from '../../utils/formatters';
 import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
+import { buildPessoaPayload, getEffectiveMemberFunctions, getMemberFunctionLabels, localTextIncludes, validatePessoaPayload } from '../../utils/pessoaForm';
+import { normalizeSearchText } from '../../utils/pessoaSearch';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -40,9 +42,8 @@ import {
 export const PessoasModule = ({ user, profile }) => {
   const readOnly = profile?.role === 'atendimento';
   const [pessoas, setPessoas] = useState([]);
-  const [tiposPessoa, setTiposPessoa] = useState([]);
   const [funcoesMembro, setFuncoesMembro] = useState([]);
-  const [abaAtiva, setAbaAtiva] = useState('Todos');
+  const [abaAtiva, setAbaAtiva] = useState('todos');
   const [buscaTexto, setBuscaTexto] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
@@ -76,15 +77,11 @@ export const PessoasModule = ({ user, profile }) => {
           .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""))
       );
     });
-    const unsubT = onSnapshot(getAppCollection('config_tipos_pessoa'), (s) => {
-      setTiposPessoa(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(t => t.ativo !== false));
-    });
     const unsubF = onSnapshot(getAppCollection('config_funcoes_membro'), (s) => {
-      setFuncoesMembro(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false));
+      setFuncoesMembro(s.docs.map(d => ({ id: d.id, ...d.data() })));
     });
     return () => {
       unsubP();
-      unsubT();
       unsubF();
     };
   }, [user]);
@@ -134,6 +131,21 @@ export const PessoasModule = ({ user, profile }) => {
 
     const minor = eIdade !== null && eIdade < 18;
     const rawCpf = cleanDigits(eCpf);
+    const effectiveVinculo = readOnly ? 'consulente' : eVinculo;
+    const baseData = buildPessoaPayload({
+      vinculo: effectiveVinculo,
+      funcoesCasa: readOnly ? [] : eFuncoes,
+      nome: eNome,
+      dataNascimento: eDataNasc || null,
+      cpf: rawCpf || null,
+      contato: minor ? null : cleanDigits(eContato) || null,
+      email: minor && effectiveVinculo !== 'membro' ? null : eEmail,
+      responsavelCpf: minor ? cleanDigits(eRespCpf) || null : null,
+      responsavelNome: minor ? eRespNome.trim() || null : null,
+      responsavelContato: minor ? cleanDigits(eRespContato) || null : null
+    });
+    const validationError = validatePessoaPayload(baseData);
+    if (validationError) { toast.error(validationError); return; }
     
     // Validação básica se CPF fornecido
     if (rawCpf && !validateCPF(rawCpf)) {
@@ -157,17 +169,7 @@ export const PessoasModule = ({ user, profile }) => {
 
     setIsSubmitting(true);
     const data = {
-      vinculo: readOnly ? 'consulente' : eVinculo,
-      funcoesCasa: readOnly ? [] : eVinculo === 'membro' ? eFuncoes : [],
-      tipoPessoa: readOnly ? 'Consulente' : eVinculo === 'membro' ? (eFuncoes.includes('medium') ? 'Médium' : eFuncoes.includes('cambone') ? 'Cambone' : 'Membro') : 'Consulente',
-      nome: eNome.trim(),
-      dataNascimento: eDataNasc || null,
-      cpf: rawCpf || null,
-      contato: minor ? null : cleanDigits(eContato) || null,
-      email: minor ? null : eEmail.trim() || null,
-      responsavelCpf: minor ? cleanDigits(eRespCpf) || null : null,
-      responsavelNome: minor ? eRespNome.trim() || null : null,
-      responsavelContato: minor ? cleanDigits(eRespContato) || null : null,
+      ...baseData,
       atualizadoEm: Timestamp.now(),
       atualizadoPor: user.uid
     };
@@ -222,12 +224,13 @@ export const PessoasModule = ({ user, profile }) => {
     }
   };
 
-  const cleanSearch = buscaTexto.toLowerCase().trim();
+  const cleanSearch = normalizeSearchText(buscaTexto);
+  const effectiveMemberFunctions = getEffectiveMemberFunctions(funcoesMembro);
   const filtradas = pessoas.filter(p => {
-    const mType = abaAtiva === 'Todos' || p.tipoPessoa === abaAtiva;
+    const mType = abaAtiva === 'todos' || getPessoaVinculo(p) === abaAtiva;
     const mSearch = 
       !cleanSearch ||
-      (p.nome || "").toLowerCase().includes(cleanSearch) || 
+      localTextIncludes(p.nome, cleanSearch) ||
       (p.cpf && p.cpf.includes(cleanSearch));
     return mType && mSearch;
   });
@@ -269,10 +272,9 @@ export const PessoasModule = ({ user, profile }) => {
             onChange={e => setAbaAtiva(e.target.value)} 
             className="w-full bg-transparent border-none outline-none text-sm font-bold text-gray-700 py-2.5 cursor-pointer"
           >
-            <option value="Todos">Todos os Tipos de Pessoa</option>
-            {tiposPessoa.map(t => (
-              <option key={t.id} value={t.nome}>{t.nome}</option>
-            ))}
+            <option value="todos">Todos</option>
+            <option value="consulente">Consulentes</option>
+            <option value="membro">Membros</option>
           </select>
         </div>
       </div>
@@ -305,7 +307,7 @@ export const PessoasModule = ({ user, profile }) => {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
                     <span className="text-[9px] font-black uppercase bg-purple-50 text-purple-700 px-2.5 py-0.5 rounded-full">
-                      {getPessoaVinculo(p) === 'membro' ? `Membro${getPessoaFuncoesCasa(p).length ? ` · ${getPessoaFuncoesCasa(p).join(' / ')}` : ''}` : 'Consulente'}
+                      {getPessoaVinculo(p) === 'membro' ? `Membro${getPessoaFuncoesCasa(p).length ? ` · ${getMemberFunctionLabels(getPessoaFuncoesCasa(p), effectiveMemberFunctions).join(' / ')}` : ''}` : 'Consulente'}
                     </span>
                     {p.cpf && (
                       <span className="text-[11px] font-bold text-gray-400">
@@ -383,7 +385,7 @@ export const PessoasModule = ({ user, profile }) => {
 
           {!readOnly && eVinculo === 'membro' && <div className="bg-purple-50 p-4 rounded-2xl">
             <p className="text-[10px] font-black uppercase text-purple-700 mb-2">Funções na Casa</p>
-            {(funcoesMembro.length ? funcoesMembro.map(item => [item.slug || item.id, item.nome]) : [['medium', 'Médium'], ['cambone', 'Cambone']]).map(([id, nome]) => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={eFuncoes.includes(id)} onChange={() => setEFuncoes(eFuncoes.includes(id) ? eFuncoes.filter(x => x !== id) : [...eFuncoes, id])}/> {nome}</label>)}
+            {effectiveMemberFunctions.map(({ id, nome }) => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={eFuncoes.includes(id)} onChange={() => setEFuncoes(eFuncoes.includes(id) ? eFuncoes.filter(x => x !== id) : [...eFuncoes, id])}/> {nome}</label>)}
           </div>}
 
           <div className="space-y-1.5">
@@ -402,13 +404,14 @@ export const PessoasModule = ({ user, profile }) => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
-                CPF
+                CPF {eVinculo === 'membro' && '*'}
               </label>
               <input 
                 value={eCpf} 
                 onChange={e => setECpf(maskCPF(e.target.value))} 
                 placeholder="000.000.000-00" 
                 maxLength={14}
+                required={eVinculo === 'membro'}
                 className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none" 
               />
             </div>
@@ -424,6 +427,12 @@ export const PessoasModule = ({ user, profile }) => {
                 className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none" 
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">E-mail {eVinculo === 'membro' && '*'}</label>
+            <input type="email" value={eEmail} onChange={e => setEEmail(e.target.value)} required={eVinculo === 'membro'} autoComplete="email" className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none"/>
+            {eVinculo === 'membro' && <p className="text-[11px] font-medium text-purple-700">Este e-mail será utilizado para vincular o acesso ao sistema.</p>}
           </div>
 
           {eIdade !== null && eIdade < 18 && (

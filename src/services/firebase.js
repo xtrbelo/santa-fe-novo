@@ -37,6 +37,7 @@ import {
 } from 'firebase/firestore';
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
+import { buildPessoaPayload, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
 
 const getEnv = (key, fallback) => {
   try {
@@ -161,6 +162,9 @@ export const withPessoaSearchIndex = pessoa => ({ ...pessoa, busca: buildPessoaS
 export const createPessoa = async ({ data, userId }, firestore = db) => {
   const pessoaRef = doc(getDataCollection(firestore, 'pessoas'));
   const cpf = normalizeSearchDigits(data.cpf);
+  const normalizedData = buildPessoaPayload({ ...data, cpf: cpf || null });
+  const validationError = validatePessoaPayload(normalizedData);
+  if (validationError) throw new Error(`PESSOA_INVALIDA:${validationError}`);
   const now = Timestamp.now();
   await runTransaction(firestore, async transaction => {
     if (cpf) {
@@ -169,9 +173,9 @@ export const createPessoa = async ({ data, userId }, firestore = db) => {
       if (indexSnapshot.exists()) throw new Error('CPF_DUPLICADO');
       transaction.set(indexRef, { pessoaId: pessoaRef.id, criadoEm: now });
     }
-    transaction.set(pessoaRef, withPessoaSearchIndex({ ...data, cpf: cpf || null, ativo: true, criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId }));
+    transaction.set(pessoaRef, withPessoaSearchIndex({ ...normalizedData, ativo: true, criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId }));
   });
-  return { id: pessoaRef.id, ...withPessoaSearchIndex({ ...data, cpf: cpf || null, ativo: true }) };
+  return { id: pessoaRef.id, ...withPessoaSearchIndex({ ...normalizedData, ativo: true }) };
 };
 
 export const rebuildPessoaSearchIndex = async ({ pageSize = 200, cursor = null } = {}, firestore = db) => {
@@ -216,6 +220,10 @@ const linkUserToPessoa = async ({ uid, pessoaBaseId, role = null, executadoPor, 
     ]);
     if (!userSnapshot.exists()) throw new Error('USUARIO_NAO_ENCONTRADO');
     if (!personSnapshot.exists() || !isActiveMember(personSnapshot.data())) throw new Error('PESSOA_NAO_E_MEMBRO_ATIVO');
+    const memberEmail = normalizeEmail(personSnapshot.data().email);
+    const userEmail = normalizeEmail(userSnapshot.data().email);
+    if (!memberEmail) throw new Error('MEMBRO_SEM_EMAIL_ACESSO');
+    if (!userEmail || memberEmail !== userEmail) throw new Error('EMAIL_MEMBRO_DIVERGENTE');
     if (requirePending && userSnapshot.data().role !== 'pendente') throw new Error('USUARIO_NAO_PENDENTE');
     if (!requirePending && userSnapshot.data().role === 'pendente') throw new Error('USUARIO_PENDENTE');
     if (indexSnapshot.exists() && indexSnapshot.data().uid !== uid) throw new Error('PESSOA_JA_POSSUI_ACESSO');

@@ -3,11 +3,12 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
 import { getPessoaFuncoesCasa } from '../../utils/domain';
+import { getMemberFunctionLabels } from '../../utils/pessoaForm';
 import { ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
 
 const formatTimestamp = timestamp => timestamp?.toDate?.().toLocaleString('pt-BR') || 'Não disponível';
 
-export const UsuarioCard = ({ usuario, pessoa, currentUid, onAuthorize, onLink, onEditRole, onToggleStatus }) => {
+export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAuthorize, onLink, onEditRole, onToggleStatus }) => {
   const isOwnAccount = usuario.uid === currentUid;
   const isPending = usuario.role === ROLES.PENDENTE;
   return (
@@ -28,7 +29,7 @@ export const UsuarioCard = ({ usuario, pessoa, currentUid, onAuthorize, onLink, 
         <p><strong className="block uppercase text-gray-400">Criação</strong>{formatTimestamp(usuario.criadoEm)}</p>
         <p><strong className="block uppercase text-gray-400">Atualização</strong>{formatTimestamp(usuario.atualizadoEm)}</p>
       </div>
-      {pessoa ? <div className="mt-4 bg-emerald-50 p-3 rounded-xl text-xs"><strong className="text-emerald-800">Membro vinculado: {pessoa.nome}</strong><p className="text-gray-600 mt-1">Funções: {getPessoaFuncoesCasa(pessoa).join(', ') || 'Sem função cadastrada'}</p></div> : !isPending && <div className="mt-4 bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs font-bold text-amber-800">⚠ Cadastro de membro ainda não vinculado</div>}
+      {pessoa ? <div className="mt-4 bg-emerald-50 p-3 rounded-xl text-xs"><strong className="text-emerald-800">Membro vinculado: {pessoa.nome}</strong><p className="text-gray-600 mt-1">Funções: {getMemberFunctionLabels(getPessoaFuncoesCasa(pessoa), memberFunctions).join(', ') || 'Sem função cadastrada'}</p></div> : !isPending && <div className="mt-4 bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs font-bold text-amber-800">⚠ Cadastro de membro ainda não vinculado</div>}
       <div className="flex flex-col sm:flex-row gap-2 border-t border-gray-100 mt-4 pt-4">
         {isPending ? <Button onClick={() => onAuthorize(usuario)} className="flex-1">Autorizar acesso</Button> : <>
         {!usuario.pessoaBaseId && <Button variant="secondary" onClick={() => onLink(usuario)} className="flex-1">Vincular membro</Button>}

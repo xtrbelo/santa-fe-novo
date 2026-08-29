@@ -20,6 +20,9 @@ service cloud.firestore {
     function validUserPersonLink(appId, uid, pessoaId) {
       return pessoaId is string
         && isActiveMemberData(get(personPath(appId, pessoaId)).data)
+        && get(personPath(appId, pessoaId)).data.email is string
+        && get(personPath(appId, pessoaId)).data.email.size() > 0
+        && get(personPath(appId, pessoaId)).data.email == getAfter(arbitraryUserPath(appId, uid)).data.email
         && getAfter(userPersonIndexPath(appId, pessoaId)).data.uid == uid
         && getAfter(userPersonIndexPath(appId, pessoaId)).data.pessoaBaseId == pessoaId;
     }
@@ -93,6 +96,9 @@ service cloud.firestore {
       allow list: if isAdmin(appId);
       allow create: if isAuthenticated() && request.auth.uid == uid
         && request.resource.data.uid == request.auth.uid
+        && request.auth.token.get('email', '') is string
+        && request.auth.token.get('email', '').size() > 0
+        && request.resource.data.email == request.auth.token.email
         && request.resource.data.role == 'pendente'
         && request.resource.data.ativo == true
         && request.resource.data.keys().hasOnly(['uid', 'nome', 'email', 'role', 'ativo', 'criadoEm', 'atualizadoEm']);

@@ -1,24 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Search, UserCheck, UserPlus, X } from 'lucide-react';
-import { getRecentPessoas, searchPessoas } from '../../services/firebase';
+import { getAppCollection, getRecentPessoas, onSnapshot, searchPessoas } from '../../services/firebase';
 import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
 import { normalizeSearchDigits, normalizeSearchText } from '../../utils/pessoaSearch';
+import { getEffectiveMemberFunctions, getMemberFunctionLabels } from '../../utils/pessoaForm';
 import { Button } from '../ui/Button';
 
 const finalDigits = (value, size) => normalizeSearchDigits(value).slice(-size);
-const pessoaLabel = pessoa => {
+const pessoaLabel = (pessoa, effectiveFunctions) => {
   if (getPessoaVinculo(pessoa) !== 'membro') return 'Consulente';
   const functions = getPessoaFuncoesCasa(pessoa);
-  return `Membro${functions.length ? ` · ${functions.join(' / ')}` : ''}`;
+  return `Membro${functions.length ? ` · ${getMemberFunctionLabels(functions, effectiveFunctions).join(' / ')}` : ''}`;
 };
 
-const PessoaRow = ({ pessoa, active, onSelect }) => <button
+const PessoaRow = ({ pessoa, active, onSelect, effectiveFunctions }) => <button
   type="button"
   onClick={() => onSelect(pessoa)}
   className={`w-full text-left p-3 rounded-xl border transition-colors ${active ? 'border-purple-400 bg-purple-50' : 'border-gray-100 bg-white hover:bg-gray-50'}`}
 >
   <strong className="block text-sm text-gray-900">{pessoa.nome}</strong>
-  <span className="block text-[11px] font-bold text-purple-700 mt-0.5">{pessoaLabel(pessoa)}</span>
+  <span className="block text-xs text-gray-600">{pessoa.email || 'E-mail não cadastrado'}</span>
+  <span className="block text-[11px] font-bold text-purple-700 mt-0.5">{pessoaLabel(pessoa, effectiveFunctions)}</span>
   <span className="block text-[11px] text-gray-500 mt-1">
     {pessoa.cpf ? `CPF final ${finalDigits(pessoa.cpf, 2)}` : 'CPF não informado'}
     {pessoa.contato || pessoa.telefone ? ` · Telefone final ${finalDigits(pessoa.contato || pessoa.telefone, 4)}` : ''}
@@ -31,6 +33,7 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
   const [recent, setRecent] = useState([]);
   const [state, setState] = useState('initial');
   const [highlighted, setHighlighted] = useState(0);
+  const [configuredFunctions, setConfiguredFunctions] = useState([]);
   const requestId = useRef(0);
 
   useEffect(() => {
@@ -38,6 +41,8 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
     getRecentPessoas().then(items => { if (mounted) setRecent(allowedVinculos ? items.filter(item => allowedVinculos.includes(getPessoaVinculo(item))) : items); }).catch(() => {});
     return () => { mounted = false; };
   }, [allowedVinculos]);
+
+  useEffect(() => onSnapshot(getAppCollection('config_funcoes_membro'), snapshot => setConfiguredFunctions(snapshot.docs.map(item => ({ id: item.id, ...item.data() })))), []);
 
   useEffect(() => {
     if (value) return undefined;
@@ -74,12 +79,14 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
     if (event.key === 'Enter') { event.preventDefault(); select(results[highlighted]); }
     if (event.key === 'Escape') { event.preventDefault(); requestId.current += 1; setResults([]); setState('initial'); }
   };
+  const effectiveFunctions = getEffectiveMemberFunctions(configuredFunctions);
 
   if (value) return <div className="space-y-4">
     <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200">
       <div className="flex items-center gap-2 text-emerald-700 font-black text-xs uppercase"><UserCheck size={17}/> Pessoa selecionada</div>
       <strong className="block mt-2 text-gray-900">{value.nome}</strong>
-      <span className="block text-xs font-bold text-emerald-800">{pessoaLabel(value)}</span>
+      <span className="block text-xs text-gray-600">{value.email || 'E-mail não cadastrado'}</span>
+      <span className="block text-xs font-bold text-emerald-800">{pessoaLabel(value, effectiveFunctions)}</span>
       <span className="block text-xs text-gray-600 mt-1">CPF final {finalDigits(value.cpf, 2) || '--'} · Telefone final {finalDigits(value.contato || value.telefone, 4) || '----'}</span>
       <button type="button" onClick={clear} className="mt-3 text-xs font-black text-purple-700 flex items-center gap-1"><X size={14}/> Trocar pessoa</button>
     </div>
@@ -97,8 +104,8 @@ export const PessoaSearchSelector = ({ value, onChange, onContinue, onCreateNew,
     {state === 'searching' && <p className="text-xs text-gray-500">Buscando pessoa...</p>}
     {state === 'empty' && <p className="text-xs text-gray-500">Nenhuma pessoa encontrada.</p>}
     {state === 'error' && <p className="text-xs text-red-600">Não foi possível realizar a busca.</p>}
-    {!term.trim() && recent.length > 0 && <div className="space-y-2"><p className="text-[10px] font-black uppercase text-gray-400">Pessoas recentes</p>{recent.map((pessoa, index) => <PessoaRow key={pessoa.id} pessoa={pessoa} active={index === highlighted} onSelect={select}/>)}</div>}
-    {results.length > 0 && <div role="listbox" className="space-y-2 max-h-72 overflow-y-auto overscroll-contain">{results.map((pessoa, index) => <PessoaRow key={pessoa.id} pessoa={pessoa} active={index === highlighted} onSelect={select}/>)}</div>}
+    {!term.trim() && recent.length > 0 && <div className="space-y-2"><p className="text-[10px] font-black uppercase text-gray-400">Pessoas recentes</p>{recent.map((pessoa, index) => <PessoaRow key={pessoa.id} pessoa={pessoa} active={index === highlighted} onSelect={select} effectiveFunctions={effectiveFunctions}/>)}</div>}
+    {results.length > 0 && <div role="listbox" className="space-y-2 max-h-72 overflow-y-auto overscroll-contain">{results.map((pessoa, index) => <PessoaRow key={pessoa.id} pessoa={pessoa} active={index === highlighted} onSelect={select} effectiveFunctions={effectiveFunctions}/>)}</div>}
     {onCreateNew && <button type="button" onClick={() => onCreateNew(term)} className="w-full py-3 text-sm font-black text-purple-700 border border-dashed border-purple-300 rounded-xl flex items-center justify-center gap-2"><UserPlus size={17}/> Cadastrar nova pessoa</button>}
   </div>;
 };

@@ -8,6 +8,7 @@ import { MobileNav } from './components/layout/MobileNav';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { AccessScreen } from './components/auth/AccessScreen';
 import { getAuthErrorMessage, normalizeAuthEmail, usesPasswordProvider, validateRegistration } from './utils/auth';
+import { normalizeEmail } from './utils/pessoaForm';
 import { HomeModule } from './modules/Home/HomeModule';
 import { AgendasModule } from './modules/Agendas/AgendasModule';
 import { FluxoModule } from './modules/Fluxo/FluxoModule';
@@ -43,7 +44,7 @@ function AppContent() {
         const snap = await getDoc(ref);
         if (!snap.exists()) {
           const now = Timestamp.now();
-          await setDoc(ref, { uid: authenticatedUser.uid, nome: authenticatedUser.displayName || pendingRegistrationName.current || '', email: authenticatedUser.email || '', role: ROLES.PENDENTE, ativo: true, criadoEm: now, atualizadoEm: now });
+          await setDoc(ref, { uid: authenticatedUser.uid, nome: authenticatedUser.displayName || pendingRegistrationName.current || '', email: normalizeEmail(authenticatedUser.email), role: ROLES.PENDENTE, ativo: true, criadoEm: now, atualizadoEm: now });
           pendingRegistrationName.current = '';
         }
         unsubscribeProfile = onSnapshot(ref, profileSnapshot => {

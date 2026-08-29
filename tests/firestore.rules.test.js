@@ -30,7 +30,9 @@ async function seed() {
     await Promise.all(users.map(([uid, role, ativo]) => setDoc(ref(db, paths.user(uid)), { uid, nome: uid, email: `${uid}@example.test`, role, ativo, ...(role !== 'pendente' ? { pessoaBaseId: `membro-${uid}` } : {}), criadoEm: new Date(), atualizadoEm: new Date() })));
     await Promise.all([
       setDoc(ref(db, paths.people), { nome: 'Pessoa', vinculo: 'consulente', tipoPessoa: 'Consulente', funcoesCasa: [], ativo: true }),
-      setDoc(ref(db, `${root}/pessoas/membro-autorizacao`), { nome: 'Membro Autorização', vinculo: 'membro', ativo: true }),
+      setDoc(ref(db, `${root}/pessoas/membro-autorizacao`), { nome: 'Membro Autorização', email: 'pendente@example.test', vinculo: 'membro', ativo: true }),
+      setDoc(ref(db, `${root}/pessoas/membro-email-divergente`), { nome: 'Outro Membro', email: 'outro@example.test', vinculo: 'membro', ativo: true }),
+      setDoc(ref(db, `${root}/pessoas/membro-sem-email`), { nome: 'Sem E-mail', vinculo: 'membro', ativo: true }),
       setDoc(ref(db, `${root}/pessoas/consulente-acesso`), { nome: 'Consulente', vinculo: 'consulente', ativo: true }),
       setDoc(ref(db, `${root}/pessoas/membro-inativo`), { nome: 'Membro Inativo', vinculo: 'membro', ativo: false }),
       setDoc(ref(db, paths.agendas), { tipo: 'Agenda', status: 'Aberta', vagasOcupadas: {}, ativo: true }),
@@ -84,7 +86,7 @@ describe('B2. verificação de e-mail', () => {
   });
 
   test('pendente não verificado cria e lê o próprio perfil, sem acessar dados ou terceiros', async () => {
-    const db = authDb('novo-nao-verificado', { email_verified: false });
+    const db = authDb('novo-nao-verificado', { email: 'novo@santafe.local', email_verified: false });
     const profile = { uid: 'novo-nao-verificado', nome: 'Novo', email: 'novo@santafe.local', role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() };
     await assertSucceeds(setDoc(ref(db, paths.user('novo-nao-verificado')), profile));
     await assertSucceeds(getDoc(ref(db, paths.user('novo-nao-verificado'))));
@@ -117,6 +119,22 @@ describe('D. admin', () => {
       batch.set(ref(db, `${root}/usuario_pessoa_index/${pessoaBaseId}`), { pessoaBaseId, uid: 'pendente', criadoEm: new Date(), criadoPor: 'admin-a' });
       await assertFails(batch.commit());
     }
+  });
+  test('recusa vínculo quando e-mail diverge ou o membro não possui e-mail', async () => {
+    for (const pessoaBaseId of ['membro-email-divergente', 'membro-sem-email']) {
+      const db = authDb('admin-a'); const batch = writeBatch(db);
+      batch.update(ref(db, paths.user('pendente')), { role: 'atendimento', pessoaBaseId, atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+      batch.set(ref(db, `${root}/usuario_pessoa_index/${pessoaBaseId}`), { pessoaBaseId, uid: 'pendente', criadoEm: new Date(), criadoPor: 'admin-a' });
+      batch.set(ref(db, `${root}/auditoria/usuario_acesso_pendente_${pessoaBaseId}`), { tipo: 'USUARIO_AUTORIZADO', alvoUid: 'pendente', pessoaBaseId, role: 'atendimento', executadoPor: 'admin-a', criadoEm: new Date() });
+      await assertFails(batch.commit());
+    }
+  });
+  test('vínculo não pode modificar o e-mail do usuário para forçar correspondência', async () => {
+    const db = authDb('admin-a'); const pessoaBaseId = 'membro-email-divergente'; const batch = writeBatch(db);
+    batch.update(ref(db, paths.user('pendente')), { email: 'outro@example.test', role: 'atendimento', pessoaBaseId, atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/usuario_pessoa_index/${pessoaBaseId}`), { pessoaBaseId, uid: 'pendente', criadoEm: new Date(), criadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/auditoria/usuario_acesso_pendente_${pessoaBaseId}`), { tipo: 'USUARIO_AUTORIZADO', alvoUid: 'pendente', pessoaBaseId, role: 'atendimento', executadoPor: 'admin-a', criadoEm: new Date() });
+    await assertFails(batch.commit());
   });
   test('pode reconstruir somente o índice de busca de pessoas', async () => {
     await assertSucceeds(updateDoc(ref(authDb('admin-a'), paths.people), { busca: { versao: 1, nome: 'pessoa teste', telefone: '', termos: ['pe'] } }));
@@ -211,12 +229,15 @@ describe('F. atendimento', () => {
 
 describe('G. criação do próprio perfil', () => {
   const validProfile = uid => ({ uid, nome: 'Novo', email: `${uid}@example.test`, role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() });
-  test('aceita somente o perfil pendente válido', async () => assertSucceeds(setDoc(ref(authDb('novo'), paths.user('novo')), validProfile('novo'))));
-  test('recusa role admin', async () => assertFails(setDoc(ref(authDb('novo'), paths.user('novo')), { ...validProfile('novo'), role: 'admin' })));
-  test('recusa role gestor', async () => assertFails(setDoc(ref(authDb('novo'), paths.user('novo')), { ...validProfile('novo'), role: 'gestor' })));
-  test('recusa usuário inativo', async () => assertFails(setDoc(ref(authDb('novo'), paths.user('novo')), { ...validProfile('novo'), ativo: false })));
-  test('recusa UID diferente', async () => assertFails(setDoc(ref(authDb('novo'), paths.user('novo')), validProfile('outro'))));
-  test('recusa campos não permitidos', async () => assertFails(setDoc(ref(authDb('novo'), paths.user('novo')), { ...validProfile('novo'), roleAdmin: true })));
+  test('aceita somente o perfil pendente válido', async () => assertSucceeds(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), validProfile('novo'))));
+  test('aceita e-mail do Firestore igual ao e-mail do token Auth', async () => assertSucceeds(setDoc(ref(authDb('novo-email', { email: 'novo-email@example.test' }), paths.user('novo-email')), validProfile('novo-email'))));
+  test('recusa e-mail do Firestore diferente do token Auth', async () => assertFails(setDoc(ref(authDb('email-falso', { email: 'real@example.test' }), paths.user('email-falso')), { ...validProfile('email-falso'), email: 'falso@example.test' })));
+  test('recusa token autenticado sem e-mail', async () => assertFails(setDoc(ref(authDb('sem-email'), paths.user('sem-email')), validProfile('sem-email'))));
+  test('recusa role admin', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), role: 'admin' })));
+  test('recusa role gestor', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), role: 'gestor' })));
+  test('recusa usuário inativo', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), ativo: false })));
+  test('recusa UID diferente', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('outro'), email: 'novo@example.test' })));
+  test('recusa campos não permitidos', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), roleAdmin: true })));
 });
 
 describe('H. auditoria', () => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, getAppCollection, getAppDoc, onSnapshot, rebuildPessoaSearchIndex, Timestamp, updateDoc } from '../../services/firebase';
 import { getPublicosPermitidosTrabalho, servicoControlaVagas } from '../../utils/domain';
+import { getEffectiveMemberFunctions } from '../../utils/pessoaForm';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
@@ -8,7 +9,6 @@ import { useToast } from '../../components/ui/useToast';
 import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
-const initialFunctions = [{ id: 'medium', nome: 'Médium' }, { id: 'cambone', nome: 'Cambone' }];
 
 export const ConfiguracoesModule = ({ user, profile }) => {
   const [funcoes, setFuncoes] = useState([]);
@@ -25,7 +25,7 @@ export const ConfiguracoesModule = ({ user, profile }) => {
   useEffect(() => {
     if (!user) return undefined;
     const unsubs = [
-      onSnapshot(getAppCollection('config_funcoes_membro'), snap => setFuncoes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false))),
+      onSnapshot(getAppCollection('config_funcoes_membro'), snap => setFuncoes(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(getAppCollection('config_eventos'), snap => setTrabalhos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false))),
       onSnapshot(getAppCollection('config_servicos'), snap => setServicos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false)))
     ];
@@ -81,7 +81,7 @@ export const ConfiguracoesModule = ({ user, profile }) => {
     }
   };
 
-  const effectiveFunctions = funcoes.length ? funcoes : initialFunctions;
+  const effectiveFunctions = getEffectiveMemberFunctions(funcoes);
   return <div className="space-y-6 pb-10">
     <header><h2 className="text-3xl font-black uppercase italic">Configurações</h2><p className="text-sm text-gray-500">Modelo operacional da Casa</p></header>
     <Card className="space-y-4"><h3 className="font-black uppercase text-purple-700 flex gap-2"><Users size={18}/> 1. Vínculos e Funções da Casa</h3>
