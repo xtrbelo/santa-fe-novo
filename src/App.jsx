@@ -7,6 +7,8 @@ import { Sidebar } from './components/layout/Sidebar';
 import { MobileNav } from './components/layout/MobileNav';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { AccessScreen } from './components/auth/AccessScreen';
+import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
+import { useInactivityTimeout } from './hooks/useInactivityTimeout';
 import { getAuthErrorMessage, normalizeAuthEmail, usesPasswordProvider, validateRegistration } from './utils/auth';
 import { normalizeEmail } from './utils/pessoaForm';
 import { HomeModule } from './modules/Home/HomeModule';
@@ -30,6 +32,17 @@ function AppContent() {
   const pendingRegistrationName = useRef('');
   const toast = useToast();
   const toastError = toast.error;
+
+  const handleInactivityExpiration = async () => {
+    if (!auth) return;
+    try { await signOut(auth); }
+    catch (error) { console.error(error); }
+    finally { toast.info('Sua sessão foi encerrada por inatividade. Faça login novamente.', 7000); }
+  };
+  const { clearActivity, continueSession, isWarning, remainingMs } = useInactivityTimeout({
+    userId: user?.uid,
+    onExpire: handleInactivityExpiration,
+  });
 
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) { setLoading(false); return undefined; }
@@ -123,6 +136,7 @@ function AppContent() {
   };
   const handleSignOut = async () => {
     if (!auth) return;
+    clearActivity();
     try { await signOut(auth); toast.info('Você saiu do sistema.'); }
     catch (error) { console.error(error); toast.error('Erro ao sair.'); }
   };
@@ -137,11 +151,13 @@ function AppContent() {
     finally { setIsCheckingAccess(false); }
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
+  const withSessionTimeout = content => <>{content}<SessionTimeoutModal isOpen={isWarning} remainingMs={remainingMs} onContinue={continueSession} /></>;
+
+  if (loading) return user ? withSessionTimeout(<div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>) : <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
   if (!user) return <LoginScreen onEmailLogin={handleEmailLogin} onGoogleLogin={handleGoogleLogin} onRegister={handleRegister} onResetPassword={handleResetPassword} busy={isLoggingIn} />;
-  if (usesPasswordProvider(user) && !user.emailVerified) return <AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />;
-  if (profile?.ativo === false) return <AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />;
-  if (!profile || profile.role === ROLES.PENDENTE) return <AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />;
+  if (usesPasswordProvider(user) && !user.emailVerified) return withSessionTimeout(<AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />);
+  if (profile?.ativo === false) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />);
+  if (!profile || profile.role === ROLES.PENDENTE) return withSessionTimeout(<AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />);
 
   const allowedTabs = ROLE_TABS[profile.role] || [];
   const selectTab = nextTab => setTab(allowedTabs.includes(nextTab) ? nextTab : 'home');
@@ -155,7 +171,7 @@ function AppContent() {
     if (tab === 'config') return <ConfiguracoesModule user={user} profile={profile} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;
   };
-  return <div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} allowedTabs={allowedTabs} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} allowedTabs={allowedTabs} /></div>;
+  return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} allowedTabs={allowedTabs} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} allowedTabs={allowedTabs} /></div>);
 }
 
 export default function App() { return <ToastProvider><AppContent /></ToastProvider>; }
