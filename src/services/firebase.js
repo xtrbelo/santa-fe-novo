@@ -1,10 +1,16 @@
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
+  connectAuthEmulator,
+  createUserWithEmailAndPassword,
   GoogleAuthProvider, 
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup, 
   signOut, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  updateProfile
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -60,8 +66,14 @@ if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
+  const useAllFirebaseEmulators = import.meta.env?.DEV === true
+    && getEnv('VITE_USE_FIREBASE_EMULATORS', 'false') === 'true';
   const useFirestoreEmulator = import.meta.env?.DEV === true
-    && getEnv('VITE_USE_FIRESTORE_EMULATOR', 'false') === 'true';
+    && (useAllFirebaseEmulators || getEnv('VITE_USE_FIRESTORE_EMULATOR', 'false') === 'true');
+  if (useAllFirebaseEmulators && !globalThis.__santaFeAuthEmulatorConnected) {
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    globalThis.__santaFeAuthEmulatorConnected = true;
+  }
   if (useFirestoreEmulator && !globalThis.__santaFeFirestoreEmulatorConnected) {
     connectFirestoreEmulator(db, '127.0.0.1', 8080);
     globalThis.__santaFeFirestoreEmulatorConnected = true;
@@ -604,10 +616,15 @@ export const excluirAgendaVazia = async ({ agendaId, userId }, firestore = db) =
 };
 
 export {
+  createUserWithEmailAndPassword,
   GoogleAuthProvider,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   onAuthStateChanged,
+  updateProfile,
   collection,
   doc,
   addDoc,

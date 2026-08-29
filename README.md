@@ -5,7 +5,7 @@ Aplicação interna para cadastro de consulentes e membros, configuração de tr
 ## Desenvolvimento
 
 1. Copie `.env.example` para `.env.local` e configure o projeto Firebase.
-2. Ative o provedor Google no Firebase Authentication.
+2. Em produção, ative os provedores Google e E-mail/senha no Firebase Authentication. Para desenvolvimento, use o Auth Emulator conforme `docs/DEVELOPMENT.md`.
 3. Execute `npm install` e `npm run dev`.
 
 Validações: `npm run lint` e `npm run build`.
@@ -16,7 +16,7 @@ Para validar manualmente operações sem tocar no Firestore real, siga o ambient
 
 ## Segurança
 
-O acesso exige conta Google e perfil ativo em `artifacts/{appId}/public/data/usuarios/{uid}`. Novos usuários recebem `role: "pendente"`. Consulte `docs/SECURITY.md` antes de publicar as regras e prepare o primeiro administrador.
+O acesso aceita Google ou e-mail/senha e exige perfil ativo em `artifacts/{appId}/public/data/usuarios/{uid}`. Novos usuários recebem `role: "pendente"`; contas por senha também precisam confirmar o e-mail. Consulte `docs/SECURITY.md` antes de publicar as regras e prepare o primeiro administrador.
 
 Depois que o primeiro administrador é configurado manualmente, o módulo **Usuários** permite liberar, promover, ativar e desativar outras contas sem usar o Firebase Console.
 

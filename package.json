@@ -5,16 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "emulator": "firebase emulators:start --only firestore --project santa-fe-v2",
+    "emulator": "firebase emulators:start --only auth,firestore --project santa-fe-v2",
     "seed:emulator": "node scripts/seed-emulator.js",
     "validate:emulator": "node scripts/validate-phase6-emulator.js",
     "build": "vite build",
     "lint": "eslint .",
-    "test:helpers": "node --test tests/pessoaSearch.test.js tests/permissions.test.js",
+    "test:helpers": "node --test tests/pessoaSearch.test.js tests/permissions.test.js tests/auth.test.js",
+    "test:auth": "firebase emulators:exec --config firebase.json --only auth --project santa-fe-auth-test \"node --test tests/auth.emulator.test.js\"",
     "test:rules": "firebase emulators:exec --config firebase.test.json --only firestore --project santa-fe-rules-test \"node --test tests/firestore.rules.test.js\"",
     "test:business": "firebase emulators:exec --config firebase.test.json --only firestore --project santa-fe-business-test \"node --test tests/firestore.business.test.js\"",
     "test": "npm run test:rules && npm run test:business",
-    "test:all": "npm run test:helpers && npm run test:rules && npm run test:business",
+    "test:all": "npm run test:helpers && npm run test:auth && npm run test:rules && npm run test:business",
     "preview": "vite preview"
   },
   "dependencies": {

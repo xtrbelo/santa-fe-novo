@@ -1,19 +1,20 @@
-import React, { useEffect, useState } from 'react';
-import { auth, onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, setDoc, onSnapshot, Timestamp } from './services/firebase';
+import React, { useEffect, useRef, useState } from 'react';
+import { auth, createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, setDoc, onSnapshot, Timestamp } from './services/firebase';
 import { ROLES, ROLE_TABS } from './constants/roles';
 import { ToastProvider } from './components/ui/Toast';
 import { useToast } from './components/ui/useToast';
 import { Sidebar } from './components/layout/Sidebar';
 import { MobileNav } from './components/layout/MobileNav';
-import { Card } from './components/ui/Card';
-import { Button } from './components/ui/Button';
+import { LoginScreen } from './components/auth/LoginScreen';
+import { AccessScreen } from './components/auth/AccessScreen';
+import { getAuthErrorMessage, normalizeAuthEmail, usesPasswordProvider, validateRegistration } from './utils/auth';
 import { HomeModule } from './modules/Home/HomeModule';
 import { AgendasModule } from './modules/Agendas/AgendasModule';
 import { FluxoModule } from './modules/Fluxo/FluxoModule';
 import { PessoasModule } from './modules/Pessoas/PessoasModule';
 import { ConfiguracoesModule } from './modules/Configuracoes/ConfiguracoesModule';
 import { UsuariosModule } from './modules/Usuarios/UsuariosModule';
-import { Clock3, LayoutDashboard, LogIn, ShieldOff } from 'lucide-react';
+import { Clock3, MailCheck, ShieldOff } from 'lucide-react';
 
 function AppContent() {
   const [user, setUser] = useState(null);
@@ -23,6 +24,9 @@ function AppContent() {
   const [usersFilter, setUsersFilter] = useState('todos');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
+  const [verificationCooldownUntil, setVerificationCooldownUntil] = useState(0);
+  const [, setVerificationVersion] = useState(0);
+  const pendingRegistrationName = useRef('');
   const toast = useToast();
   const toastError = toast.error;
 
@@ -39,7 +43,8 @@ function AppContent() {
         const snap = await getDoc(ref);
         if (!snap.exists()) {
           const now = Timestamp.now();
-          await setDoc(ref, { uid: authenticatedUser.uid, nome: authenticatedUser.displayName || '', email: authenticatedUser.email || '', role: ROLES.PENDENTE, ativo: true, criadoEm: now, atualizadoEm: now });
+          await setDoc(ref, { uid: authenticatedUser.uid, nome: authenticatedUser.displayName || pendingRegistrationName.current || '', email: authenticatedUser.email || '', role: ROLES.PENDENTE, ativo: true, criadoEm: now, atualizadoEm: now });
+          pendingRegistrationName.current = '';
         }
         unsubscribeProfile = onSnapshot(ref, profileSnapshot => {
           setProfile(profileSnapshot.exists() ? { id: profileSnapshot.id, ...profileSnapshot.data() } : null);
@@ -50,12 +55,65 @@ function AppContent() {
     return () => { unsubscribeAuth(); unsubscribeProfile(); };
   }, [toastError]);
 
+  useEffect(() => {
+    if (!verificationCooldownUntil) return undefined;
+    const remaining = verificationCooldownUntil - Date.now();
+    if (remaining <= 0) { setVerificationCooldownUntil(0); return undefined; }
+    const timer = setTimeout(() => setVerificationCooldownUntil(0), remaining);
+    return () => clearTimeout(timer);
+  }, [verificationCooldownUntil]);
+
   const handleGoogleLogin = async () => {
     if (!auth) return;
     setIsLoggingIn(true);
     try { await signInWithPopup(auth, new GoogleAuthProvider()); toast.success('Login realizado com sucesso!'); }
-    catch (error) { console.error(error); toast.error('Não foi possível autenticar com o Google.'); }
+    catch (error) { console.error(error); toast.error(getAuthErrorMessage(error)); }
     finally { setIsLoggingIn(false); }
+  };
+  const handleEmailLogin = async ({ email, senha }) => {
+    if (!auth) return;
+    setIsLoggingIn(true);
+    try { await signInWithEmailAndPassword(auth, normalizeAuthEmail(email), senha); toast.success('Login realizado com sucesso!'); }
+    catch (error) { console.error(error); toast.error(getAuthErrorMessage(error)); }
+    finally { setIsLoggingIn(false); }
+  };
+  const handleRegister = async form => {
+    if (!auth) return;
+    const validationError = validateRegistration(form);
+    if (validationError) { toast.error(validationError); return; }
+    setIsLoggingIn(true);
+    pendingRegistrationName.current = form.nome.trim();
+    try {
+      const credential = await createUserWithEmailAndPassword(auth, normalizeAuthEmail(form.email), form.senha);
+      await updateProfile(credential.user, { displayName: form.nome.trim() });
+      await sendEmailVerification(credential.user);
+      setVerificationCooldownUntil(Date.now() + 60000);
+      toast.success('Solicitação enviada. Enviamos uma mensagem de confirmação para seu e-mail.');
+    } catch (error) { pendingRegistrationName.current = ''; console.error(error); toast.error(getAuthErrorMessage(error)); }
+    finally { setIsLoggingIn(false); }
+  };
+  const handleResetPassword = async email => {
+    const normalizedEmail = normalizeAuthEmail(email);
+    if (!normalizedEmail) { toast.info('Informe seu e-mail no campo acima.'); return; }
+    setIsLoggingIn(true);
+    try { await sendPasswordResetEmail(auth, normalizedEmail); }
+    catch (error) { if (error?.code === 'auth/invalid-email') toast.error(getAuthErrorMessage(error)); else if (error?.code === 'auth/network-request-failed') toast.error(getAuthErrorMessage(error)); }
+    finally {
+      toast.info('Se houver uma conta compatível com este e-mail, você receberá as instruções para redefinir sua senha.');
+      setIsLoggingIn(false);
+    }
+  };
+  const resendVerification = async () => {
+    if (!user || Date.now() < verificationCooldownUntil) return;
+    try { await sendEmailVerification(user); setVerificationCooldownUntil(Date.now() + 60000); toast.success('E-mail de confirmação reenviado. Aguarde alguns instantes.'); }
+    catch (error) { console.error(error); toast.error(getAuthErrorMessage(error)); }
+  };
+  const refreshVerification = async () => {
+    if (!user) return;
+    setIsCheckingAccess(true);
+    try { await user.reload(); setVerificationVersion(value => value + 1); toast.info(user.emailVerified ? 'E-mail confirmado.' : 'A confirmação ainda não foi identificada.'); }
+    catch (error) { console.error(error); toast.error('Não foi possível atualizar a verificação.'); }
+    finally { setIsCheckingAccess(false); }
   };
   const handleSignOut = async () => {
     if (!auth) return;
@@ -74,9 +132,10 @@ function AppContent() {
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
-  if (!user) return <div className="min-h-screen bg-gray-100/70 flex items-center justify-center p-4"><Card className="max-w-md w-full p-8 sm:p-10 text-center space-y-8 shadow-2xl !border-none"><div className="w-20 h-20 bg-indigo-600 rounded-[28px] mx-auto flex items-center justify-center text-white rotate-6 shadow-xl"><LayoutDashboard size={40} /></div><div><h1 className="text-3xl font-black text-gray-900 italic uppercase">Santa Fé</h1><p className="text-gray-400 font-bold text-[11px] uppercase mt-3">Sistema de Gestão Interna</p></div><Button onClick={handleGoogleLogin} disabled={isLoggingIn} className="w-full py-4 rounded-2xl"><LogIn size={20} /> {isLoggingIn ? 'Entrando...' : 'Entrar com Google'}</Button></Card></div>;
+  if (!user) return <LoginScreen onEmailLogin={handleEmailLogin} onGoogleLogin={handleGoogleLogin} onRegister={handleRegister} onResetPassword={handleResetPassword} busy={isLoggingIn} />;
+  if (usesPasswordProvider(user) && !user.emailVerified) return <AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />;
   if (profile?.ativo === false) return <AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />;
-  if (!profile || profile.role === ROLES.PENDENTE) return <AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Acesso aguardando liberação" description="Um administrador precisa definir seu perfil antes do primeiro acesso." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />;
+  if (!profile || profile.role === ROLES.PENDENTE) return <AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />;
 
   const allowedTabs = ROLE_TABS[profile.role] || [];
   const selectTab = nextTab => setTab(allowedTabs.includes(nextTab) ? nextTab : 'home');
@@ -92,7 +151,5 @@ function AppContent() {
   };
   return <div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} allowedTabs={allowedTabs} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} allowedTabs={allowedTabs} /></div>;
 }
-
-const AccessScreen = ({ icon, iconClass, title, description, user, profile, onSignOut, onVerify, checking }) => <div className="min-h-screen bg-gray-100/70 flex items-center justify-center p-4"><Card className="max-w-lg w-full p-8 text-center space-y-6 shadow-xl !border-none"><div className={iconClass}>{icon}</div><div><h1 className="text-xl font-black text-gray-900">{title}</h1><p className="text-gray-500 text-sm mt-2">{description}</p></div><div className="bg-gray-50 rounded-xl p-4 text-left text-sm break-all"><p><strong>Nome:</strong> {profile?.nome || user.displayName || 'Não informado'}</p><p><strong>E-mail:</strong> {profile?.email || user.email || 'Não informado'}</p><p><strong>UID:</strong> {user.uid}</p></div>{onVerify && <Button onClick={onVerify} disabled={checking} className="w-full">{checking ? 'Verificando...' : 'Verificar liberação'}</Button>}<Button onClick={onSignOut} variant="secondary" className="w-full">Sair</Button></Card></div>;
 
 export default function App() { return <ToastProvider><AppContent /></ToastProvider>; }
