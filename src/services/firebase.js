@@ -203,7 +203,17 @@ export const createMemberInvite = async ({ nome, cpf, email, userId, origin }, f
   await runTransaction(firestore, async transaction => {
     const [personIndex, inviteIndex] = await Promise.all([transaction.get(personIndexRef), transaction.get(inviteIndexRef)]);
     if (personIndex.exists()) throw new Error('CPF_DUPLICADO');
-    if (inviteIndex.exists()) throw new Error('CONVITE_ATIVO_JA_EXISTE');
+    if (inviteIndex.exists()) {
+      const indexedInviteId = inviteIndex.data().inviteId;
+      if (typeof indexedInviteId !== 'string' || !indexedInviteId) throw new Error('INDICE_CONVITE_INVALIDO');
+      const indexedInvite = await transaction.get(getDataDoc(firestore, 'convites_membro', indexedInviteId));
+      if (!indexedInvite.exists()) throw new Error('INDICE_CONVITE_INVALIDO');
+      const indexedInviteData = indexedInvite.data();
+      if (indexedInviteData.cpf !== cleanCpf || indexedInviteData.status !== 'ativo' || !(indexedInviteData.expiraEm instanceof Timestamp)) {
+        throw new Error('INDICE_CONVITE_INVALIDO');
+      }
+      if (indexedInviteData.expiraEm.toMillis() > now.toMillis()) throw new Error('CONVITE_ATIVO_JA_EXISTE');
+    }
     transaction.set(conviteRef, convite);
     transaction.set(inviteIndexRef, { inviteId: credentials.id, criadoEm: now, criadoPor: userId });
   });
