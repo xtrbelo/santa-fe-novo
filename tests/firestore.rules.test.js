@@ -280,6 +280,22 @@ describe('C3. autocadastro público de Membro', () => {
     await assertFails(deleteDoc(ref(anonymousDb(), registrationPath(inviteId))));
   });
 
+  test('decisão isolada e entidades relacionadas incompletas são negadas', async () => {
+    await environment.withSecurityRulesDisabled(async context => {
+      const db = context.firestore();
+      await setDoc(ref(db, invitePath(inviteId)), inviteData('admin-a', { status: 'respondido', respondidoEm: new Date() }));
+      await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' });
+      await setDoc(ref(db, registrationPath(inviteId)), { ...registrationData(inviteId), enviadoEm: new Date(), atualizadoEm: new Date() });
+    });
+    for (const uid of ['admin-a', 'gestor', 'atendimento']) {
+      await assertFails(updateDoc(ref(authDb(uid), registrationPath(inviteId)), { statusCadastro: 'aprovado', pessoaId: 'isolada', analisadoPor: uid, analisadoEm: new Date(), atualizadoEm: new Date() }));
+    }
+    await assertFails(updateDoc(ref(anonymousDb(), registrationPath(inviteId)), { statusCadastro: 'rejeitado', motivoRejeicao: 'fraude' }));
+    await assertFails(setDoc(ref(authDb('admin-a'), `${root}/pessoas/isolada`), canonicalMember({ cpf: '52998224725', funcoesCasa: [], origemCadastro: 'autocadastro', criadoPor: 'admin-a', atualizadoPor: 'admin-a' })));
+    await assertFails(setDoc(ref(authDb('admin-a'), `${root}/cpf_index/52998224725`), { pessoaId: 'isolada', criadoEm: new Date() }));
+    await assertFails(setDoc(ref(authDb('admin-a'), `${root}/auditoria/autocadastro_aprovado_${inviteId}`), { tipo: 'AUTOCADASTRO_MEMBRO_APROVADO', inviteId, autocadastroId: inviteId, pessoaId: 'isolada', executadoPor: 'admin-a', executadoEm: new Date() }));
+  });
+
   test('convite expirado, revogado ou respondido não aceita envio', async () => {
     for (const overrides of [{ expiraEm: new Date(Date.now() - 1000) }, { status: 'revogado' }, { status: 'respondido', respondidoEm: new Date() }]) {
       await seedInvite(overrides);

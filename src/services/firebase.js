@@ -40,6 +40,7 @@ import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PES
 import { buildPessoaPayload, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
 import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteEffectiveStatus, getMemberInviteExpiration, hashMemberInviteToken, isValidMemberInviteToken } from '../utils/memberInvite.js';
 import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPayload } from '../utils/memberSelfRegistration.js';
+import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelfRegistrationApproval, validateSelfRegistrationRejection } from '../utils/memberSelfRegistrationReview.js';
 import { validateCPF } from '../utils/formatters.js';
 
 const hasViteEnv = typeof import.meta.env === 'object';
@@ -292,6 +293,69 @@ export const submitMemberSelfRegistration = async ({ inviteId, data }, firestore
   batch.set(registrationRef, { ...payload, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
   batch.update(inviteRef, { status: 'respondido', respondidoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
   await batch.commit();
+};
+
+const validateRegistrationOrigin = ({ registration, inviteId, invite, inviteIndex }) => {
+  if (registration.inviteId !== inviteId || invite.cpf !== registration.cpf || invite.nome !== registration.nome) throw new Error('AUTOCADASTRO_INCONSISTENTE');
+  if (invite.status !== 'respondido') throw new Error('CONVITE_INCOMPATIVEL');
+  if (!inviteIndex || inviteIndex.inviteId !== inviteId) throw new Error('INDICE_CONVITE_INVALIDO');
+};
+
+export const approveMemberSelfRegistration = async ({ inviteId, userId }, firestore = db) => {
+  const registrationRef = getDataDoc(firestore, 'autocadastros_membro', inviteId);
+  const inviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
+  const pessoaRef = doc(getDataCollection(firestore, 'pessoas'));
+  const auditRef = getDataDoc(firestore, 'auditoria', `autocadastro_aprovado_${inviteId}`);
+  await runTransaction(firestore, async transaction => {
+    const registrationSnapshot = await transaction.get(registrationRef);
+    if (!registrationSnapshot.exists()) throw new Error('AUTOCADASTRO_NAO_ENCONTRADO');
+    const registration = registrationSnapshot.data();
+    const validationError = validateSelfRegistrationApproval(registration);
+    if (validationError) throw new Error(validationError);
+    const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', registration.cpf);
+    const cpfIndexRef = getDataDoc(firestore, 'cpf_index', registration.cpf);
+    const [inviteSnapshot, inviteIndexSnapshot, cpfIndexSnapshot] = await Promise.all([
+      transaction.get(inviteRef), transaction.get(inviteIndexRef), transaction.get(cpfIndexRef)
+    ]);
+    if (!inviteSnapshot.exists()) throw new Error('CONVITE_INCOMPATIVEL');
+    validateRegistrationOrigin({ registration, inviteId, invite: inviteSnapshot.data(), inviteIndex: inviteIndexSnapshot.exists() ? inviteIndexSnapshot.data() : null });
+    if (cpfIndexSnapshot.exists()) throw new Error('CPF_DUPLICADO');
+    const now = Timestamp.now();
+    const pessoa = withPessoaSearchIndex({
+      ...buildPessoaFromSelfRegistration(registration),
+      criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId,
+    });
+    transaction.set(pessoaRef, pessoa);
+    transaction.set(cpfIndexRef, { pessoaId: pessoaRef.id, criadoEm: now });
+    transaction.update(registrationRef, { statusCadastro: 'aprovado', pessoaId: pessoaRef.id, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
+    transaction.delete(inviteIndexRef);
+    transaction.set(auditRef, { tipo: 'AUTOCADASTRO_MEMBRO_APROVADO', autocadastroId: inviteId, inviteId, pessoaId: pessoaRef.id, executadoPor: userId, executadoEm: now });
+  });
+  return { pessoaId: pessoaRef.id };
+};
+
+export const rejectMemberSelfRegistration = async ({ inviteId, userId, reason }, firestore = db) => {
+  const registrationRef = getDataDoc(firestore, 'autocadastros_membro', inviteId);
+  const inviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
+  const auditRef = getDataDoc(firestore, 'auditoria', `autocadastro_rejeitado_${inviteId}`);
+  await runTransaction(firestore, async transaction => {
+    const registrationSnapshot = await transaction.get(registrationRef);
+    if (!registrationSnapshot.exists()) throw new Error('AUTOCADASTRO_NAO_ENCONTRADO');
+    const registration = registrationSnapshot.data();
+    const validationError = validateSelfRegistrationRejection(registration, reason);
+    if (validationError) throw new Error(validationError);
+    const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', registration.cpf);
+    const [inviteSnapshot, inviteIndexSnapshot] = await Promise.all([
+      transaction.get(inviteRef), transaction.get(inviteIndexRef)
+    ]);
+    if (!inviteSnapshot.exists()) throw new Error('CONVITE_INCOMPATIVEL');
+    validateRegistrationOrigin({ registration, inviteId, invite: inviteSnapshot.data(), inviteIndex: inviteIndexSnapshot.exists() ? inviteIndexSnapshot.data() : null });
+    const now = Timestamp.now();
+    const motivoRejeicao = normalizeRejectionReason(reason);
+    transaction.update(registrationRef, { statusCadastro: 'rejeitado', motivoRejeicao, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
+    transaction.delete(inviteIndexRef);
+    transaction.set(auditRef, { tipo: 'AUTOCADASTRO_MEMBRO_REJEITADO', autocadastroId: inviteId, inviteId, executadoPor: userId, executadoEm: now, motivo: motivoRejeicao });
+  });
 };
 
 export const revokeMemberInvite = async ({ inviteId, userId }, firestore = db) => {

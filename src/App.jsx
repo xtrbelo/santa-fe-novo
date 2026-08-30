@@ -16,6 +16,7 @@ import { AgendasModule } from './modules/Agendas/AgendasModule';
 import { FluxoModule } from './modules/Fluxo/FluxoModule';
 import { PessoasModule } from './modules/Pessoas/PessoasModule';
 import { ConvitesModule } from './modules/Convites/ConvitesModule';
+import { AutocadastrosModule } from './modules/Autocadastros/AutocadastrosModule';
 import { ConfiguracoesModule } from './modules/Configuracoes/ConfiguracoesModule';
 import { UsuariosModule } from './modules/Usuarios/UsuariosModule';
 import { AutocadastroMembroPage } from './modules/Autocadastro/AutocadastroMembroPage';
@@ -177,6 +178,7 @@ function AppContent() {
     if (tab === 'fluxo') return <FluxoModule user={user} profile={profile} />;
     if (tab === 'pessoas') return <PessoasModule user={user} profile={profile} />;
     if (tab === 'convites') return <ConvitesModule user={user} profile={profile} />;
+    if (tab === 'autocadastros') return <AutocadastrosModule user={user} profile={profile} />;
     if (tab === 'usuarios') return profile.role === ROLES.ADMIN ? <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} /> : <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} />;
     if (tab === 'config') return <ConfiguracoesModule user={user} profile={profile} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;

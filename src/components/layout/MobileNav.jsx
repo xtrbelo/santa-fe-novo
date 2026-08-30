@@ -5,6 +5,7 @@ import {
   BookOpenCheck, 
   Users, 
   Mail,
+  ClipboardCheck,
   UsersRound,
   Settings 
 } from 'lucide-react';
@@ -16,6 +17,7 @@ export const MobileNav = ({ activeTab, onSelectTab, allowedTabs }) => {
     { id: 'fluxo', label: 'Fluxo', icon: BookOpenCheck },
     { id: 'pessoas', label: 'Pessoas', icon: Users },
     { id: 'convites', label: 'Convites', icon: Mail },
+    { id: 'autocadastros', label: 'Cadastros', icon: ClipboardCheck },
     { id: 'usuarios', label: 'Usuários', icon: UsersRound },
     { id: 'config', label: 'Ajustes', icon: Settings },
   ];
