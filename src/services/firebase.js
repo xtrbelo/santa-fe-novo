@@ -38,7 +38,8 @@ import {
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
 import { buildPessoaPayload, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
-import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteExpiration, hashMemberInviteToken } from '../utils/memberInvite.js';
+import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteEffectiveStatus, getMemberInviteExpiration, hashMemberInviteToken, isValidMemberInviteToken } from '../utils/memberInvite.js';
+import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPayload } from '../utils/memberSelfRegistration.js';
 import { validateCPF } from '../utils/formatters.js';
 
 const getEnv = (key, fallback) => {
@@ -209,6 +210,7 @@ export const createMemberInvite = async ({ nome, cpf, email, userId, origin }, f
       const indexedInvite = await transaction.get(getDataDoc(firestore, 'convites_membro', indexedInviteId));
       if (!indexedInvite.exists()) throw new Error('INDICE_CONVITE_INVALIDO');
       const indexedInviteData = indexedInvite.data();
+      if (indexedInviteData.cpf === cleanCpf && indexedInviteData.status === 'respondido') throw new Error('AUTOCADASTRO_PENDENTE');
       if (indexedInviteData.cpf !== cleanCpf || indexedInviteData.status !== 'ativo' || !(indexedInviteData.expiraEm instanceof Timestamp)) {
         throw new Error('INDICE_CONVITE_INVALIDO');
       }
@@ -231,10 +233,12 @@ export const reissueMemberInvite = async ({ inviteId, userId, origin }, firestor
     const oldSnapshot = await transaction.get(oldInviteRef);
     if (!oldSnapshot.exists()) throw new Error('CONVITE_INVALIDO');
     const oldInvite = oldSnapshot.data();
+    const registrationRef = getDataDoc(firestore, 'autocadastros_membro', inviteId);
     const personIndexRef = getDataDoc(firestore, 'cpf_index', oldInvite.cpf);
     const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', oldInvite.cpf);
-    const [personIndex, inviteIndex] = await Promise.all([transaction.get(personIndexRef), transaction.get(inviteIndexRef)]);
+    const [personIndex, inviteIndex, registration] = await Promise.all([transaction.get(personIndexRef), transaction.get(inviteIndexRef), transaction.get(registrationRef)]);
     if (personIndex.exists()) throw new Error('CPF_DUPLICADO');
+    if (oldInvite.status === 'respondido' || registration.exists()) throw new Error('AUTOCADASTRO_PENDENTE');
     if (inviteIndex.exists() && inviteIndex.data().inviteId !== inviteId) throw new Error('CONVITE_ATIVO_JA_EXISTE');
     convite = { nome: oldInvite.nome, cpf: oldInvite.cpf, email: oldInvite.email || null, status: 'ativo', criadoEm: now, criadoPor: userId, expiraEm, atualizadoEm: now, atualizadoPor: userId };
     if (oldSnapshot.data().status === 'ativo') transaction.update(oldInviteRef, { status: 'revogado', revogadoEm: now, revogadoPor: userId, atualizadoEm: now, atualizadoPor: userId });
@@ -242,6 +246,34 @@ export const reissueMemberInvite = async ({ inviteId, userId, origin }, firestor
     transaction.set(inviteIndexRef, { inviteId: credentials.id, criadoEm: now, criadoPor: userId });
   });
   return { convite: { id: credentials.id, ...convite }, token: credentials.token, url: credentials.url };
+};
+
+export const getMemberInviteByToken = async (token, firestore = db) => {
+  if (!isValidMemberInviteToken(token)) return { status: 'invalido', invite: null };
+  const inviteId = await hashMemberInviteToken(token);
+  const snapshot = await getDoc(getDataDoc(firestore, 'convites_membro', inviteId));
+  if (!snapshot.exists()) return { status: 'invalido', invite: null };
+  const invite = { id: inviteId, ...snapshot.data() };
+  const status = getMemberInviteEffectiveStatus(invite);
+  return status === 'ativo' ? { status, invite } : status === 'respondido' ? { status, invite } : { status: 'invalido', invite: null };
+};
+
+export const submitMemberSelfRegistration = async ({ inviteId, data }, firestore = db) => {
+  const inviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
+  const registrationRef = getDataDoc(firestore, 'autocadastros_membro', inviteId);
+  const inviteSnapshot = await getDoc(inviteRef);
+  if (!inviteSnapshot.exists()) throw new Error('CONVITE_INDISPONIVEL');
+  if (inviteSnapshot.data().status === 'respondido') throw new Error('AUTOCADASTRO_JA_ENVIADO');
+  const invite = { id: inviteId, ...inviteSnapshot.data() };
+  if (invite.status !== 'ativo' || !(invite.expiraEm instanceof Timestamp) || invite.expiraEm.toMillis() <= Date.now()) throw new Error('CONVITE_INDISPONIVEL');
+  if ((data.nome !== undefined && String(data.nome).trim() !== invite.nome) || (data.cpf !== undefined && String(data.cpf) !== invite.cpf)) throw new Error('AUTOCADASTRO_IDENTIDADE_INVALIDA');
+  const payload = buildMemberSelfRegistrationPayload(invite, data);
+  const validationError = validateMemberSelfRegistrationPayload(payload);
+  if (validationError) throw new Error(validationError);
+  const batch = writeBatch(firestore);
+  batch.set(registrationRef, { ...payload, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+  batch.update(inviteRef, { status: 'respondido', respondidoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+  await batch.commit();
 };
 
 export const revokeMemberInvite = async ({ inviteId, userId }, firestore = db) => {

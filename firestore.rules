@@ -15,6 +15,7 @@ service cloud.firestore {
     function arbitraryUserPath(appId, uid) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(uid); }
     function personPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/pessoas/$(pessoaId); }
     function memberInvitePath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convites_membro/$(inviteId); }
+    function memberSelfRegistrationPath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/autocadastros_membro/$(inviteId); }
     function memberInviteCpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convite_membro_cpf_index/$(cpf); }
     function userPersonIndexPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuario_pessoa_index/$(pessoaId); }
     function isActiveMemberData(data) { return data.ativo != false && (data.vinculo == 'membro' || data.tipoPessoa == 'Membro'); }
@@ -195,7 +196,12 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/convites_membro/{inviteId} {
-      allow read: if isAdmin(appId) || isGestor(appId);
+      allow get: if isAdmin(appId) || isGestor(appId)
+        || (request.auth == null
+          && resource.data.status in ['ativo', 'respondido']
+          && resource.data.expiraEm is timestamp
+          && resource.data.expiraEm > request.time);
+      allow list: if isAdmin(appId) || isGestor(appId);
       allow create: if (isAdmin(appId) || isGestor(appId))
         && inviteId.size() == 64
         && request.resource.data.keys().hasOnly([
@@ -213,7 +219,7 @@ service cloud.firestore {
         && request.resource.data.atualizadoPor == request.auth.uid
         && !exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cpf_index/$(request.resource.data.cpf))
         && getAfter(memberInviteCpfIndexPath(appId, request.resource.data.cpf)).data.inviteId == inviteId;
-      allow update: if (isAdmin(appId) || isGestor(appId))
+      allow update: if ((isAdmin(appId) || isGestor(appId))
         && resource.data.status == 'ativo'
         && request.resource.data.status == 'revogado'
         && request.resource.data.revogadoEm is timestamp
@@ -228,8 +234,69 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'nome', 'cpf', 'email', 'status', 'criadoEm', 'criadoPor', 'expiraEm', 'atualizadoEm', 'atualizadoPor',
           'revogadoEm', 'revogadoPor'
-        ]);
+        ]))
+        || (request.auth == null
+          && inviteId.matches('^[a-f0-9]{64}$')
+          && resource.data.status == 'ativo'
+          && resource.data.expiraEm is timestamp
+          && resource.data.expiraEm > request.time
+          && request.resource.data.status == 'respondido'
+          && request.resource.data.respondidoEm == request.time
+          && request.resource.data.atualizadoEm == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondidoEm', 'atualizadoEm'])
+          && request.resource.data.keys().hasOnly([
+            'nome', 'cpf', 'email', 'status', 'criadoEm', 'criadoPor', 'expiraEm', 'atualizadoEm', 'atualizadoPor',
+            'respondidoEm'
+          ])
+          && !exists(memberSelfRegistrationPath(appId, inviteId))
+          && existsAfter(memberSelfRegistrationPath(appId, inviteId))
+          && getAfter(memberSelfRegistrationPath(appId, inviteId)).data.inviteId == inviteId
+          && getAfter(memberSelfRegistrationPath(appId, inviteId)).data.nome == resource.data.nome
+          && getAfter(memberSelfRegistrationPath(appId, inviteId)).data.cpf == resource.data.cpf
+          && getAfter(memberSelfRegistrationPath(appId, inviteId)).data.statusCadastro == 'aguardando_validacao'
+          && getAfter(memberSelfRegistrationPath(appId, inviteId)).data.origemCadastro == 'autocadastro');
       allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/autocadastros_membro/{inviteId} {
+      allow get, list: if isAdmin(appId) || isGestor(appId);
+      allow create: if request.auth == null
+        && inviteId.matches('^[a-f0-9]{64}$')
+        && !exists(memberSelfRegistrationPath(appId, inviteId))
+        && request.resource.data.keys().hasOnly([
+          'inviteId', 'nome', 'cpf', 'dataNascimento', 'contato', 'email', 'sexo', 'estadoCivil', 'endereco',
+          'statusCadastro', 'origemCadastro', 'enviadoEm', 'atualizadoEm'
+        ])
+        && request.resource.data.inviteId == inviteId
+        && request.resource.data.nome is string && request.resource.data.nome.size() > 0 && request.resource.data.nome.size() <= 150
+        && request.resource.data.cpf is string && request.resource.data.cpf.matches('^[0-9]{11}$')
+        && (request.resource.data.dataNascimento == null || request.resource.data.dataNascimento is string && request.resource.data.dataNascimento.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        && (request.resource.data.contato == null || request.resource.data.contato is string && request.resource.data.contato.matches('^[0-9]{1,11}$'))
+        && (request.resource.data.email == null || request.resource.data.email is string && request.resource.data.email.size() <= 254 && request.resource.data.email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$'))
+        && request.resource.data.sexo in ['masculino', 'feminino', 'outro', 'nao_informado']
+        && request.resource.data.estadoCivil in ['solteiro', 'casado', 'uniao_estavel', 'separado', 'divorciado', 'viuvo', 'outro', 'nao_informado']
+        && request.resource.data.endereco is map
+        && request.resource.data.endereco.keys().hasOnly(['cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf'])
+        && (request.resource.data.endereco.cep == null || request.resource.data.endereco.cep is string && request.resource.data.endereco.cep.matches('^[0-9]{8}$'))
+        && (request.resource.data.endereco.logradouro == null || request.resource.data.endereco.logradouro is string && request.resource.data.endereco.logradouro.size() <= 150)
+        && (request.resource.data.endereco.numero == null || request.resource.data.endereco.numero is string && request.resource.data.endereco.numero.size() <= 30)
+        && (request.resource.data.endereco.complemento == null || request.resource.data.endereco.complemento is string && request.resource.data.endereco.complemento.size() <= 100)
+        && (request.resource.data.endereco.bairro == null || request.resource.data.endereco.bairro is string && request.resource.data.endereco.bairro.size() <= 100)
+        && (request.resource.data.endereco.cidade == null || request.resource.data.endereco.cidade is string && request.resource.data.endereco.cidade.size() <= 100)
+        && (request.resource.data.endereco.uf == null || request.resource.data.endereco.uf is string && request.resource.data.endereco.uf.matches('^[A-Z]{2}$'))
+        && request.resource.data.statusCadastro == 'aguardando_validacao'
+        && request.resource.data.origemCadastro == 'autocadastro'
+        && request.resource.data.enviadoEm == request.time
+        && request.resource.data.atualizadoEm == request.time
+        && exists(memberInvitePath(appId, inviteId))
+        && get(memberInvitePath(appId, inviteId)).data.status == 'ativo'
+        && get(memberInvitePath(appId, inviteId)).data.expiraEm is timestamp
+        && get(memberInvitePath(appId, inviteId)).data.expiraEm > request.time
+        && request.resource.data.nome == get(memberInvitePath(appId, inviteId)).data.nome
+        && request.resource.data.cpf == get(memberInvitePath(appId, inviteId)).data.cpf
+        && getAfter(memberInvitePath(appId, inviteId)).data.status == 'respondido'
+        && getAfter(memberInvitePath(appId, inviteId)).data.respondidoEm == request.time;
+      allow update, delete: if false;
     }
 
     match /artifacts/{appId}/public/data/convite_membro_cpf_index/{cpf} {
