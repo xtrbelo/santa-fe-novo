@@ -4,6 +4,7 @@ import {
   CalendarDays, 
   BookOpenCheck, 
   Users, 
+  Mail,
   UsersRound,
   Settings 
 } from 'lucide-react';
@@ -14,6 +15,7 @@ export const MobileNav = ({ activeTab, onSelectTab, allowedTabs }) => {
     { id: 'agendas', label: 'Agendas', icon: CalendarDays },
     { id: 'fluxo', label: 'Fluxo', icon: BookOpenCheck },
     { id: 'pessoas', label: 'Pessoas', icon: Users },
+    { id: 'convites', label: 'Convites', icon: Mail },
     { id: 'usuarios', label: 'Usuários', icon: UsersRound },
     { id: 'config', label: 'Ajustes', icon: Settings },
   ];

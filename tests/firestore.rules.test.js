@@ -1,4 +1,5 @@
 import { after, before, beforeEach, describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
@@ -14,6 +15,10 @@ const paths = {
   config: `${root}/config_servicos/servico-1`,
   audit: `${root}/auditoria/audit-1`
 };
+const inviteId = 'a'.repeat(64);
+const invitePath = id => `${root}/convites_membro/${id}`;
+const inviteIndexPath = cpf => `${root}/convite_membro_cpf_index/${cpf}`;
+const inviteData = (uid, overrides = {}) => ({ nome: 'Pessoa Convidada', cpf: '52998224725', email: 'convite@example.test', status: 'ativo', criadoEm: new Date(), criadoPor: uid, expiraEm: new Date(Date.now() + 7 * 86400000), atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
 
 let environment;
 const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();
@@ -101,6 +106,68 @@ describe('C. inativo', () => {
   for (const [name, path] of Object.entries({ pessoas: paths.people, agendas: paths.agendas, consulentes: paths.appointments, configuracoes: paths.config })) {
     test(`admin inativo não acessa ${name}`, async () => assertFails(getDoc(ref(authDb('inativo-admin'), path))));
   }
+});
+
+describe('C2. convites individuais de Membro', () => {
+  test('Admin e Gestor leem e criam convite válido', async () => {
+    for (const uid of ['admin-a', 'gestor']) {
+      const db = authDb(uid); const id = uid === 'admin-a' ? inviteId : 'b'.repeat(64); const cpf = uid === 'admin-a' ? '52998224725' : '16899535009';
+      const batch = writeBatch(db);
+      batch.set(ref(db, invitePath(id)), inviteData(uid, { cpf }));
+      batch.set(ref(db, inviteIndexPath(cpf)), { inviteId: id, criadoEm: new Date(), criadoPor: uid });
+      await assertSucceeds(batch.commit());
+      await assertSucceeds(getDoc(ref(db, invitePath(id))));
+      await assertSucceeds(getDoc(ref(db, inviteIndexPath(cpf))));
+    }
+  });
+
+  test('Atendimento e não autenticado não leem nem criam', async () => {
+    await environment.withSecurityRulesDisabled(async context => { const db = context.firestore(); await setDoc(ref(db, invitePath(inviteId)), inviteData('admin-a')); await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' }); });
+    await assertFails(getDoc(ref(authDb('atendimento'), invitePath(inviteId))));
+    await assertFails(getDoc(ref(anonymousDb(), invitePath(inviteId))));
+    await assertFails(getDoc(ref(authDb('atendimento'), inviteIndexPath('52998224725'))));
+    await assertFails(getDoc(ref(anonymousDb(), inviteIndexPath('52998224725'))));
+    await assertFails(setDoc(ref(authDb('atendimento'), invitePath('b'.repeat(64))), inviteData('atendimento')));
+    await assertFails(setDoc(ref(anonymousDb(), invitePath('c'.repeat(64))), inviteData('anonimo')));
+  });
+
+  test('rejeita campo arbitrário e qualquer token bruto persistido', async () => {
+    for (const invalid of [{ campoNaoPermitido: true }, { token: 'token-bruto' }, { pessoaId: 'nao-existe' }]) {
+      const db = authDb('admin-a'); const batch = writeBatch(db);
+      batch.set(ref(db, invitePath(inviteId)), inviteData('admin-a', invalid));
+      batch.set(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' });
+      await assertFails(batch.commit());
+    }
+  });
+
+  test('Admin e Gestor revogam somente os campos permitidos', async () => {
+    for (const [uid, id] of [['admin-a', inviteId], ['gestor', 'b'.repeat(64)]]) {
+      await environment.withSecurityRulesDisabled(async context => { const db = context.firestore(); await setDoc(ref(db, invitePath(id)), inviteData(uid)); await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId: id, criadoEm: new Date(), criadoPor: uid }); });
+      const db = authDb(uid); const batch = writeBatch(db);
+      batch.update(ref(db, invitePath(id)), { status: 'revogado', revogadoEm: new Date(), revogadoPor: uid, atualizadoEm: new Date(), atualizadoPor: uid });
+      batch.delete(ref(db, inviteIndexPath('52998224725')));
+      await assertSucceeds(batch.commit());
+      assert.equal((await getDoc(ref(authDb(uid), invitePath(id)))).data().status, 'revogado');
+    }
+  });
+
+  test('revogação não troca identidade, e-mail, autoria ou expiração', async () => {
+    const seedInvite = async () => environment.withSecurityRulesDisabled(async context => { const db = context.firestore(); await setDoc(ref(db, invitePath(inviteId)), inviteData('admin-a')); await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' }); });
+    for (const invalid of [{ nome: 'Outro' }, { cpf: '16899535009' }, { email: 'outro@example.test' }, { criadoPor: 'gestor' }, { expiraEm: new Date(Date.now() + 30 * 86400000) }]) {
+      await seedInvite();
+      const db = authDb('admin-a'); const batch = writeBatch(db);
+      batch.update(ref(db, invitePath(inviteId)), { ...invalid, status: 'revogado', revogadoEm: new Date(), revogadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+      batch.delete(ref(db, inviteIndexPath('52998224725')));
+      await assertFails(batch.commit());
+    }
+  });
+
+  test('Atendimento não revoga e delete é negado para todos', async () => {
+    await environment.withSecurityRulesDisabled(async context => { const db = context.firestore(); await setDoc(ref(db, invitePath(inviteId)), inviteData('admin-a')); await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' }); });
+    const atendimentoDb = authDb('atendimento'); const atendimentoBatch = writeBatch(atendimentoDb); atendimentoBatch.update(ref(atendimentoDb, invitePath(inviteId)), { status: 'revogado', revogadoEm: new Date(), revogadoPor: 'atendimento', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }); atendimentoBatch.delete(ref(atendimentoDb, inviteIndexPath('52998224725')));
+    await assertFails(atendimentoBatch.commit());
+    for (const db of [authDb('admin-a'), authDb('gestor'), authDb('atendimento'), anonymousDb()]) await assertFails(deleteDoc(ref(db, invitePath(inviteId))));
+  });
 });
 
 describe('D. admin', () => {

@@ -14,6 +14,8 @@ service cloud.firestore {
     function auditPath(appId, id) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/auditoria/$(id); }
     function arbitraryUserPath(appId, uid) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(uid); }
     function personPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/pessoas/$(pessoaId); }
+    function memberInvitePath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convites_membro/$(inviteId); }
+    function memberInviteCpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convite_membro_cpf_index/$(cpf); }
     function userPersonIndexPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuario_pessoa_index/$(pessoaId); }
     function isActiveMemberData(data) { return data.ativo != false && (data.vinculo == 'membro' || data.tipoPessoa == 'Membro'); }
     function isConsulenteData(data) { return data.vinculo == 'consulente' || data.tipoPessoa == 'Consulente'; }
@@ -190,6 +192,70 @@ service cloud.firestore {
       allow delete: if isAdmin(appId) || isGestor(appId)
         || (isAtendimento(appId) && isConsulenteData(getAfter(personPath(appId, resource.data.pessoaId)).data));
       allow update: if isAdmin(appId) || isGestor(appId);
+    }
+
+    match /artifacts/{appId}/public/data/convites_membro/{inviteId} {
+      allow read: if isAdmin(appId) || isGestor(appId);
+      allow create: if (isAdmin(appId) || isGestor(appId))
+        && inviteId.size() == 64
+        && request.resource.data.keys().hasOnly([
+          'nome', 'cpf', 'email', 'status', 'criadoEm', 'criadoPor', 'expiraEm', 'atualizadoEm', 'atualizadoPor'
+        ])
+        && request.resource.data.nome is string && request.resource.data.nome.size() > 0
+        && request.resource.data.cpf is string && request.resource.data.cpf.size() == 11
+        && (request.resource.data.email == null || request.resource.data.email is string)
+        && request.resource.data.status == 'ativo'
+        && request.resource.data.criadoEm is timestamp
+        && request.resource.data.criadoPor == request.auth.uid
+        && request.resource.data.expiraEm is timestamp
+        && request.resource.data.expiraEm > request.time
+        && request.resource.data.atualizadoEm is timestamp
+        && request.resource.data.atualizadoPor == request.auth.uid
+        && !exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cpf_index/$(request.resource.data.cpf))
+        && getAfter(memberInviteCpfIndexPath(appId, request.resource.data.cpf)).data.inviteId == inviteId;
+      allow update: if (isAdmin(appId) || isGestor(appId))
+        && resource.data.status == 'ativo'
+        && request.resource.data.status == 'revogado'
+        && request.resource.data.revogadoEm is timestamp
+        && request.resource.data.revogadoPor == request.auth.uid
+        && request.resource.data.atualizadoEm is timestamp
+        && request.resource.data.atualizadoPor == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'revogadoEm', 'revogadoPor', 'atualizadoEm', 'atualizadoPor'
+        ])
+        && (!existsAfter(memberInviteCpfIndexPath(appId, resource.data.cpf))
+          || getAfter(memberInviteCpfIndexPath(appId, resource.data.cpf)).data.inviteId != inviteId)
+        && request.resource.data.keys().hasOnly([
+          'nome', 'cpf', 'email', 'status', 'criadoEm', 'criadoPor', 'expiraEm', 'atualizadoEm', 'atualizadoPor',
+          'revogadoEm', 'revogadoPor'
+        ]);
+      allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/convite_membro_cpf_index/{cpf} {
+      allow read: if isAdmin(appId) || isGestor(appId);
+      allow create: if (isAdmin(appId) || isGestor(appId))
+        && request.resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
+        && request.resource.data.inviteId is string && request.resource.data.inviteId.size() == 64
+        && request.resource.data.criadoEm is timestamp
+        && request.resource.data.criadoPor == request.auth.uid
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.cpf == cpf
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.status == 'ativo'
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.criadoPor == request.auth.uid;
+      allow update: if (isAdmin(appId) || isGestor(appId))
+        && request.resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
+        && request.resource.data.inviteId is string && request.resource.data.inviteId.size() == 64
+        && request.resource.data.criadoEm is timestamp
+        && request.resource.data.criadoPor == request.auth.uid
+        && get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'
+        && getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado'
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.cpf == cpf
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.status == 'ativo';
+      allow delete: if (isAdmin(appId) || isGestor(appId))
+        && resource.data.inviteId is string
+        && get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'
+        && getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado';
     }
 
     match /artifacts/{appId}/public/data/agendas/{id} {

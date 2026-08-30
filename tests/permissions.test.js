@@ -24,3 +24,9 @@ test('Gestor gerencia operação sem usuários/configuração e Admin possui ace
   assert.equal(hasPermission({ role: ROLES.ADMIN, ativo: true }, PERMISSIONS.MANAGE_USERS), true);
   assert.equal(hasPermission({ role: ROLES.ADMIN, ativo: false }, PERMISSIONS.MANAGE_USERS), false);
 });
+
+test('somente Admin e Gestor possuem acesso ao módulo Convites', () => {
+  assert.equal(ROLE_TABS.admin.includes('convites'), true);
+  assert.equal(ROLE_TABS.gestor.includes('convites'), true);
+  assert.equal(ROLE_TABS.atendimento.includes('convites'), false);
+});
