@@ -20,6 +20,9 @@ import {
   searchPessoas,
   withPessoaSearchIndex,
   createPessoa,
+  createMemberInvite,
+  reissueMemberInvite,
+  revokeMemberInvite,
   autorizarUsuario,
   vincularUsuarioPessoa
 } from '../src/services/firebase.js';
@@ -36,6 +39,7 @@ const path = (collectionName, id) => `${root}/${collectionName}/${id}`;
 
 let environment;
 const adminDb = () => environment.authenticatedContext(USER_ID, { email_verified: true }).firestore();
+const gestorDb = () => environment.authenticatedContext('gestor-business', { email_verified: true }).firestore();
 
 async function seedDocuments(entries) {
   await environment.withSecurityRulesDisabled(async context => {
@@ -125,6 +129,55 @@ describe('Fase 9A - cadastro institucional de Membro', () => {
   });
 });
 
+describe('Fase 9B - convite individual de Membro', () => {
+  test('Admin cria somente convite e índice ativo, sem Pessoa ou cpf_index', async () => {
+    const result = await createMemberInvite({ nome: ' Maria Convidada ', cpf: '529.982.247-25', email: ' MARIA@EXAMPLE.TEST ', userId: USER_ID, origin: 'https://santa-fe-v2.web.app' }, adminDb());
+    const convite = (await getDoc(doc(adminDb(), path('convites_membro', result.convite.id)))).data();
+    const inviteIndex = (await getDoc(doc(adminDb(), path('convite_membro_cpf_index', '52998224725')))).data();
+    assert.equal(convite.nome, 'Maria Convidada'); assert.equal(convite.cpf, '52998224725'); assert.equal(convite.email, 'maria@example.test'); assert.equal(convite.status, 'ativo');
+    assert.equal(inviteIndex.inviteId, result.convite.id);
+    assert.equal((await getDocs(collection(adminDb(), `${root}/pessoas`))).empty, true);
+    assert.equal((await getDoc(doc(adminDb(), path('cpf_index', '52998224725')))).exists(), false);
+    assert.equal(Object.hasOwn(convite, 'token'), false); assert.equal(Object.hasOwn(convite, 'url'), false); assert.equal(JSON.stringify(convite).includes(result.token), false);
+    assert.match(result.url, /^https:\/\/santa-fe-v2\.web\.app\/autocadastro\?token=/);
+  });
+
+  test('Gestor cria convite com e-mail opcional', async () => {
+    const result = await createMemberInvite({ nome: 'Sem E-mail', cpf: '168.995.350-09', email: '', userId: 'gestor-business', origin: 'http://localhost:5173' }, gestorDb());
+    assert.equal((await getDoc(doc(gestorDb(), path('convites_membro', result.convite.id)))).data().email, null);
+  });
+
+  test('CPF de Pessoa existente bloqueia convite sem novas escritas', async () => {
+    await seedDocuments([['cpf_index', '11144477735', { pessoaId: 'existente', criadoEm: new Date() }]]);
+    await assert.rejects(createMemberInvite({ nome: 'Duplicada', cpf: '11144477735', userId: USER_ID, origin: 'http://localhost' }, adminDb()), /CPF_DUPLICADO/);
+    const convites = await getDocs(collection(adminDb(), `${root}/convites_membro`));
+    assert.equal(convites.empty, true); assert.equal((await getDocs(collection(adminDb(), `${root}/convite_membro_cpf_index`))).empty, true);
+  });
+
+  test('segundo convite ativo para o mesmo CPF é bloqueado', async () => {
+    await createMemberInvite({ nome: 'Primeiro', cpf: '11144477735', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    await assert.rejects(createMemberInvite({ nome: 'Segundo', cpf: '11144477735', userId: USER_ID, origin: 'http://localhost' }, adminDb()), /CONVITE_ATIVO_JA_EXISTE/);
+    assert.equal((await getDocs(collection(adminDb(), `${root}/convites_membro`))).size, 1);
+  });
+
+  test('reemissão revoga convite anterior e cria token e hash novos', async () => {
+    const first = await createMemberInvite({ nome: 'Reemitir', cpf: '39053344705', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    const second = await reissueMemberInvite({ inviteId: first.convite.id, userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    assert.notEqual(second.token, first.token); assert.notEqual(second.convite.id, first.convite.id);
+    assert.equal((await getDoc(doc(adminDb(), path('convites_membro', first.convite.id)))).data().status, 'revogado');
+    assert.equal((await getDoc(doc(adminDb(), path('convites_membro', second.convite.id)))).data().status, 'ativo');
+    assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', '39053344705')))).data().inviteId, second.convite.id);
+  });
+
+  test('revogação preserva convite, remove índice ativo e não cria Pessoa', async () => {
+    const result = await createMemberInvite({ nome: 'Revogar', cpf: '52998224725', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    await revokeMemberInvite({ inviteId: result.convite.id, userId: USER_ID }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('convites_membro', result.convite.id)))).data().status, 'revogado');
+    assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', '52998224725')))).exists(), false);
+    assert.equal((await getDocs(collection(adminDb(), `${root}/pessoas`))).empty, true);
+  });
+});
+
 describe('Fase 7A - índice e busca de pessoas', () => {
   test('busca por nome sem acento e telefone não retorna pessoa inativa', async () => {
     const db = adminDb();
@@ -156,7 +209,10 @@ describe('Fase 7A - índice e busca de pessoas', () => {
 
 beforeEach(async () => {
   await environment.clearFirestore();
-  await seedDocuments([['usuarios', USER_ID, { uid: USER_ID, email: 'admin@santafe.local', role: 'admin', ativo: true }]]);
+  await seedDocuments([
+    ['usuarios', USER_ID, { uid: USER_ID, email: 'admin@santafe.local', role: 'admin', ativo: true }],
+    ['usuarios', 'gestor-business', { uid: 'gestor-business', email: 'gestor@santafe.local', role: 'gestor', ativo: true }]
+  ]);
 });
 
 after(async () => environment.cleanup());

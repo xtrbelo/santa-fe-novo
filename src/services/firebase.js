@@ -37,7 +37,9 @@ import {
 } from 'firebase/firestore';
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
-import { buildPessoaPayload, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
+import { buildPessoaPayload, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
+import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteExpiration, hashMemberInviteToken } from '../utils/memberInvite.js';
+import { validateCPF } from '../utils/formatters.js';
 
 const getEnv = (key, fallback) => {
   try {
@@ -176,6 +178,75 @@ export const createPessoa = async ({ data, userId }, firestore = db) => {
     transaction.set(pessoaRef, withPessoaSearchIndex({ ...normalizedData, ativo: true, criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId }));
   });
   return { id: pessoaRef.id, ...withPessoaSearchIndex({ ...normalizedData, ativo: true }) };
+};
+
+const createInviteCredentials = async origin => {
+  const token = generateMemberInviteToken();
+  const id = await hashMemberInviteToken(token);
+  return { token, id, url: buildMemberInviteUrl(token, origin) };
+};
+
+export const createMemberInvite = async ({ nome, cpf, email, userId, origin }, firestore = db) => {
+  const cleanCpf = normalizeSearchDigits(cpf);
+  const normalizedName = String(nome || '').trim();
+  const normalizedEmail = normalizeEmail(email) || null;
+  if (!normalizedName) throw new Error('CONVITE_INVALIDO:O nome é obrigatório.');
+  if (!validateCPF(cleanCpf)) throw new Error('CONVITE_INVALIDO:Informe um CPF válido.');
+  if (normalizedEmail && !isValidEmail(normalizedEmail)) throw new Error('CONVITE_INVALIDO:Informe um e-mail válido.');
+  const personIndexRef = getDataDoc(firestore, 'cpf_index', cleanCpf);
+  const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', cleanCpf);
+  const credentials = await createInviteCredentials(origin);
+  const conviteRef = getDataDoc(firestore, 'convites_membro', credentials.id);
+  const now = Timestamp.now();
+  const expiraEm = Timestamp.fromDate(getMemberInviteExpiration(now.toDate()));
+  const convite = { nome: normalizedName, cpf: cleanCpf, email: normalizedEmail, status: 'ativo', criadoEm: now, criadoPor: userId, expiraEm, atualizadoEm: now, atualizadoPor: userId };
+  await runTransaction(firestore, async transaction => {
+    const [personIndex, inviteIndex] = await Promise.all([transaction.get(personIndexRef), transaction.get(inviteIndexRef)]);
+    if (personIndex.exists()) throw new Error('CPF_DUPLICADO');
+    if (inviteIndex.exists()) throw new Error('CONVITE_ATIVO_JA_EXISTE');
+    transaction.set(conviteRef, convite);
+    transaction.set(inviteIndexRef, { inviteId: credentials.id, criadoEm: now, criadoPor: userId });
+  });
+  return { convite: { id: credentials.id, ...convite }, token: credentials.token, url: credentials.url };
+};
+
+export const reissueMemberInvite = async ({ inviteId, userId, origin }, firestore = db) => {
+  const credentials = await createInviteCredentials(origin);
+  const oldInviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
+  const newInviteRef = getDataDoc(firestore, 'convites_membro', credentials.id);
+  const now = Timestamp.now();
+  const expiraEm = Timestamp.fromDate(getMemberInviteExpiration(now.toDate()));
+  let convite;
+  await runTransaction(firestore, async transaction => {
+    const oldSnapshot = await transaction.get(oldInviteRef);
+    if (!oldSnapshot.exists()) throw new Error('CONVITE_INVALIDO');
+    const oldInvite = oldSnapshot.data();
+    const personIndexRef = getDataDoc(firestore, 'cpf_index', oldInvite.cpf);
+    const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', oldInvite.cpf);
+    const [personIndex, inviteIndex] = await Promise.all([transaction.get(personIndexRef), transaction.get(inviteIndexRef)]);
+    if (personIndex.exists()) throw new Error('CPF_DUPLICADO');
+    if (inviteIndex.exists() && inviteIndex.data().inviteId !== inviteId) throw new Error('CONVITE_ATIVO_JA_EXISTE');
+    convite = { nome: oldInvite.nome, cpf: oldInvite.cpf, email: oldInvite.email || null, status: 'ativo', criadoEm: now, criadoPor: userId, expiraEm, atualizadoEm: now, atualizadoPor: userId };
+    if (oldSnapshot.data().status === 'ativo') transaction.update(oldInviteRef, { status: 'revogado', revogadoEm: now, revogadoPor: userId, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(newInviteRef, convite);
+    transaction.set(inviteIndexRef, { inviteId: credentials.id, criadoEm: now, criadoPor: userId });
+  });
+  return { convite: { id: credentials.id, ...convite }, token: credentials.token, url: credentials.url };
+};
+
+export const revokeMemberInvite = async ({ inviteId, userId }, firestore = db) => {
+  const inviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
+  const now = Timestamp.now();
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(inviteRef);
+    if (!snapshot.exists()) throw new Error('CONVITE_NAO_ENCONTRADO');
+    if (snapshot.data().status !== 'ativo') throw new Error('CONVITE_NAO_ATIVO');
+    const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', snapshot.data().cpf);
+    const indexSnapshot = await transaction.get(inviteIndexRef);
+    if (!indexSnapshot.exists() || indexSnapshot.data().inviteId !== inviteId) throw new Error('INDICE_CONVITE_INVALIDO');
+    transaction.update(inviteRef, { status: 'revogado', revogadoEm: now, revogadoPor: userId, atualizadoEm: now, atualizadoPor: userId });
+    transaction.delete(inviteIndexRef);
+  });
 };
 
 export const rebuildPessoaSearchIndex = async ({ pageSize = 200, cursor = null } = {}, firestore = db) => {

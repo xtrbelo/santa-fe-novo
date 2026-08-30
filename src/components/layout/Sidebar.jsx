@@ -4,6 +4,7 @@ import {
   CalendarDays, 
   BookOpenCheck, 
   Users, 
+  Mail,
   UsersRound,
   Settings, 
   LogOut 
@@ -16,6 +17,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs, profil
     { id: 'agendas', label: 'Agendas', icon: <CalendarDays size={22} /> },
     { id: 'fluxo', label: 'Fluxo do Dia', icon: <BookOpenCheck size={22} /> },
     { id: 'pessoas', label: 'Pessoas', icon: <Users size={22} /> },
+    { id: 'convites', label: 'Convites', icon: <Mail size={22} /> },
     { id: 'usuarios', label: 'Usuários', icon: <UsersRound size={22} /> },
     { id: 'config', label: 'Configurações', icon: <Settings size={22} /> },
   ];
