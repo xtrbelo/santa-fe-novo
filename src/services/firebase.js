@@ -42,25 +42,44 @@ import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteEffecti
 import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPayload } from '../utils/memberSelfRegistration.js';
 import { validateCPF } from '../utils/formatters.js';
 
-const getEnv = (key, fallback) => {
-  try {
-    return import.meta.env[key] || fallback;
-  } catch {
-    return fallback;
+const hasViteEnv = typeof import.meta.env === 'object';
+const viteEnv = hasViteEnv ? {
+  mode: import.meta.env.MODE,
+  dev: import.meta.env.DEV,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  useFirebaseEmulators: import.meta.env.VITE_USE_FIREBASE_EMULATORS,
+  useFirestoreEmulator: import.meta.env.VITE_USE_FIRESTORE_EMULATOR,
+} : {};
+
+export const firebaseConfig = {
+  apiKey: viteEnv.apiKey,
+  authDomain: viteEnv.authDomain,
+  projectId: viteEnv.projectId,
+  storageBucket: viteEnv.storageBucket,
+  messagingSenderId: viteEnv.messagingSenderId,
+  appId: viteEnv.appId,
+  measurementId: viteEnv.measurementId,
+};
+
+const requiredFirebaseConfig = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
+const expectedProjectIdByMode = { hml: 'santa-fe-v2-hml', production: 'santa-fe-v2-prod' };
+
+if (hasViteEnv) {
+  const missing = requiredFirebaseConfig.filter(key => !firebaseConfig[key]);
+  if (missing.length) throw new Error(`FIREBASE_CONFIG_INCOMPLETA:${missing.join(',')}`);
+  const expectedProjectId = expectedProjectIdByMode[viteEnv.mode];
+  if (expectedProjectId && firebaseConfig.projectId !== expectedProjectId) {
+    throw new Error(`FIREBASE_PROJECT_ID_INVALIDO:${viteEnv.mode}`);
   }
-};
+}
 
-export const firebaseConfig = { 
-  apiKey: getEnv('VITE_FIREBASE_API_KEY', "AIzaSyAgh2X59GS79HyK7NNr4XL6lM8ZlbmRIdk"),
-  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN', "santa-fe-v2.firebaseapp.com"),
-  projectId: getEnv('VITE_FIREBASE_PROJECT_ID', "santa-fe-v2"),
-  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET', "santa-fe-v2.firebasestorage.app"),
-  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID', "551191620226"),
-  appId: getEnv('VITE_FIREBASE_APP_ID', "1:551191620226:web:b063c40808009ca0c4229b"),
-  measurementId: getEnv('VITE_FIREBASE_MEASUREMENT_ID', "G-P9RZWEHYQR")
-};
-
-export const isFirebaseConfigured = !!firebaseConfig.apiKey;
+export const isFirebaseConfigured = requiredFirebaseConfig.every(key => !!firebaseConfig[key]);
 
 export let app = null;
 export let auth = null;
@@ -70,10 +89,9 @@ if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  const useAllFirebaseEmulators = import.meta.env?.DEV === true
-    && getEnv('VITE_USE_FIREBASE_EMULATORS', 'false') === 'true';
-  const useFirestoreEmulator = import.meta.env?.DEV === true
-    && (useAllFirebaseEmulators || getEnv('VITE_USE_FIRESTORE_EMULATOR', 'false') === 'true');
+  const useAllFirebaseEmulators = viteEnv.dev === true && viteEnv.useFirebaseEmulators === 'true';
+  const useFirestoreEmulator = viteEnv.dev === true
+    && (useAllFirebaseEmulators || viteEnv.useFirestoreEmulator === 'true');
   if (useAllFirebaseEmulators && !globalThis.__santaFeAuthEmulatorConnected) {
     connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
     globalThis.__santaFeAuthEmulatorConnected = true;
@@ -84,7 +102,7 @@ if (isFirebaseConfigured) {
   }
 }
 
-export const appId = firebaseConfig.projectId || 'santa-fe-v2';
+export const appId = firebaseConfig.projectId || 'santa-fe-node-test';
 
 /**
  * Retorna a referência da coleção padronizada
