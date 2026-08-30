@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "santa-fe-v2"
+    "default": "santa-fe-v2-hml",
+    "hml": "santa-fe-v2-hml",
+    "prod": "santa-fe-v2-prod",
+    "legacy": "santa-fe-v2"
   }
 }

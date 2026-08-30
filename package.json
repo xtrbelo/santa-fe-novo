@@ -9,6 +9,7 @@
     "seed:emulator": "node scripts/seed-emulator.js",
     "validate:emulator": "node scripts/validate-phase6-emulator.js",
     "build": "vite build",
+    "build:prod": "vite build --mode production",
     "lint": "eslint .",
     "test:helpers": "node --test tests/pessoaSearch.test.js tests/pessoaForm.test.js tests/memberInvite.test.js tests/memberSelfRegistration.test.js tests/permissions.test.js tests/auth.test.js tests/sessionTimeout.test.js",
     "test:auth": "firebase emulators:exec --config firebase.auth.test.json --only auth,firestore --project santa-fe-auth-test \"node --test tests/auth.emulator.test.js\"",
