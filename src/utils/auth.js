@@ -25,3 +25,25 @@ export const getAuthErrorMessage = error => {
 };
 
 export const usesPasswordProvider = user => user?.providerData?.some(provider => provider.providerId === 'password') === true;
+
+export const AUTH_VIEW = Object.freeze({
+  LOADING: 'loading',
+  LOGIN: 'login',
+  VERIFY_EMAIL: 'verify_email',
+  INACTIVE: 'inactive',
+  PENDING: 'pending',
+  SYSTEM: 'system',
+});
+
+export const resolveAuthView = ({ loading, user, profile, pendingRole }) => {
+  if (loading || (user && !profile)) return AUTH_VIEW.LOADING;
+  if (!user) return AUTH_VIEW.LOGIN;
+  if (usesPasswordProvider(user) && !user.emailVerified) return AUTH_VIEW.VERIFY_EMAIL;
+  if (profile.ativo === false) return AUTH_VIEW.INACTIVE;
+  if (profile.role === pendingRole) return AUTH_VIEW.PENDING;
+  return AUTH_VIEW.SYSTEM;
+};
+
+export const getLoginAutocomplete = mode => mode === 'register'
+  ? { form: 'on', email: 'email', password: 'new-password' }
+  : { form: 'off', email: 'off', password: 'off' };

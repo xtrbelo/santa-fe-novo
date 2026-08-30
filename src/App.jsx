@@ -9,7 +9,7 @@ import { LoginScreen } from './components/auth/LoginScreen';
 import { AccessScreen } from './components/auth/AccessScreen';
 import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
 import { useInactivityTimeout } from './hooks/useInactivityTimeout';
-import { getAuthErrorMessage, normalizeAuthEmail, usesPasswordProvider, validateRegistration } from './utils/auth';
+import { AUTH_VIEW, getAuthErrorMessage, normalizeAuthEmail, resolveAuthView, usesPasswordProvider, validateRegistration } from './utils/auth';
 import { normalizeEmail } from './utils/pessoaForm';
 import { HomeModule } from './modules/Home/HomeModule';
 import { AgendasModule } from './modules/Agendas/AgendasModule';
@@ -49,26 +49,33 @@ function AppContent() {
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) { setLoading(false); return undefined; }
     let unsubscribeProfile = () => {};
+    let authGeneration = 0;
     const unsubscribeAuth = onAuthStateChanged(auth, async authenticatedUser => {
+      const generation = ++authGeneration;
       unsubscribeProfile();
+      unsubscribeProfile = () => {};
+      setLoading(true);
       setUser(authenticatedUser);
       setProfile(null);
       if (!authenticatedUser) { setLoading(false); return; }
       try {
         const ref = getAppDoc('usuarios', authenticatedUser.uid);
         const snap = await getDoc(ref);
+        if (generation !== authGeneration) return;
         if (!snap.exists()) {
           const now = Timestamp.now();
           await setDoc(ref, { uid: authenticatedUser.uid, nome: authenticatedUser.displayName || pendingRegistrationName.current || '', email: normalizeEmail(authenticatedUser.email), role: ROLES.PENDENTE, ativo: true, criadoEm: now, atualizadoEm: now });
+          if (generation !== authGeneration) return;
           pendingRegistrationName.current = '';
         }
         unsubscribeProfile = onSnapshot(ref, profileSnapshot => {
+          if (generation !== authGeneration) return;
           setProfile(profileSnapshot.exists() ? { id: profileSnapshot.id, ...profileSnapshot.data() } : null);
           setLoading(false);
-        }, error => { console.error(error); toastError('Não foi possível acompanhar seu perfil de acesso.'); setLoading(false); });
-      } catch (error) { console.error(error); toastError('Não foi possível carregar seu perfil de acesso.'); setLoading(false); }
+        }, error => { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível acompanhar seu perfil de acesso.'); setLoading(false); });
+      } catch (error) { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível carregar seu perfil de acesso.'); setLoading(false); }
     });
-    return () => { unsubscribeAuth(); unsubscribeProfile(); };
+    return () => { authGeneration += 1; unsubscribeAuth(); unsubscribeProfile(); };
   }, [toastError]);
 
   useEffect(() => {
@@ -155,7 +162,7 @@ function AppContent() {
 
   const withSessionTimeout = content => <>{content}<SessionTimeoutModal isOpen={isWarning} remainingMs={remainingMs} onContinue={continueSession} /></>;
 
-  if (loading) return user ? withSessionTimeout(<div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>) : <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
+  if (resolveAuthView({ loading, user, profile, pendingRole: ROLES.PENDENTE }) === AUTH_VIEW.LOADING) return user ? withSessionTimeout(<div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>) : <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
   if (!user) return <LoginScreen onEmailLogin={handleEmailLogin} onGoogleLogin={handleGoogleLogin} onRegister={handleRegister} onResetPassword={handleResetPassword} busy={isLoggingIn} />;
   if (usesPasswordProvider(user) && !user.emailVerified) return withSessionTimeout(<AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />);
   if (profile?.ativo === false) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />);

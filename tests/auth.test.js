@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getAuthErrorMessage, normalizeAuthEmail, usesPasswordProvider, validateRegistration } from '../src/utils/auth.js';
+import { AUTH_VIEW, getAuthErrorMessage, getLoginAutocomplete, normalizeAuthEmail, resolveAuthView, usesPasswordProvider, validateRegistration } from '../src/utils/auth.js';
 
 test('normaliza e-mail sem alterar a senha', () => {
   assert.equal(normalizeAuthEmail(' JOAO@EMAIL.COM '), 'joao@email.com');
@@ -22,4 +22,26 @@ test('traduz erros conhecidos sem expor códigos internos', () => {
 test('identifica apenas contas com provider password', () => {
   assert.equal(usesPasswordProvider({ providerData: [{ providerId: 'password' }] }), true);
   assert.equal(usesPasswordProvider({ providerData: [{ providerId: 'google.com' }] }), false);
+});
+
+test('usuário autenticado sem perfil resolvido permanece no carregamento', () => {
+  const admin = { providerData: [{ providerId: 'google.com' }], emailVerified: true };
+  assert.equal(resolveAuthView({ loading: true, user: admin, profile: null, pendingRole: 'pendente' }), AUTH_VIEW.LOADING);
+  assert.equal(resolveAuthView({ loading: false, user: admin, profile: null, pendingRole: 'pendente' }), AUTH_VIEW.LOADING);
+  assert.equal(resolveAuthView({ loading: false, user: admin, profile: { role: 'admin', ativo: true }, pendingRole: 'pendente' }), AUTH_VIEW.SYSTEM);
+});
+
+test('perfil pendente resolvido continua na tela de liberação', () => {
+  const user = { providerData: [{ providerId: 'google.com' }], emailVerified: true };
+  assert.equal(resolveAuthView({ loading: false, user, profile: { role: 'pendente', ativo: true }, pendingRole: 'pendente' }), AUTH_VIEW.PENDING);
+});
+
+test('inicialização carrega e logout retorna ao login', () => {
+  assert.equal(resolveAuthView({ loading: true, user: null, profile: null, pendingRole: 'pendente' }), AUTH_VIEW.LOADING);
+  assert.equal(resolveAuthView({ loading: false, user: null, profile: null, pendingRole: 'pendente' }), AUTH_VIEW.LOGIN);
+});
+
+test('login desativa autocomplete automático sem afetar o cadastro', () => {
+  assert.deepEqual(getLoginAutocomplete('login'), { form: 'off', email: 'off', password: 'off' });
+  assert.deepEqual(getLoginAutocomplete('register'), { form: 'on', email: 'email', password: 'new-password' });
 });
