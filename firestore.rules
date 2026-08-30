@@ -243,15 +243,23 @@ service cloud.firestore {
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.status == 'ativo'
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.criadoPor == request.auth.uid;
       allow update: if (isAdmin(appId) || isGestor(appId))
+        && resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
+        && resource.data.inviteId is string && resource.data.inviteId.size() == 64
         && request.resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
         && request.resource.data.inviteId is string && request.resource.data.inviteId.size() == 64
         && request.resource.data.criadoEm is timestamp
         && request.resource.data.criadoPor == request.auth.uid
+        && get(memberInvitePath(appId, resource.data.inviteId)).data.cpf == cpf
         && get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'
-        && getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado'
+        && (getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado'
+          || (get(memberInvitePath(appId, resource.data.inviteId)).data.expiraEm is timestamp
+            && get(memberInvitePath(appId, resource.data.inviteId)).data.expiraEm <= request.time))
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.cpf == cpf
-        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.status == 'ativo';
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.status == 'ativo'
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.expiraEm is timestamp
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.expiraEm > request.time
+        && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.criadoPor == request.auth.uid;
       allow delete: if (isAdmin(appId) || isGestor(appId))
         && resource.data.inviteId is string
         && get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'

@@ -168,6 +168,51 @@ describe('C2. convites individuais de Membro', () => {
     await assertFails(atendimentoBatch.commit());
     for (const db of [authDb('admin-a'), authDb('gestor'), authDb('atendimento'), anonymousDb()]) await assertFails(deleteDoc(ref(db, invitePath(inviteId))));
   });
+
+  test('Admin e Gestor substituem indice de convite expirado sem alterar o convite antigo', async () => {
+    for (const [uid, suffix, cpf] of [['admin-a', 'b', '52998224725'], ['gestor', 'c', '16899535009']]) {
+      const oldId = suffix.repeat(64); const newId = (suffix === 'b' ? 'd' : 'e').repeat(64);
+      await environment.withSecurityRulesDisabled(async context => {
+        const db = context.firestore();
+        await setDoc(ref(db, invitePath(oldId)), inviteData(uid, { cpf, expiraEm: new Date(Date.now() - 1000) }));
+        await setDoc(ref(db, inviteIndexPath(cpf)), { inviteId: oldId, criadoEm: new Date(Date.now() - 8 * 86400000), criadoPor: uid });
+      });
+      const db = authDb(uid); const batch = writeBatch(db);
+      batch.set(ref(db, invitePath(newId)), inviteData(uid, { cpf }));
+      batch.set(ref(db, inviteIndexPath(cpf)), { inviteId: newId, criadoEm: new Date(), criadoPor: uid });
+      await assertSucceeds(batch.commit());
+      assert.equal((await getDoc(ref(db, invitePath(oldId)))).data().status, 'ativo');
+      assert.equal((await getDoc(ref(db, inviteIndexPath(cpf)))).data().inviteId, newId);
+      await environment.clearFirestore(); await seed();
+    }
+  });
+
+  test('nega substituir indice se convite anterior ainda estiver valido', async () => {
+    await environment.withSecurityRulesDisabled(async context => {
+      const db = context.firestore();
+      await setDoc(ref(db, invitePath(inviteId)), inviteData('admin-a'));
+      await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' });
+    });
+    const newId = 'f'.repeat(64); const db = authDb('admin-a'); const batch = writeBatch(db);
+    batch.set(ref(db, invitePath(newId)), inviteData('admin-a'));
+    batch.set(ref(db, inviteIndexPath('52998224725')), { inviteId: newId, criadoEm: new Date(), criadoPor: 'admin-a' });
+    await assertFails(batch.commit());
+  });
+
+  test('Atendimento e nao autenticado nao substituem indice expirado', async () => {
+    const oldId = 'b'.repeat(64);
+    await environment.withSecurityRulesDisabled(async context => {
+      const db = context.firestore();
+      await setDoc(ref(db, invitePath(oldId)), inviteData('admin-a', { expiraEm: new Date(Date.now() - 1000) }));
+      await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId: oldId, criadoEm: new Date(), criadoPor: 'admin-a' });
+    });
+    for (const [db, id, uid] of [[authDb('atendimento'), 'c'.repeat(64), 'atendimento'], [anonymousDb(), 'd'.repeat(64), 'anonimo']]) {
+      const batch = writeBatch(db);
+      batch.set(ref(db, invitePath(id)), inviteData(uid));
+      batch.set(ref(db, inviteIndexPath('52998224725')), { inviteId: id, criadoEm: new Date(), criadoPor: uid });
+      await assertFails(batch.commit());
+    }
+  });
 });
 
 describe('D. admin', () => {

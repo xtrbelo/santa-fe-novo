@@ -160,6 +160,40 @@ describe('Fase 9B - convite individual de Membro', () => {
     assert.equal((await getDocs(collection(adminDb(), `${root}/convites_membro`))).size, 1);
   });
 
+  test('convite expirado permite novo convite, troca o indice e preserva o historico', async () => {
+    const cpf = '39053344705';
+    const expiredInviteId = 'e'.repeat(64);
+    await seedDocuments([
+      ['convites_membro', expiredInviteId, { nome: 'Expirado', cpf, email: null, status: 'ativo', criadoEm: new Date(Date.now() - 8 * 86400000), criadoPor: USER_ID, expiraEm: new Date(Date.now() - 1000), atualizadoEm: new Date(Date.now() - 8 * 86400000), atualizadoPor: USER_ID }],
+      ['convite_membro_cpf_index', cpf, { inviteId: expiredInviteId, criadoEm: new Date(Date.now() - 8 * 86400000), criadoPor: USER_ID }]
+    ]);
+    const created = await createMemberInvite({ nome: 'Novo convite', cpf, userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', cpf)))).data().inviteId, created.convite.id);
+    const expiredInvite = await getDoc(doc(adminDb(), path('convites_membro', expiredInviteId)));
+    assert.equal(expiredInvite.exists(), true);
+    assert.equal(expiredInvite.data().status, 'ativo');
+    assert.equal((await getDocs(collection(adminDb(), `${root}/convites_membro`))).size, 2);
+  });
+
+  test('indice inconsistente nao e sobrescrito silenciosamente', async () => {
+    const cpf = '39053344705';
+    for (const [inviteId, invite] of [
+      ['i'.repeat(64), null],
+      ['d'.repeat(64), { nome: 'CPF divergente', cpf: '52998224725', email: null, status: 'ativo', criadoEm: new Date(Date.now() - 8 * 86400000), criadoPor: USER_ID, expiraEm: new Date(Date.now() - 1000), atualizadoEm: new Date(Date.now() - 8 * 86400000), atualizadoPor: USER_ID }]
+    ]) {
+      const entries = [['convite_membro_cpf_index', cpf, { inviteId, criadoEm: new Date(), criadoPor: USER_ID }]];
+      if (invite) entries.push(['convites_membro', inviteId, invite]);
+      await seedDocuments(entries);
+      await assert.rejects(createMemberInvite({ nome: 'Nao sobrescrever', cpf, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /INDICE_CONVITE_INVALIDO/);
+      assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', cpf)))).data().inviteId, inviteId);
+      await environment.clearFirestore();
+      await seedDocuments([
+        ['usuarios', USER_ID, { uid: USER_ID, email: 'admin@santafe.local', role: 'admin', ativo: true }],
+        ['usuarios', 'gestor-business', { uid: 'gestor-business', email: 'gestor@santafe.local', role: 'gestor', ativo: true }]
+      ]);
+    }
+  });
+
   test('reemissão revoga convite anterior e cria token e hash novos', async () => {
     const first = await createMemberInvite({ nome: 'Reemitir', cpf: '39053344705', userId: USER_ID, origin: 'http://localhost' }, adminDb());
     const second = await reissueMemberInvite({ inviteId: first.convite.id, userId: USER_ID, origin: 'http://localhost' }, adminDb());
