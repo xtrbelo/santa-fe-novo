@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clipboard, UserPlus } from 'lucide-react';
+import { CheckCircle2, Clipboard, MessageCircle, UserPlus } from 'lucide-react';
 import { createMemberInvite } from '../../services/firebase';
 import { maskCPF } from '../../utils/formatters';
-import { MEMBER_INVITE_EXPIRATION_DAYS } from '../../utils/memberInvite';
+import { MEMBER_INVITE_EXPIRATION_DAYS, buildMemberInviteWhatsAppUrl } from '../../utils/memberInvite';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 
@@ -10,11 +10,15 @@ const inputClass = 'w-full rounded-xl border border-transparent bg-gray-50 px-4 
 
 export function InviteCreatedContent({ result, onCopy }) {
   const convite = result.convite;
+  const sendByWhatsApp = () => {
+    const openedWindow = window.open(buildMemberInviteWhatsAppUrl({ nome: convite.nome, url: result.url }), '_blank', 'noopener,noreferrer');
+    if (openedWindow) openedWindow.opener = null;
+  };
   return <div className="space-y-5">
     <div className="rounded-2xl bg-emerald-50 p-4 text-center text-emerald-700"><CheckCircle2 className="mx-auto mb-2" /><p className="font-black">Convite criado com sucesso</p></div>
     <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2"><div><dt className="text-xs font-black uppercase text-gray-400">Nome</dt><dd className="font-bold">{convite.nome}</dd></div><div><dt className="text-xs font-black uppercase text-gray-400">CPF</dt><dd className="font-bold">{maskCPF(convite.cpf)}</dd></div>{convite.email && <div><dt className="text-xs font-black uppercase text-gray-400">E-mail</dt><dd className="font-bold">{convite.email}</dd></div>}<div><dt className="text-xs font-black uppercase text-gray-400">Validade</dt><dd className="font-bold">{MEMBER_INVITE_EXPIRATION_DAYS} dias</dd></div></dl>
     <label className="block text-xs font-black uppercase text-gray-500">Link individual<input readOnly value={result.url} onFocus={event => event.target.select()} className={`${inputClass} mt-1 font-mono text-xs`} /></label>
-    <Button variant="purple" onClick={onCopy} className="w-full"><Clipboard size={16} /> Copiar link</Button>
+    <div className="grid gap-2 sm:grid-cols-2"><Button variant="purple" onClick={onCopy} className="w-full"><Clipboard size={16} /> Copiar link</Button><Button variant="success" onClick={sendByWhatsApp} className="w-full"><MessageCircle size={16} /> Enviar por WhatsApp</Button></div>
     <p className="rounded-xl bg-amber-50 p-3 text-xs font-bold leading-relaxed text-amber-800">Por segurança, este link não poderá ser recuperado depois que esta janela for fechada. Se necessário, gere um novo convite.</p>
   </div>;
 }
@@ -34,6 +38,7 @@ export function ConvidarMembroModal({ isOpen, userId, onClose, onCreated, toast 
     catch (error) {
       if (error.message === 'CPF_DUPLICADO') toast.error('Já existe uma pessoa cadastrada com este CPF.');
       else if (error.message === 'CONVITE_ATIVO_JA_EXISTE') toast.error('Já existe um convite ativo para este CPF.');
+      else if (error.message === 'AUTOCADASTRO_PENDENTE') toast.error('Já existe um autocadastro aguardando análise para este CPF.');
       else toast.error(error.message.replace('CONVITE_INVALIDO:', '') || 'Erro ao gerar convite.');
     }
     finally { setSubmitting(false); }

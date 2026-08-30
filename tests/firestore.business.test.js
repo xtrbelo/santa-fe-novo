@@ -21,8 +21,10 @@ import {
   withPessoaSearchIndex,
   createPessoa,
   createMemberInvite,
+  getMemberInviteByToken,
   reissueMemberInvite,
   revokeMemberInvite,
+  submitMemberSelfRegistration,
   autorizarUsuario,
   vincularUsuarioPessoa
 } from '../src/services/firebase.js';
@@ -40,6 +42,7 @@ const path = (collectionName, id) => `${root}/${collectionName}/${id}`;
 let environment;
 const adminDb = () => environment.authenticatedContext(USER_ID, { email_verified: true }).firestore();
 const gestorDb = () => environment.authenticatedContext('gestor-business', { email_verified: true }).firestore();
+const publicDb = () => environment.unauthenticatedContext().firestore();
 
 async function seedDocuments(entries) {
   await environment.withSecurityRulesDisabled(async context => {
@@ -209,6 +212,46 @@ describe('Fase 9B - convite individual de Membro', () => {
     assert.equal((await getDoc(doc(adminDb(), path('convites_membro', result.convite.id)))).data().status, 'revogado');
     assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', '52998224725')))).exists(), false);
     assert.equal((await getDocs(collection(adminDb(), `${root}/pessoas`))).empty, true);
+  });
+});
+
+describe('Fase 9C - autocadastro público de Membro', () => {
+  test('token válido localiza somente o convite exato e token inválido é tratado com segurança', async () => {
+    const created = await createMemberInvite({ nome: 'Token válido', cpf: '52998224725', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    const valid = await getMemberInviteByToken(created.token, publicDb());
+    assert.equal(valid.status, 'ativo'); assert.equal(valid.invite.id, created.convite.id);
+    assert.deepEqual(await getMemberInviteByToken('', publicDb()), { status: 'invalido', invite: null });
+    assert.deepEqual(await getMemberInviteByToken('token-invalido', publicDb()), { status: 'invalido', invite: null });
+  });
+
+  test('envio normaliza dados, cria autocadastro, responde convite e preserva índice sem criar entidades futuras', async () => {
+    const created = await createMemberInvite({ nome: 'Futura Membra', cpf: '52998224725', email: 'INICIAL@EXAMPLE.TEST', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    await submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: created.convite.nome, cpf: created.convite.cpf, email: ' CORRIGIDO@EXAMPLE.TEST ', contato: ' 96999999999 ', sexo: 'feminino', estadoCivil: 'solteiro', dataNascimento: '1990-01-20', endereco: { cep: '68.900-000', logradouro: ' Rua A ', cidade: ' Macapá ', uf: 'ap' } } }, publicDb());
+    const db = adminDb(); const registration = (await getDoc(doc(db, path('autocadastros_membro', created.convite.id)))).data();
+    assert.equal(registration.email, 'corrigido@example.test'); assert.equal(registration.contato, '96999999999'); assert.equal(registration.endereco.cep, '68900000'); assert.equal(registration.endereco.uf, 'AP');
+    assert.equal(registration.nome, created.convite.nome); assert.equal(registration.cpf, created.convite.cpf); assert.equal(registration.statusCadastro, 'aguardando_validacao'); assert.equal(registration.origemCadastro, 'autocadastro');
+    assert.equal((await getDoc(doc(db, path('convites_membro', created.convite.id)))).data().status, 'respondido');
+    assert.equal((await getDoc(doc(db, path('convite_membro_cpf_index', created.convite.cpf)))).data().inviteId, created.convite.id);
+    for (const collectionName of ['pessoas', 'cpf_index', 'usuarios']) assert.equal((await getDocs(collection(db, `${root}/${collectionName}`))).size, collectionName === 'usuarios' ? 2 : 0);
+    for (const forbidden of ['token', 'tokenHash', 'url', 'role', 'pessoaId', 'usuarioId', 'funcoesCasa', 'dadosCasa']) assert.equal(Object.hasOwn(registration, forbidden), false);
+  });
+
+  test('autocadastro respondido bloqueia novo convite, reemissão e segundo envio', async () => {
+    const created = await createMemberInvite({ nome: 'Pendente', cpf: '39053344705', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    const data = { nome: created.convite.nome, cpf: created.convite.cpf };
+    await submitMemberSelfRegistration({ inviteId: created.convite.id, data }, publicDb());
+    await assert.rejects(createMemberInvite({ nome: 'Outro', cpf: created.convite.cpf, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /AUTOCADASTRO_PENDENTE/);
+    await assert.rejects(reissueMemberInvite({ inviteId: created.convite.id, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /AUTOCADASTRO_PENDENTE/);
+    await assert.rejects(submitMemberSelfRegistration({ inviteId: created.convite.id, data }, publicDb()), /AUTOCADASTRO_JA_ENVIADO/);
+  });
+
+  test('serviço rejeita identidade adulterada e convite expirado ou revogado', async () => {
+    const created = await createMemberInvite({ nome: 'Identidade', cpf: '16899535009', userId: USER_ID, origin: 'http://localhost' }, adminDb());
+    await assert.rejects(submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: 'Outro', cpf: created.convite.cpf } }, publicDb()), /AUTOCADASTRO_IDENTIDADE_INVALIDA/);
+    await seedDocuments([['convites_membro', 'e'.repeat(64), { ...created.convite, status: 'ativo', expiraEm: new Date(Date.now() - 1000) }]]);
+    await assert.rejects(submitMemberSelfRegistration({ inviteId: 'e'.repeat(64), data: { nome: created.convite.nome, cpf: created.convite.cpf } }, publicDb()), /CONVITE_INDISPONIVEL|permission-denied/);
+    await seedDocuments([['convites_membro', 'r'.repeat(64), { ...created.convite, status: 'revogado' }]]);
+    await assert.rejects(submitMemberSelfRegistration({ inviteId: 'r'.repeat(64), data: { nome: created.convite.nome, cpf: created.convite.cpf } }, publicDb()), /CONVITE_INDISPONIVEL|permission-denied/);
   });
 });
 

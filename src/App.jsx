@@ -18,6 +18,7 @@ import { PessoasModule } from './modules/Pessoas/PessoasModule';
 import { ConvitesModule } from './modules/Convites/ConvitesModule';
 import { ConfiguracoesModule } from './modules/Configuracoes/ConfiguracoesModule';
 import { UsuariosModule } from './modules/Usuarios/UsuariosModule';
+import { AutocadastroMembroPage } from './modules/Autocadastro/AutocadastroMembroPage';
 import { Clock3, MailCheck, ShieldOff } from 'lucide-react';
 
 function AppContent() {
@@ -176,4 +177,7 @@ function AppContent() {
   return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} allowedTabs={allowedTabs} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} allowedTabs={allowedTabs} /></div>);
 }
 
-export default function App() { return <ToastProvider><AppContent /></ToastProvider>; }
+export default function App() {
+  const isPublicSelfRegistration = window.location.pathname === '/autocadastro';
+  return <ToastProvider>{isPublicSelfRegistration ? <AutocadastroMembroPage /> : <AppContent />}</ToastProvider>;
+}

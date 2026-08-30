@@ -2,7 +2,7 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 
 const PROJECT_ID = 'santa-fe-rules-test';
 const APP_ID = PROJECT_ID;
@@ -18,7 +18,9 @@ const paths = {
 const inviteId = 'a'.repeat(64);
 const invitePath = id => `${root}/convites_membro/${id}`;
 const inviteIndexPath = cpf => `${root}/convite_membro_cpf_index/${cpf}`;
+const registrationPath = id => `${root}/autocadastros_membro/${id}`;
 const inviteData = (uid, overrides = {}) => ({ nome: 'Pessoa Convidada', cpf: '52998224725', email: 'convite@example.test', status: 'ativo', criadoEm: new Date(), criadoPor: uid, expiraEm: new Date(Date.now() + 7 * 86400000), atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
+const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: null, email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
 
 let environment;
 const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();
@@ -121,10 +123,10 @@ describe('C2. convites individuais de Membro', () => {
     }
   });
 
-  test('Atendimento e não autenticado não leem nem criam', async () => {
+  test('Atendimento não lê e nenhum deles cria convite administrativamente', async () => {
     await environment.withSecurityRulesDisabled(async context => { const db = context.firestore(); await setDoc(ref(db, invitePath(inviteId)), inviteData('admin-a')); await setDoc(ref(db, inviteIndexPath('52998224725')), { inviteId, criadoEm: new Date(), criadoPor: 'admin-a' }); });
     await assertFails(getDoc(ref(authDb('atendimento'), invitePath(inviteId))));
-    await assertFails(getDoc(ref(anonymousDb(), invitePath(inviteId))));
+    await assertSucceeds(getDoc(ref(anonymousDb(), invitePath(inviteId))));
     await assertFails(getDoc(ref(authDb('atendimento'), inviteIndexPath('52998224725'))));
     await assertFails(getDoc(ref(anonymousDb(), inviteIndexPath('52998224725'))));
     await assertFails(setDoc(ref(authDb('atendimento'), invitePath('b'.repeat(64))), inviteData('atendimento')));
@@ -211,6 +213,78 @@ describe('C2. convites individuais de Membro', () => {
       batch.set(ref(db, invitePath(id)), inviteData(uid));
       batch.set(ref(db, inviteIndexPath('52998224725')), { inviteId: id, criadoEm: new Date(), criadoPor: uid });
       await assertFails(batch.commit());
+    }
+  });
+});
+
+describe('C3. autocadastro público de Membro', () => {
+  async function seedInvite(overrides = {}) {
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), invitePath(inviteId)), inviteData('admin-a', overrides)));
+  }
+  function registrationBatch(db, overrides = {}, options = {}) {
+    const batch = writeBatch(db);
+    if (!options.omitRegistration) batch.set(ref(db, registrationPath(inviteId)), registrationData(inviteId, overrides));
+    if (!options.omitInviteUpdate) batch.update(ref(db, invitePath(inviteId)), { status: 'respondido', respondidoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+    return batch;
+  }
+
+  test('público faz get exato de convite ativo e respondido válidos, mas nunca lista', async () => {
+    await seedInvite();
+    await assertSucceeds(getDoc(ref(anonymousDb(), invitePath(inviteId))));
+    await assertFails(getDocs(collection(anonymousDb(), `${root}/convites_membro`)));
+    await environment.withSecurityRulesDisabled(async context => updateDoc(ref(context.firestore(), invitePath(inviteId)), { status: 'respondido', respondidoEm: new Date() }));
+    await assertSucceeds(getDoc(ref(anonymousDb(), invitePath(inviteId))));
+  });
+
+  test('público não lê convite expirado ou revogado', async () => {
+    await seedInvite({ expiraEm: new Date(Date.now() - 1000) });
+    await assertFails(getDoc(ref(anonymousDb(), invitePath(inviteId))));
+    await environment.clearFirestore(); await seed(); await seedInvite({ status: 'revogado' });
+    await assertFails(getDoc(ref(anonymousDb(), invitePath(inviteId))));
+  });
+
+  test('Admin e Gestor leem autocadastro; Atendimento e público não leem nem listam', async () => {
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), registrationPath(inviteId)), { ...registrationData(inviteId), enviadoEm: new Date(), atualizadoEm: new Date() }));
+    for (const uid of ['admin-a', 'gestor']) await assertSucceeds(getDoc(ref(authDb(uid), registrationPath(inviteId))));
+    await assertFails(getDoc(ref(authDb('atendimento'), registrationPath(inviteId))));
+    await assertFails(getDoc(ref(anonymousDb(), registrationPath(inviteId))));
+    await assertFails(getDocs(collection(anonymousDb(), `${root}/autocadastros_membro`)));
+  });
+
+  test('operação pública válida cria autocadastro e muda convite atomicamente', async () => {
+    await seedInvite();
+    await assertSucceeds(registrationBatch(anonymousDb()).commit());
+    const admin = authDb('admin-a');
+    assert.equal((await getDoc(ref(admin, invitePath(inviteId)))).data().status, 'respondido');
+    assert.equal((await getDoc(ref(admin, registrationPath(inviteId)))).data().statusCadastro, 'aguardando_validacao');
+  });
+
+  test('público não cria autocadastro nem altera convite isoladamente', async () => {
+    await seedInvite();
+    await assertFails(registrationBatch(anonymousDb(), {}, { omitInviteUpdate: true }).commit());
+    await assertFails(registrationBatch(anonymousDb(), {}, { omitRegistration: true }).commit());
+  });
+
+  test('nega CPF, nome, status e campos sensíveis adulterados', async () => {
+    for (const invalid of [{ cpf: '16899535009' }, { nome: 'Outro nome' }, { contato: 'telefone inválido' }, { contato: '969999999999' }, { email: 'invalido' }, { dataNascimento: '30/08/2000' }, { statusCadastro: 'aprovado' }, { pessoaId: 'fraude' }, { role: 'admin' }, { funcoesCasa: ['medium'] }, { dadosCasa: {} }]) {
+      await seedInvite();
+      await assertFails(registrationBatch(anonymousDb(), invalid).commit());
+      await environment.clearFirestore(); await seed();
+    }
+  });
+
+  test('segundo envio e update/delete público do autocadastro são negados', async () => {
+    await seedInvite(); await assertSucceeds(registrationBatch(anonymousDb()).commit());
+    await assertFails(registrationBatch(anonymousDb()).commit());
+    await assertFails(updateDoc(ref(anonymousDb(), registrationPath(inviteId)), { contato: 'outro' }));
+    await assertFails(deleteDoc(ref(anonymousDb(), registrationPath(inviteId))));
+  });
+
+  test('convite expirado, revogado ou respondido não aceita envio', async () => {
+    for (const overrides of [{ expiraEm: new Date(Date.now() - 1000) }, { status: 'revogado' }, { status: 'respondido', respondidoEm: new Date() }]) {
+      await seedInvite(overrides);
+      await assertFails(registrationBatch(anonymousDb()).commit());
+      await environment.clearFirestore(); await seed();
     }
   });
 });

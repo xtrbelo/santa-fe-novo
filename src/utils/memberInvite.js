@@ -22,6 +22,8 @@ export const hashMemberInviteToken = async token => {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 };
 
+export const isValidMemberInviteToken = token => typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token);
+
 export const buildMemberInviteUrl = (token, origin = globalThis.location?.origin) => {
   if (!origin) throw new Error('ORIGEM_INDISPONIVEL');
   return `${String(origin).replace(/\/$/, '')}/autocadastro?token=${encodeURIComponent(token)}`;
@@ -32,5 +34,12 @@ export const getMemberInviteExpiration = (now = new Date()) => new Date(now.getT
 const toMillis = value => typeof value?.toMillis === 'function' ? value.toMillis() : value instanceof Date ? value.getTime() : Number(value);
 export const getMemberInviteEffectiveStatus = (invite, now = Date.now()) => {
   if (invite?.status === 'revogado') return 'revogado';
+  if (invite?.status === 'respondido') return 'respondido';
   return toMillis(invite?.expiraEm) <= toMillis(now) ? 'expirado' : 'ativo';
 };
+
+export const buildMemberInviteWhatsAppMessage = ({ nome, url }) =>
+  `Olá, ${String(nome || '').trim()}! Você recebeu um convite para realizar seu autocadastro no Santa Fé. Acesse o link: ${url}`;
+
+export const buildMemberInviteWhatsAppUrl = invite =>
+  `https://wa.me/?text=${encodeURIComponent(buildMemberInviteWhatsAppMessage(invite))}`;
