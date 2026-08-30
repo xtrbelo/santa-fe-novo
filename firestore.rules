@@ -164,9 +164,12 @@ service cloud.firestore {
           && request.resource.data.ativo == true
           && request.resource.data.get('funcoesCasa', []).size() == 0);
       allow update: if isAdmin(appId)
-        || (isGestor(appId) && request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        || (isGestor(appId)
+          && request.resource.data.atualizadoPor == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'vinculo', 'funcoesCasa', 'tipoPessoa', 'nome', 'dataNascimento', 'cpf', 'contato', 'email',
-          'responsavelCpf', 'responsavelNome', 'responsavelContato', 'ativo'
+          'responsavelCpf', 'responsavelNome', 'responsavelContato', 'ativo', 'sexo', 'estadoCivil',
+          'endereco', 'dadosCasa', 'statusCadastro', 'origemCadastro', 'busca', 'atualizadoEm', 'atualizadoPor'
         ]))
         || (isAtendimento(appId) && isConsulenteData(resource.data) && isConsulenteData(request.resource.data)
           && request.resource.data.get('vinculo', 'consulente') == resource.data.get('vinculo', 'consulente')
