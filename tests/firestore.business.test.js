@@ -25,6 +25,8 @@ import {
   reissueMemberInvite,
   revokeMemberInvite,
   submitMemberSelfRegistration,
+  approveMemberSelfRegistration,
+  rejectMemberSelfRegistration,
   autorizarUsuario,
   vincularUsuarioPessoa
 } from '../src/services/firebase.js';
@@ -252,6 +254,66 @@ describe('Fase 9C - autocadastro público de Membro', () => {
     await assert.rejects(submitMemberSelfRegistration({ inviteId: 'e'.repeat(64), data: { nome: created.convite.nome, cpf: created.convite.cpf } }, publicDb()), /CONVITE_INDISPONIVEL|permission-denied/);
     await seedDocuments([['convites_membro', 'r'.repeat(64), { ...created.convite, status: 'revogado' }]]);
     await assert.rejects(submitMemberSelfRegistration({ inviteId: 'r'.repeat(64), data: { nome: created.convite.nome, cpf: created.convite.cpf } }, publicDb()), /CONVITE_INDISPONIVEL|permission-denied/);
+  });
+});
+
+describe('Fase 9D - análise de autocadastro de Membro', () => {
+  const submit = async (db, userId = USER_ID, cpf = '52998224725') => {
+    const created = await createMemberInvite({ nome: 'Membra Analisada', cpf, email: 'membra@example.test', userId, origin: 'http://localhost' }, db);
+    await submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: created.convite.nome, cpf, contato: '96999999999', email: 'membra@example.test', sexo: 'feminino', estadoCivil: 'solteiro', dataNascimento: '1990-01-20', endereco: { cep: '68900000', cidade: 'Macapá', uf: 'AP' } } }, publicDb());
+    return created;
+  };
+
+  test('Admin aprova atomicamente, cria Membro e índices sem criar usuário', async () => {
+    const created = await submit(adminDb());
+    const usersBefore = (await getDocs(collection(adminDb(), `${root}/usuarios`))).size;
+    const result = await approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID }, adminDb());
+    const pessoa = (await getDoc(doc(adminDb(), path('pessoas', result.pessoaId)))).data();
+    const registration = (await getDoc(doc(adminDb(), path('autocadastros_membro', created.convite.id)))).data();
+    assert.equal(pessoa.cpf, created.convite.cpf); assert.equal(pessoa.origemCadastro, 'autocadastro'); assert.equal(pessoa.statusCadastro, 'aprovado'); assert.deepEqual(pessoa.funcoesCasa, []);
+    assert.equal((await getDoc(doc(adminDb(), path('cpf_index', created.convite.cpf)))).data().pessoaId, result.pessoaId);
+    assert.equal(registration.statusCadastro, 'aprovado'); assert.equal(registration.pessoaId, result.pessoaId);
+    assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', created.convite.cpf)))).exists(), false);
+    assert.equal((await getDoc(doc(adminDb(), path('convites_membro', created.convite.id)))).exists(), true);
+    assert.equal((await getDoc(doc(adminDb(), path('auditoria', `autocadastro_aprovado_${created.convite.id}`)))).data().tipo, 'AUTOCADASTRO_MEMBRO_APROVADO');
+    assert.equal((await getDocs(collection(adminDb(), `${root}/usuarios`))).size, usersBefore);
+    await assert.rejects(approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID }, adminDb()), /AUTOCADASTRO_JA_ANALISADO/);
+    await assert.rejects(rejectMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID, reason: 'Tentar reverter' }, adminDb()), /AUTOCADASTRO_JA_ANALISADO/);
+  });
+
+  test('Gestor rejeita atomicamente, preserva motivo e permite novo convite', async () => {
+    const created = await submit(gestorDb(), 'gestor-business', '39053344705');
+    await rejectMemberSelfRegistration({ inviteId: created.convite.id, userId: 'gestor-business', reason: ' Dados inconsistentes ' }, gestorDb());
+    const registration = (await getDoc(doc(gestorDb(), path('autocadastros_membro', created.convite.id)))).data();
+    assert.equal(registration.statusCadastro, 'rejeitado'); assert.equal(registration.motivoRejeicao, 'Dados inconsistentes');
+    assert.equal((await getDoc(doc(gestorDb(), path('convite_membro_cpf_index', created.convite.cpf)))).exists(), false);
+    assert.equal((await getDocs(collection(gestorDb(), `${root}/pessoas`))).empty, true);
+    assert.equal((await getDoc(doc(gestorDb(), path('cpf_index', created.convite.cpf)))).exists(), false);
+    const next = await createMemberInvite({ nome: 'Novo convite', cpf: created.convite.cpf, userId: 'gestor-business', origin: 'http://localhost' }, gestorDb());
+    assert.ok(next.convite.id);
+    await assert.rejects(rejectMemberSelfRegistration({ inviteId: created.convite.id, userId: 'gestor-business', reason: 'Outra decisão' }, gestorDb()), /AUTOCADASTRO_JA_ANALISADO/);
+    await assert.rejects(approveMemberSelfRegistration({ inviteId: created.convite.id, userId: 'gestor-business' }, gestorDb()), /AUTOCADASTRO_JA_ANALISADO/);
+  });
+
+  test('Gestor também aprova e Admin também rejeita', async () => {
+    const gestorRegistration = await submit(gestorDb(), 'gestor-business', '39053344705');
+    const approved = await approveMemberSelfRegistration({ inviteId: gestorRegistration.convite.id, userId: 'gestor-business' }, gestorDb());
+    assert.equal((await getDoc(doc(gestorDb(), path('pessoas', approved.pessoaId)))).data().criadoPor, 'gestor-business');
+    const adminRegistration = await submit(adminDb(), USER_ID, '11144477735');
+    await rejectMemberSelfRegistration({ inviteId: adminRegistration.convite.id, userId: USER_ID, reason: 'Cadastro enviado indevidamente' }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('autocadastros_membro', adminRegistration.convite.id)))).data().statusCadastro, 'rejeitado');
+  });
+
+  test('concorrência permite uma única aprovação e conflito de CPF não deixa escrita parcial', async () => {
+    const created = await submit(adminDb(), USER_ID, '16899535009');
+    const attempts = await Promise.allSettled([1, 2].map(() => approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID }, adminDb())));
+    assert.equal(attempts.filter(item => item.status === 'fulfilled').length, 1);
+    assert.equal((await getDocs(collection(adminDb(), `${root}/pessoas`))).size, 1);
+    const conflict = await submit(adminDb(), USER_ID, '11144477735');
+    await seedDocuments([['cpf_index', conflict.convite.cpf, { pessoaId: 'concorrente', criadoEm: new Date() }]]);
+    await assert.rejects(approveMemberSelfRegistration({ inviteId: conflict.convite.id, userId: USER_ID }, adminDb()), /CPF_DUPLICADO/);
+    assert.equal((await getDoc(doc(adminDb(), path('autocadastros_membro', conflict.convite.id)))).data().statusCadastro, 'aguardando_validacao');
+    assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', conflict.convite.cpf)))).exists(), true);
   });
 });
 

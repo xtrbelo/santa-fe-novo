@@ -30,3 +30,9 @@ test('somente Admin e Gestor possuem acesso ao módulo Convites', () => {
   assert.equal(ROLE_TABS.gestor.includes('convites'), true);
   assert.equal(ROLE_TABS.atendimento.includes('convites'), false);
 });
+
+test('somente Admin e Gestor possuem acesso ao módulo Autocadastros', () => {
+  assert.equal(ROLE_TABS.admin.includes('autocadastros'), true);
+  assert.equal(ROLE_TABS.gestor.includes('autocadastros'), true);
+  assert.equal(ROLE_TABS.atendimento.includes('autocadastros'), false);
+});

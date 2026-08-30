@@ -17,9 +17,28 @@ service cloud.firestore {
     function memberInvitePath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convites_membro/$(inviteId); }
     function memberSelfRegistrationPath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/autocadastros_membro/$(inviteId); }
     function memberInviteCpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convite_membro_cpf_index/$(cpf); }
+    function cpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/cpf_index/$(cpf); }
     function userPersonIndexPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuario_pessoa_index/$(pessoaId); }
     function isActiveMemberData(data) { return data.ativo != false && (data.vinculo == 'membro' || data.tipoPessoa == 'Membro'); }
     function isConsulenteData(data) { return data.vinculo == 'consulente' || data.tipoPessoa == 'Consulente'; }
+    function canReviewMemberRegistration(appId) { return isAdmin(appId) || isGestor(appId); }
+    function approvalAuditPath(appId, inviteId) { return auditPath(appId, 'autocadastro_aprovado_' + inviteId); }
+    function rejectionAuditPath(appId, inviteId) { return auditPath(appId, 'autocadastro_rejeitado_' + inviteId); }
+    function validApprovedSelfRegistration(appId, pessoaId, pessoaData) {
+      let inviteId = get(memberInviteCpfIndexPath(appId, pessoaData.cpf)).data.inviteId;
+      let registration = getAfter(memberSelfRegistrationPath(appId, inviteId)).data;
+      let audit = getAfter(approvalAuditPath(appId, inviteId)).data;
+      return pessoaData.origemCadastro == 'autocadastro'
+        && registration.statusCadastro == 'aprovado'
+        && registration.pessoaId == pessoaId
+        && registration.cpf == pessoaData.cpf
+        && registration.nome == pessoaData.nome
+        && !existsAfter(memberInviteCpfIndexPath(appId, pessoaData.cpf))
+        && getAfter(cpfIndexPath(appId, pessoaData.cpf)).data.pessoaId == pessoaId
+        && audit.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO'
+        && audit.inviteId == inviteId && audit.pessoaId == pessoaId
+        && audit.executadoPor == request.auth.uid;
+    }
     function validUserPersonLink(appId, uid, pessoaId) {
       return pessoaId is string
         && isActiveMemberData(get(personPath(appId, pessoaId)).data)
@@ -156,13 +175,34 @@ service cloud.firestore {
             && getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.ultimaRealocacaoId == id
             && getAfter(appointmentPath(appId, request.resource.data.destinoAgendamentoId)).data.origemRealocacao.realocacaoId == id
             && getAfter(activeLockPath(appId, request.resource.data.destinoAgendaId, getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.pessoaBaseId)).data.agendamentoId == request.resource.data.destinoAgendamentoId)
-          || (isAdmin(appId) && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO'));
+          || (isAdmin(appId) && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO')
+          || (canReviewMemberRegistration(appId)
+            && request.resource.data.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO'
+            && id == 'autocadastro_aprovado_' + request.resource.data.inviteId
+            && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.statusCadastro == 'aprovado'
+            && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.pessoaId == request.resource.data.pessoaId)
+          || (canReviewMemberRegistration(appId)
+            && request.resource.data.tipo == 'AUTOCADASTRO_MEMBRO_REJEITADO'
+            && id == 'autocadastro_rejeitado_' + request.resource.data.inviteId
+            && request.resource.data.motivo is string && request.resource.data.motivo.size() > 0
+            && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.statusCadastro == 'rejeitado'
+            && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.motivoRejeicao == request.resource.data.motivo));
       allow update, delete: if false;
     }
 
     match /artifacts/{appId}/public/data/pessoas/{id} {
       allow read: if isInternal(appId);
-      allow create: if isAdmin(appId) || isGestor(appId)
+      allow create: if ((isAdmin(appId) || isGestor(appId))
+          && request.resource.data.get('origemCadastro', 'administrativo') != 'autocadastro')
+        || (canReviewMemberRegistration(appId)
+          && request.resource.data.vinculo == 'membro'
+          && request.resource.data.tipoPessoa == 'Membro'
+          && request.resource.data.funcoesCasa.size() == 0
+          && request.resource.data.ativo == true
+          && request.resource.data.statusCadastro == 'aprovado'
+          && request.resource.data.criadoPor == request.auth.uid
+          && request.resource.data.atualizadoPor == request.auth.uid
+          && validApprovedSelfRegistration(appId, id, request.resource.data))
         || (isAtendimento(appId) && isConsulenteData(request.resource.data)
           && request.resource.data.ativo == true
           && request.resource.data.get('funcoesCasa', []).size() == 0);
@@ -188,7 +228,12 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/cpf_index/{cpf} {
       allow read: if isInternal(appId);
-      allow create: if isAdmin(appId) || isGestor(appId)
+      allow create: if ((isAdmin(appId) || isGestor(appId))
+          && getAfter(personPath(appId, request.resource.data.pessoaId)).data.get('origemCadastro', 'administrativo') != 'autocadastro')
+        || (canReviewMemberRegistration(appId)
+          && request.resource.data.pessoaId is string
+          && getAfter(personPath(appId, request.resource.data.pessoaId)).data.cpf == cpf
+          && validApprovedSelfRegistration(appId, request.resource.data.pessoaId, getAfter(personPath(appId, request.resource.data.pessoaId)).data))
         || (isAtendimento(appId) && isConsulenteData(getAfter(personPath(appId, request.resource.data.pessoaId)).data));
       allow delete: if isAdmin(appId) || isGestor(appId)
         || (isAtendimento(appId) && isConsulenteData(getAfter(personPath(appId, resource.data.pessoaId)).data));
@@ -296,7 +341,34 @@ service cloud.firestore {
         && request.resource.data.cpf == get(memberInvitePath(appId, inviteId)).data.cpf
         && getAfter(memberInvitePath(appId, inviteId)).data.status == 'respondido'
         && getAfter(memberInvitePath(appId, inviteId)).data.respondidoEm == request.time;
-      allow update, delete: if false;
+      allow update: if canReviewMemberRegistration(appId)
+        && resource.data.statusCadastro == 'aguardando_validacao'
+        && request.resource.data.inviteId == inviteId
+        && request.resource.data.cpf == resource.data.cpf
+        && request.resource.data.nome == resource.data.nome
+        && request.resource.data.analisadoPor == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'statusCadastro', 'pessoaId', 'motivoRejeicao', 'analisadoEm', 'analisadoPor', 'atualizadoEm'
+        ])
+        && get(memberInvitePath(appId, inviteId)).data.status == 'respondido'
+        && get(memberInvitePath(appId, inviteId)).data.cpf == resource.data.cpf
+        && get(memberInvitePath(appId, inviteId)).data.nome == resource.data.nome
+        && get(memberInviteCpfIndexPath(appId, resource.data.cpf)).data.inviteId == inviteId
+        && !existsAfter(memberInviteCpfIndexPath(appId, resource.data.cpf))
+        && ((request.resource.data.statusCadastro == 'aprovado'
+            && request.resource.data.pessoaId is string
+            && !exists(cpfIndexPath(appId, resource.data.cpf))
+            && getAfter(cpfIndexPath(appId, resource.data.cpf)).data.pessoaId == request.resource.data.pessoaId
+            && getAfter(personPath(appId, request.resource.data.pessoaId)).data.cpf == resource.data.cpf
+            && getAfter(personPath(appId, request.resource.data.pessoaId)).data.origemCadastro == 'autocadastro'
+            && getAfter(approvalAuditPath(appId, inviteId)).data.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO')
+          || (request.resource.data.statusCadastro == 'rejeitado'
+            && request.resource.data.motivoRejeicao is string
+            && request.resource.data.motivoRejeicao.size() > 0
+            && !request.resource.data.keys().hasAny(['pessoaId'])
+            && getAfter(rejectionAuditPath(appId, inviteId)).data.tipo == 'AUTOCADASTRO_MEMBRO_REJEITADO'
+            && getAfter(rejectionAuditPath(appId, inviteId)).data.motivo == request.resource.data.motivoRejeicao));
+      allow delete: if false;
     }
 
     match /artifacts/{appId}/public/data/convite_membro_cpf_index/{cpf} {
@@ -329,8 +401,13 @@ service cloud.firestore {
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.criadoPor == request.auth.uid;
       allow delete: if (isAdmin(appId) || isGestor(appId))
         && resource.data.inviteId is string
-        && get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'
-        && getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado';
+        && ((get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'
+            && getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado')
+          || (get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'respondido'
+            && get(memberInvitePath(appId, resource.data.inviteId)).data.cpf == cpf
+            && getAfter(memberSelfRegistrationPath(appId, resource.data.inviteId)).data.statusCadastro in ['aprovado', 'rejeitado']
+            && (getAfter(approvalAuditPath(appId, resource.data.inviteId)).data.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO'
+              || getAfter(rejectionAuditPath(appId, resource.data.inviteId)).data.tipo == 'AUTOCADASTRO_MEMBRO_REJEITADO')));
     }
 
     match /artifacts/{appId}/public/data/agendas/{id} {
