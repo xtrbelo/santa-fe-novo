@@ -19,6 +19,7 @@ import {
   rebuildPessoaSearchIndex,
   searchPessoas,
   withPessoaSearchIndex,
+  createPessoa,
   autorizarUsuario,
   vincularUsuarioPessoa
 } from '../src/services/firebase.js';
@@ -110,6 +111,17 @@ describe('Fase 8A - autorização e vínculo de acesso', () => {
     await vincularUsuarioPessoa({ uid: USER_ID, pessoaBaseId: 'membro-admin', executadoPor: USER_ID }, db);
     const usuario = (await getDoc(doc(db, path('usuarios', USER_ID)))).data();
     assert.equal(usuario.role, 'admin'); assert.equal(usuario.ativo, true); assert.equal(usuario.pessoaBaseId, 'membro-admin');
+  });
+});
+
+describe('Fase 9A - cadastro institucional de Membro', () => {
+  test('cria Membro canônico sem e-mail e mantém acesso condicionado a e-mail', async () => {
+    const db = adminDb();
+    const membro = await createPessoa({ data: { vinculo: 'membro', nome: 'Membro Institucional', cpf: '98765432100', email: '', sexo: 'outro', estadoCivil: 'nao_informado', endereco: { cep: '68900000', cidade: 'Macapá', uf: 'AP' }, dadosCasa: { dataIngresso: '2024-01-10' }, funcoesCasa: ['medium'] }, userId: USER_ID }, db);
+    const saved = (await getDoc(doc(db, path('pessoas', membro.id)))).data();
+    assert.equal(saved.email, null); assert.equal(saved.statusCadastro, 'aprovado'); assert.equal(saved.origemCadastro, 'administrativo'); assert.equal(saved.endereco.uf, 'AP');
+    await seedDocuments([['usuarios', 'pendente-9a', { uid: 'pendente-9a', email: 'membro@example.test', role: 'pendente', ativo: true }]]);
+    await assert.rejects(autorizarUsuario({ uid: 'pendente-9a', pessoaBaseId: membro.id, role: 'atendimento', executadoPor: USER_ID }, db), /MEMBRO_SEM_EMAIL_ACESSO/);
   });
 });
 

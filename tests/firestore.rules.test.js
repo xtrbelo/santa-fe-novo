@@ -19,6 +19,7 @@ let environment;
 const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();
 const anonymousDb = () => environment.unauthenticatedContext().firestore();
 const ref = (db, path) => doc(db, path);
+const canonicalMember = overrides => ({ nome: 'Membro Nove', cpf: '12345678900', email: null, vinculo: 'membro', tipoPessoa: 'Membro', funcoesCasa: ['medium'], sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, dataBatismoCaesf: null }, statusCadastro: 'aprovado', origemCadastro: 'administrativo', ativo: true, ...overrides });
 
 async function seed() {
   await environment.withSecurityRulesDisabled(async context => {
@@ -146,6 +147,13 @@ describe('D. admin', () => {
     await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Alterada' }));
     await assertFails(deleteDoc(ref(db, paths.people)));
   });
+  test('cria Membro no novo modelo e Admin pode inativar e reativar', async () => {
+    const db = authDb('admin-a');
+    const memberRef = ref(db, `${root}/pessoas/membro-9a-admin`);
+    await assertSucceeds(setDoc(memberRef, canonicalMember()));
+    await assertSucceeds(updateDoc(memberRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertSucceeds(updateDoc(memberRef, { ativo: true, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+  });
   test('opera Agendas e consulentes', async () => {
     const db = authDb('admin-a');
     await assertSucceeds(getDoc(ref(db, paths.agendas)));
@@ -190,9 +198,20 @@ describe('E. gestor', () => {
   });
   test('opera Pessoas, Agendas e Fluxo', async () => {
     const db = authDb('gestor');
-    await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Gestor editou' }));
+    await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Gestor editou', atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
     await assertSucceeds(setDoc(ref(db, `${root}/agendas/gestor`), { tipo: 'Agenda' }));
     await assertSucceeds(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
+  });
+  test('cria, edita novos campos e Gestor pode inativar e reativar Membro', async () => {
+    const db = authDb('gestor');
+    const memberRef = ref(db, `${root}/pessoas/membro-9a-gestor`);
+    await assertSucceeds(setDoc(memberRef, canonicalMember()));
+    await assertSucceeds(updateDoc(memberRef, { sexo: 'feminino', estadoCivil: 'solteiro', endereco: { cep: '68900000', logradouro: 'Rua A', numero: '1', complemento: null, bairro: 'Centro', cidade: 'Macapá', uf: 'AP' }, dadosCasa: { dataIngresso: '2020-01-01', dataBatismoCaesf: null }, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+    await assertSucceeds(updateDoc(memberRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+    await assertSucceeds(updateDoc(memberRef, { ativo: true, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+  });
+  test('Gestor não atualiza Pessoa com campo arbitrário', async () => {
+    await assertFails(updateDoc(ref(authDb('gestor'), paths.people), { sexo: 'masculino', campoNaoPermitido: 'teste', atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
   });
   test('não administra configurações', async () => assertFails(updateDoc(ref(authDb('gestor'), paths.config), { ativo: false })));
   test('não lista usuários', async () => assertFails(getDocs(collection(authDb('gestor'), `${root}/usuarios`))));
@@ -218,6 +237,9 @@ describe('F. atendimento', () => {
     await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Nome corrigido', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
     await assertFails(setDoc(ref(db, `${root}/pessoas/membro-proibido`), { nome: 'Membro', vinculo: 'membro', tipoPessoa: 'Membro', funcoesCasa: [], ativo: true }));
     await assertFails(updateDoc(ref(db, paths.people), { vinculo: 'membro', tipoPessoa: 'Membro', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
+    await assertFails(updateDoc(ref(db, `${root}/pessoas/membro-autorizacao`), { sexo: 'feminino', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
+    await assertFails(updateDoc(ref(db, `${root}/pessoas/membro-autorizacao`), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
+    await assertFails(updateDoc(ref(db, `${root}/pessoas/membro-inativo`), { ativo: true, atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
   });
   test('não cria agendas', async () => assertFails(setDoc(ref(authDb('atendimento'), `${root}/agendas/nova`), { tipo: 'Nova' })));
   test('não administra configurações nem usuários', async () => {

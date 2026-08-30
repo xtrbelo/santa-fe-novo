@@ -19,7 +19,7 @@ import {
   validateCPF
 } from '../../utils/formatters';
 import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
-import { buildPessoaPayload, getEffectiveMemberFunctions, getMemberFunctionLabels, localTextIncludes, validatePessoaPayload } from '../../utils/pessoaForm';
+import { buildPessoaPayload, createEmptyMemberDetails, getEffectiveMemberFunctions, getMemberFunctionLabels, getPessoaStatusCadastro, localTextIncludes, validatePessoaPayload } from '../../utils/pessoaForm';
 import { normalizeSearchText } from '../../utils/pessoaSearch';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -27,6 +27,8 @@ import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { PessoaHistoricoModal } from './PessoaHistoricoModal';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
+import { MembroDadosComplementares } from '../../components/pessoas/MembroDadosComplementares';
+import { PessoaDetalhesModal } from '../../components/pessoas/PessoaDetalhesModal';
 import { useToast } from '../../components/ui/useToast';
 import { 
   UserPlus, 
@@ -44,6 +46,7 @@ export const PessoasModule = ({ user, profile }) => {
   const [pessoas, setPessoas] = useState([]);
   const [funcoesMembro, setFuncoesMembro] = useState([]);
   const [abaAtiva, setAbaAtiva] = useState('todos');
+  const [situacao, setSituacao] = useState('ativos');
   const [buscaTexto, setBuscaTexto] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
@@ -51,6 +54,7 @@ export const PessoasModule = ({ user, profile }) => {
   const [itemToDelete, setItemToDelete] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyPerson, setHistoryPerson] = useState(null);
+  const [selectedPerson, setSelectedPerson] = useState(null);
 
   // Estados do formulário
   const [eVinculo, setEVinculo] = useState('consulente');
@@ -64,6 +68,7 @@ export const PessoasModule = ({ user, profile }) => {
   const [eRespCpf, setERespCpf] = useState('');
   const [eRespNome, setERespNome] = useState('');
   const [eRespContato, setERespContato] = useState('');
+  const [eMemberDetails, setEMemberDetails] = useState(createEmptyMemberDetails());
 
   const toast = useToast();
 
@@ -73,7 +78,6 @@ export const PessoasModule = ({ user, profile }) => {
       setPessoas(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(p => p.ativo !== false)
           .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""))
       );
     });
@@ -99,6 +103,7 @@ export const PessoasModule = ({ user, profile }) => {
     setERespContato('');
     setEVinculo('consulente');
     setEFuncoes([]);
+    setEMemberDetails(createEmptyMemberDetails());
   };
 
   const openNew = () => {
@@ -119,6 +124,7 @@ export const PessoasModule = ({ user, profile }) => {
     setERespCpf(maskCPF(p.responsavelCpf));
     setERespNome(p.responsavelNome || '');
     setERespContato(maskPhone(p.responsavelContato));
+    setEMemberDetails(createEmptyMemberDetails(p));
     setIsModalOpen(true);
   };
 
@@ -142,7 +148,8 @@ export const PessoasModule = ({ user, profile }) => {
       email: minor && effectiveVinculo !== 'membro' ? null : eEmail,
       responsavelCpf: minor ? cleanDigits(eRespCpf) || null : null,
       responsavelNome: minor ? eRespNome.trim() || null : null,
-      responsavelContato: minor ? cleanDigits(eRespContato) || null : null
+      responsavelContato: minor ? cleanDigits(eRespContato) || null : null,
+      ...eMemberDetails
     });
     const validationError = validatePessoaPayload(baseData);
     if (validationError) { toast.error(validationError); return; }
@@ -215,12 +222,13 @@ export const PessoasModule = ({ user, profile }) => {
   const handleDelete = async () => {
     if (!itemToDelete) return;
     try {
-      await updateDoc(getAppDoc('pessoas', itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
-      toast.success(`Registro de ${itemToDelete.nome} desativado.`);
+      const nextActive = itemToDelete.ativo === false;
+      await updateDoc(getAppDoc('pessoas', itemToDelete.id), { ativo: nextActive, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+      toast.success(`Registro de ${itemToDelete.nome} ${nextActive ? 'reativado' : 'inativado'}.`);
       setItemToDelete(null);
     } catch (err) {
       console.error(err);
-      toast.error('Erro ao excluir registro.');
+      toast.error('Erro ao alterar a situação do registro.');
     }
   };
 
@@ -228,12 +236,14 @@ export const PessoasModule = ({ user, profile }) => {
   const effectiveMemberFunctions = getEffectiveMemberFunctions(funcoesMembro);
   const filtradas = pessoas.filter(p => {
     const mType = abaAtiva === 'todos' || getPessoaVinculo(p) === abaAtiva;
+    const mSituation = situacao === 'todos' || (situacao === 'ativos' ? p.ativo !== false : p.ativo === false);
     const mSearch = 
       !cleanSearch ||
       localTextIncludes(p.nome, cleanSearch) ||
       (p.cpf && p.cpf.includes(cleanSearch));
-    return mType && mSearch;
+    return mType && mSituation && mSearch;
   });
+  const updateMemberDetails = (field, value) => field === 'funcoesCasa' ? setEFuncoes(value) : setEMemberDetails(current => ({ ...current, [field]: value }));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
@@ -277,6 +287,12 @@ export const PessoasModule = ({ user, profile }) => {
             <option value="membro">Membros</option>
           </select>
         </div>
+        <div className="flex items-center bg-white px-4 py-1.5 rounded-2xl border border-gray-100 shadow-sm">
+          <Filter size={18} className="text-purple-400 mr-3 shrink-0" />
+          <select value={situacao} onChange={e => setSituacao(e.target.value)} className="w-full bg-transparent border-none outline-none text-sm font-bold text-gray-700 py-2.5 cursor-pointer">
+            <option value="ativos">Situação: Ativos</option><option value="inativos">Situação: Inativos</option><option value="todos">Situação: Todos</option>
+          </select>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3">
@@ -290,7 +306,7 @@ export const PessoasModule = ({ user, profile }) => {
         ) : (
           filtradas.map(p => (
             <Card key={p.id} className="flex flex-col gap-4 !border-none shadow-md">
-              <div className="flex items-start gap-3.5">
+              <div className="flex cursor-pointer items-start gap-3.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-purple-400" role="button" tabIndex={0} onClick={() => setSelectedPerson(p)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedPerson(p); } }}>
                 <div className="w-11 h-11 rounded-2xl bg-purple-100 text-purple-600 flex items-center justify-center shrink-0">
                   <UserSquare2 size={24} />
                 </div>
@@ -304,6 +320,8 @@ export const PessoasModule = ({ user, profile }) => {
                         Menor de Idade
                       </span>
                     )}
+                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider ${p.ativo === false ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{p.ativo === false ? 'Inativo' : 'Ativo'}</span>
+                    {getPessoaVinculo(p) === 'membro' && getPessoaStatusCadastro(p) === 'aprovado' && <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider bg-blue-50 text-blue-700">Cadastro aprovado</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
                     <span className="text-[9px] font-black uppercase bg-purple-50 text-purple-700 px-2.5 py-0.5 rounded-full">
@@ -323,7 +341,7 @@ export const PessoasModule = ({ user, profile }) => {
                 </div>
               </div>
 
-              <div className="flex gap-2 border-t border-gray-50 pt-3">
+              <div className="flex gap-2 border-t border-gray-50 pt-3" onClick={event => event.stopPropagation()}>
                 <Button variant="secondary" onClick={() => setHistoryPerson(p)} className="flex-1 py-2 text-xs h-10 rounded-xl text-blue-700 hover:bg-blue-50"><History size={14} /> Histórico</Button>
                 {(!readOnly || getPessoaVinculo(p) === 'consulente') && <Button
                   variant="secondary" 
@@ -333,11 +351,11 @@ export const PessoasModule = ({ user, profile }) => {
                   <Edit size={14} /> Editar
                 </Button>}
                 {!readOnly && <Button
-                  variant="danger" 
+                  variant={p.ativo === false ? 'success' : 'danger'}
                   onClick={() => setItemToDelete(p)} 
                   className="px-4 py-2 h-10 rounded-xl"
                 >
-                  <Trash2 size={16} />
+                  {p.ativo === false ? 'Reativar' : <><Trash2 size={16} /> Inativar</>}
                 </Button>}
               </div>
             </Card>
@@ -383,11 +401,6 @@ export const PessoasModule = ({ user, profile }) => {
             </div>
           </div>
 
-          {!readOnly && eVinculo === 'membro' && <div className="bg-purple-50 p-4 rounded-2xl">
-            <p className="text-[10px] font-black uppercase text-purple-700 mb-2">Funções na Casa</p>
-            {effectiveMemberFunctions.map(({ id, nome }) => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={eFuncoes.includes(id)} onChange={() => setEFuncoes(eFuncoes.includes(id) ? eFuncoes.filter(x => x !== id) : [...eFuncoes, id])}/> {nome}</label>)}
-          </div>}
-
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
               Nome Completo *
@@ -430,10 +443,12 @@ export const PessoasModule = ({ user, profile }) => {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">E-mail {eVinculo === 'membro' && '*'}</label>
-            <input type="email" value={eEmail} onChange={e => setEEmail(e.target.value)} required={eVinculo === 'membro'} autoComplete="email" className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none"/>
-            {eVinculo === 'membro' && <p className="text-[11px] font-medium text-purple-700">Este e-mail será utilizado para vincular o acesso ao sistema.</p>}
+            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">E-mail</label>
+            <input type="email" value={eEmail} onChange={e => setEEmail(e.target.value)} autoComplete="email" className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none"/>
+            {eVinculo === 'membro' && <p className="text-[11px] font-medium text-purple-700">E-mail opcional no cadastro do membro. Será necessário caso seja liberado acesso ao sistema.</p>}
           </div>
+
+          {!readOnly && eVinculo === 'membro' && <MembroDadosComplementares value={{ ...eMemberDetails, funcoesCasa: eFuncoes }} onChange={updateMemberDetails} functionOptions={effectiveMemberFunctions} />}
 
           {eIdade !== null && eIdade < 18 && (
             <div className="bg-amber-50/60 p-4 sm:p-5 rounded-2xl space-y-3 border border-amber-200/70">
@@ -478,14 +493,24 @@ export const PessoasModule = ({ user, profile }) => {
         </form>
       </Modal>
       <PessoaFormModal isOpen={isNewModalOpen} user={user} allowedVinculos={readOnly ? ['consulente'] : ['consulente', 'membro']} onClose={() => setIsNewModalOpen(false)} onSaved={() => toast.success('Nova pessoa cadastrada com sucesso!')} />
+      <PessoaDetalhesModal
+        pessoa={selectedPerson}
+        functionOptions={effectiveMemberFunctions}
+        canEdit={!readOnly || getPessoaVinculo(selectedPerson) === 'consulente'}
+        canToggleActive={!readOnly}
+        onClose={() => setSelectedPerson(null)}
+        onHistory={() => { setHistoryPerson(selectedPerson); setSelectedPerson(null); }}
+        onEdit={() => { const pessoa = selectedPerson; setSelectedPerson(null); openEdit(pessoa); }}
+        onToggleActive={() => { setItemToDelete(selectedPerson); setSelectedPerson(null); }}
+      />
 
       <ConfirmDialog 
         isOpen={!!itemToDelete}
         onClose={() => setItemToDelete(null)}
         onConfirm={handleDelete}
-        title="Desativar Registro"
-        message={`Deseja desativar o registro de "${itemToDelete?.nome}"?`}
-        confirmText="Sim, Desativar"
+        title={itemToDelete?.ativo === false ? 'Reativar Registro' : 'Inativar Registro'}
+        message={`Deseja ${itemToDelete?.ativo === false ? 'reativar' : 'inativar'} o registro de "${itemToDelete?.nome}"?`}
+        confirmText={itemToDelete?.ativo === false ? 'Sim, Reativar' : 'Sim, Inativar'}
       />
       <PessoaHistoricoModal pessoa={historyPerson} onClose={() => setHistoryPerson(null)} />
     </div>
