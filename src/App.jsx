@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { auth, createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, setDoc, onSnapshot, Timestamp } from './services/firebase';
+import React, { useEffect, useState } from 'react';
+import { auth, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, onSnapshot } from './services/firebase';
 import { ROLES, ROLE_TABS } from './constants/roles';
 import { ToastProvider } from './components/ui/Toast';
 import { useToast } from './components/ui/useToast';
@@ -9,8 +9,7 @@ import { LoginScreen } from './components/auth/LoginScreen';
 import { AccessScreen } from './components/auth/AccessScreen';
 import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
 import { useInactivityTimeout } from './hooks/useInactivityTimeout';
-import { AUTH_VIEW, getAuthErrorMessage, normalizeAuthEmail, resolveAuthView, usesPasswordProvider, validateRegistration } from './utils/auth';
-import { normalizeEmail } from './utils/pessoaForm';
+import { AUTH_VIEW, getAuthErrorMessage, normalizeAuthEmail, rejectUnauthorizedSession, resolveAuthView } from './utils/auth';
 import { HomeModule } from './modules/Home/HomeModule';
 import { AgendasModule } from './modules/Agendas/AgendasModule';
 import { FluxoModule } from './modules/Fluxo/FluxoModule';
@@ -20,7 +19,7 @@ import { AutocadastrosModule } from './modules/Autocadastros/AutocadastrosModule
 import { ConfiguracoesModule } from './modules/Configuracoes/ConfiguracoesModule';
 import { UsuariosModule } from './modules/Usuarios/UsuariosModule';
 import { AutocadastroMembroPage } from './modules/Autocadastro/AutocadastroMembroPage';
-import { Clock3, MailCheck, ShieldOff } from 'lucide-react';
+import { Clock3, MailCheck, ShieldOff, ShieldQuestion } from 'lucide-react';
 
 function AppContent() {
   const [user, setUser] = useState(null);
@@ -32,7 +31,6 @@ function AppContent() {
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
   const [verificationCooldownUntil, setVerificationCooldownUntil] = useState(0);
   const [, setVerificationVersion] = useState(0);
-  const pendingRegistrationName = useRef('');
   const toast = useToast();
   const toastError = toast.error;
 
@@ -51,7 +49,7 @@ function AppContent() {
     if (!isFirebaseConfigured || !auth) { setLoading(false); return undefined; }
     let unsubscribeProfile = () => {};
     let authGeneration = 0;
-    const unsubscribeAuth = onAuthStateChanged(auth, async authenticatedUser => {
+    const unsubscribeAuth = onAuthStateChanged(auth, authenticatedUser => {
       const generation = ++authGeneration;
       unsubscribeProfile();
       unsubscribeProfile = () => {};
@@ -61,17 +59,20 @@ function AppContent() {
       if (!authenticatedUser) { setLoading(false); return; }
       try {
         const ref = getAppDoc('usuarios', authenticatedUser.uid);
-        const snap = await getDoc(ref);
-        if (generation !== authGeneration) return;
-        if (!snap.exists()) {
-          const now = Timestamp.now();
-          await setDoc(ref, { uid: authenticatedUser.uid, nome: authenticatedUser.displayName || pendingRegistrationName.current || '', email: normalizeEmail(authenticatedUser.email), role: ROLES.PENDENTE, ativo: true, criadoEm: now, atualizadoEm: now });
-          if (generation !== authGeneration) return;
-          pendingRegistrationName.current = '';
-        }
         unsubscribeProfile = onSnapshot(ref, profileSnapshot => {
           if (generation !== authGeneration) return;
-          setProfile(profileSnapshot.exists() ? { id: profileSnapshot.id, ...profileSnapshot.data() } : null);
+          if (!profileSnapshot.exists()) {
+            unsubscribeProfile();
+            unsubscribeProfile = () => {};
+            setProfile(null);
+            setLoading(false);
+            void rejectUnauthorizedSession({ auth, signOutUser: signOut, notify: toastError }).catch(error => {
+              console.error(error);
+              if (generation === authGeneration) setLoading(false);
+            });
+            return;
+          }
+          setProfile({ id: profileSnapshot.id, ...profileSnapshot.data() });
           setLoading(false);
         }, error => { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível acompanhar seu perfil de acesso.'); setLoading(false); });
       } catch (error) { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível carregar seu perfil de acesso.'); setLoading(false); }
@@ -99,21 +100,6 @@ function AppContent() {
     setIsLoggingIn(true);
     try { await signInWithEmailAndPassword(auth, normalizeAuthEmail(email), senha); toast.success('Login realizado com sucesso!'); }
     catch (error) { console.error(error); toast.error(getAuthErrorMessage(error)); }
-    finally { setIsLoggingIn(false); }
-  };
-  const handleRegister = async form => {
-    if (!auth) return;
-    const validationError = validateRegistration(form);
-    if (validationError) { toast.error(validationError); return; }
-    setIsLoggingIn(true);
-    pendingRegistrationName.current = form.nome.trim();
-    try {
-      const credential = await createUserWithEmailAndPassword(auth, normalizeAuthEmail(form.email), form.senha);
-      await updateProfile(credential.user, { displayName: form.nome.trim() });
-      await sendEmailVerification(credential.user);
-      setVerificationCooldownUntil(Date.now() + 60000);
-      toast.success('Solicitação enviada. Enviamos uma mensagem de confirmação para seu e-mail.');
-    } catch (error) { pendingRegistrationName.current = ''; console.error(error); toast.error(getAuthErrorMessage(error)); }
     finally { setIsLoggingIn(false); }
   };
   const handleResetPassword = async email => {
@@ -163,11 +149,13 @@ function AppContent() {
 
   const withSessionTimeout = content => <>{content}<SessionTimeoutModal isOpen={isWarning} remainingMs={remainingMs} onContinue={continueSession} /></>;
 
-  if (resolveAuthView({ loading, user, profile, pendingRole: ROLES.PENDENTE }) === AUTH_VIEW.LOADING) return user ? withSessionTimeout(<div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>) : <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
-  if (!user) return <LoginScreen onEmailLogin={handleEmailLogin} onGoogleLogin={handleGoogleLogin} onRegister={handleRegister} onResetPassword={handleResetPassword} busy={isLoggingIn} />;
-  if (usesPasswordProvider(user) && !user.emailVerified) return withSessionTimeout(<AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />);
-  if (profile?.ativo === false) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />);
-  if (!profile || profile.role === ROLES.PENDENTE) return withSessionTimeout(<AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />);
+  const authView = resolveAuthView({ loading, user, profile, pendingRole: ROLES.PENDENTE });
+  if (authView === AUTH_VIEW.LOADING) return user ? withSessionTimeout(<div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>) : <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
+  if (authView === AUTH_VIEW.LOGIN) return <LoginScreen onEmailLogin={handleEmailLogin} onGoogleLogin={handleGoogleLogin} onResetPassword={handleResetPassword} busy={isLoggingIn} />;
+  if (authView === AUTH_VIEW.UNAUTHORIZED) return withSessionTimeout(<AccessScreen icon={<ShieldQuestion size={44} />} iconClass="text-amber-600" title="Acesso não autorizado" description="Esta conta não possui autorização para acessar o Sistema Santa Fé. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
+  if (authView === AUTH_VIEW.EMAIL_NOT_VERIFIED) return withSessionTimeout(<AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />);
+  if (authView === AUTH_VIEW.INACTIVE) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />);
+  if (authView === AUTH_VIEW.PENDING) return withSessionTimeout(<AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />);
 
   const allowedTabs = ROLE_TABS[profile.role] || [];
   const selectTab = nextTab => setTab(allowedTabs.includes(nextTab) ? nextTab : 'home');

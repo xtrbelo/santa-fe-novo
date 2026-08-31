@@ -2,7 +2,6 @@ import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   connectAuthEmulator,
-  createUserWithEmailAndPassword,
   GoogleAuthProvider, 
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -10,7 +9,6 @@ import {
   signInWithPopup, 
   signOut, 
   onAuthStateChanged,
-  updateProfile
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -819,7 +817,6 @@ export const excluirAgendaVazia = async ({ agendaId, userId }, firestore = db) =
 };
 
 export {
-  createUserWithEmailAndPassword,
   GoogleAuthProvider,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -827,7 +824,6 @@ export {
   signInWithPopup,
   signOut,
   onAuthStateChanged,
-  updateProfile,
   collection,
   doc,
   addDoc,

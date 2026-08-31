@@ -62,6 +62,7 @@ describe('A. não autenticado', () => {
     test(`não lê ${name}`, async () => assertFails(getDoc(ref(anonymousDb(), path))));
   }
   test('não escreve dados', async () => assertFails(setDoc(ref(anonymousDb(), `${root}/pessoas/nova`), { nome: 'Nova' })));
+  test('não consulta usuários por e-mail', async () => assertFails(getDocs(collection(anonymousDb(), `${root}/usuarios`))));
 });
 
 describe('B. pendente', () => {
@@ -93,10 +94,10 @@ describe('B2. verificação de e-mail', () => {
     await assertFails(updateDoc(ref(db, paths.config), { ativo: false }));
   });
 
-  test('pendente não verificado cria e lê o próprio perfil, sem acessar dados ou terceiros', async () => {
+  test('conta sem perfil não cria perfil e não acessa dados ou terceiros', async () => {
     const db = authDb('novo-nao-verificado', { email: 'novo@santafe.local', email_verified: false });
     const profile = { uid: 'novo-nao-verificado', nome: 'Novo', email: 'novo@santafe.local', role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() };
-    await assertSucceeds(setDoc(ref(db, paths.user('novo-nao-verificado')), profile));
+    await assertFails(setDoc(ref(db, paths.user('novo-nao-verificado')), profile));
     await assertSucceeds(getDoc(ref(db, paths.user('novo-nao-verificado'))));
     for (const path of [paths.people, paths.agendas, paths.appointments, paths.config, paths.user('gestor')]) {
       await assertFails(getDoc(ref(db, path)));
@@ -453,15 +454,12 @@ describe('F. atendimento', () => {
 
 describe('G. criação do próprio perfil', () => {
   const validProfile = uid => ({ uid, nome: 'Novo', email: `${uid}@example.test`, role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() });
-  test('aceita somente o perfil pendente válido', async () => assertSucceeds(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), validProfile('novo'))));
-  test('aceita e-mail do Firestore igual ao e-mail do token Auth', async () => assertSucceeds(setDoc(ref(authDb('novo-email', { email: 'novo-email@example.test' }), paths.user('novo-email')), validProfile('novo-email'))));
-  test('recusa e-mail do Firestore diferente do token Auth', async () => assertFails(setDoc(ref(authDb('email-falso', { email: 'real@example.test' }), paths.user('email-falso')), { ...validProfile('email-falso'), email: 'falso@example.test' })));
-  test('recusa token autenticado sem e-mail', async () => assertFails(setDoc(ref(authDb('sem-email'), paths.user('sem-email')), validProfile('sem-email'))));
-  test('recusa role admin', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), role: 'admin' })));
-  test('recusa role gestor', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), role: 'gestor' })));
-  test('recusa usuário inativo', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), ativo: false })));
-  test('recusa UID diferente', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('outro'), email: 'novo@example.test' })));
-  test('recusa campos não permitidos', async () => assertFails(setDoc(ref(authDb('novo', { email: 'novo@example.test' }), paths.user('novo')), { ...validProfile('novo'), roleAdmin: true })));
+  for (const role of ['pendente', 'admin', 'gestor', 'atendimento']) {
+    test(`recusa autocriar perfil com role ${role}`, async () => {
+      const uid = `novo-${role}`;
+      await assertFails(setDoc(ref(authDb(uid, { email: `${uid}@example.test` }), paths.user(uid)), { ...validProfile(uid), role }));
+    });
+  }
 });
 
 describe('H. auditoria', () => {

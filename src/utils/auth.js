@@ -1,11 +1,13 @@
 export const normalizeAuthEmail = email => String(email || '').trim().toLowerCase();
 
-export const validateRegistration = ({ nome, email, senha, confirmarSenha }) => {
-  if (!String(nome || '').trim()) return 'Informe seu nome.';
-  if (!normalizeAuthEmail(email)) return 'Informe seu e-mail.';
-  if (String(senha || '').length < 8) return 'A senha deve ter pelo menos 8 caracteres.';
-  if (senha !== confirmarSenha) return 'As senhas não coincidem.';
-  return null;
+export const UNAUTHORIZED_ACCESS_MESSAGE = 'Acesso não autorizado. Procure um administrador da Casa Santa Fé.';
+
+export const rejectUnauthorizedSession = async ({ auth, signOutUser, notify }) => {
+  try {
+    await signOutUser(auth);
+  } finally {
+    notify(UNAUTHORIZED_ACCESS_MESSAGE);
+  }
 };
 
 export const getAuthErrorMessage = error => {
@@ -29,21 +31,21 @@ export const usesPasswordProvider = user => user?.providerData?.some(provider =>
 export const AUTH_VIEW = Object.freeze({
   LOADING: 'loading',
   LOGIN: 'login',
-  VERIFY_EMAIL: 'verify_email',
+  EMAIL_NOT_VERIFIED: 'email_not_verified',
   INACTIVE: 'inactive',
   PENDING: 'pending',
-  SYSTEM: 'system',
+  UNAUTHORIZED: 'unauthorized',
+  AUTHORIZED: 'authorized',
 });
 
 export const resolveAuthView = ({ loading, user, profile, pendingRole }) => {
-  if (loading || (user && !profile)) return AUTH_VIEW.LOADING;
+  if (loading) return AUTH_VIEW.LOADING;
   if (!user) return AUTH_VIEW.LOGIN;
-  if (usesPasswordProvider(user) && !user.emailVerified) return AUTH_VIEW.VERIFY_EMAIL;
+  if (!profile) return AUTH_VIEW.UNAUTHORIZED;
+  if (usesPasswordProvider(user) && !user.emailVerified) return AUTH_VIEW.EMAIL_NOT_VERIFIED;
   if (profile.ativo === false) return AUTH_VIEW.INACTIVE;
   if (profile.role === pendingRole) return AUTH_VIEW.PENDING;
-  return AUTH_VIEW.SYSTEM;
+  return AUTH_VIEW.AUTHORIZED;
 };
 
-export const getLoginAutocomplete = mode => mode === 'register'
-  ? { form: 'on', email: 'email', password: 'new-password' }
-  : { form: 'off', email: 'off', password: 'off' };
+export const getLoginAutocomplete = () => ({ form: 'off', email: 'off', password: 'off' });
