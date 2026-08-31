@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import process from 'node:process';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { applyActionCode, connectAuthEmulator, createUserWithEmailAndPassword, getAuth, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { connectFirestoreEmulator, doc, getDoc, getFirestore, setDoc } from 'firebase/firestore';
+import { connectFirestoreEmulator, doc, getDoc, getFirestore } from 'firebase/firestore';
 
 const projectId = process.env.GCLOUD_PROJECT || 'santa-fe-auth-test';
 const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST || '127.0.0.1:9299';
@@ -23,8 +23,7 @@ test('conta password nasce não verificada, autentica e conclui verificação no
     assert.equal(created.user.emailVerified, false);
     assert.equal((await created.user.getIdTokenResult()).claims.email_verified, false);
     const root = `artifacts/${projectId}/public/data`;
-    await setDoc(doc(db, `${root}/usuarios/${created.user.uid}`), { uid: created.user.uid, nome: 'Atendimento Teste', email, role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() });
-    assert.equal((await getDoc(doc(db, `${root}/usuarios/${created.user.uid}`))).data().role, 'pendente');
+    assert.equal((await getDoc(doc(db, `${root}/usuarios/${created.user.uid}`))).exists(), false);
     await assert.rejects(getDoc(doc(db, `${root}/pessoas/pessoa-operacional`)), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
     await sendEmailVerification(created.user);
     await signOut(auth);
