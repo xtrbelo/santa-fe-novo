@@ -4,11 +4,11 @@ import { Button } from '../../components/ui/Button';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
 import { getPessoaFuncoesCasa } from '../../utils/domain';
 import { getMemberFunctionLabels } from '../../utils/pessoaForm';
-import { ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
+import { KeyRound, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
 
 const formatTimestamp = timestamp => timestamp?.toDate?.().toLocaleString('pt-BR') || 'Não disponível';
 
-export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAuthorize, onLink, onEditRole, onToggleStatus }) => {
+export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAuthorize, onLink, onEditRole, onToggleStatus, onResetPassword }) => {
   const isOwnAccount = usuario.uid === currentUid;
   const isPending = usuario.role === ROLES.PENDENTE;
   return (
@@ -41,6 +41,7 @@ export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAu
           {usuario.ativo === false ? <><UserRoundCheck size={16} /> Ativar</> : <><UserRoundX size={16} /> Desativar</>}
         </Button>
       </div>
+      {!isPending && usuario.email && <Button variant="ghost" onClick={() => onResetPassword(usuario)} className="mt-2 w-full"><KeyRound size={16}/> Enviar redefinição de senha</Button>}
     </Card>
   );
 };

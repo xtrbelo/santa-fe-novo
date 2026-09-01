@@ -19,8 +19,35 @@ service cloud.firestore {
     function memberInviteCpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convite_membro_cpf_index/$(cpf); }
     function cpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/cpf_index/$(cpf); }
     function userPersonIndexPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuario_pessoa_index/$(pessoaId); }
+    function accessAuthorizationPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/autorizacoes_acesso/$(pessoaId); }
     function isActiveMemberData(data) { return data.ativo != false && (data.vinculo == 'membro' || data.tipoPessoa == 'Membro'); }
     function isConsulenteData(data) { return data.vinculo == 'consulente' || data.tipoPessoa == 'Consulente'; }
+    function hasValidAccessEmail(data) { return data.email is string && data.email.size() <= 254 && data.email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$'); }
+    function isOwnPendingAuthorization(data) { return hasVerifiedEmail() && data.email == request.auth.token.email && data.status == 'pendente'; }
+    function validAccessClaim(appId, uid, pessoaId) {
+      let authorization = get(accessAuthorizationPath(appId, pessoaId)).data;
+      let nextAuthorization = getAfter(accessAuthorizationPath(appId, pessoaId)).data;
+      let person = get(personPath(appId, pessoaId)).data;
+      let nextUser = getAfter(arbitraryUserPath(appId, uid)).data;
+      let nextIndex = getAfter(userPersonIndexPath(appId, pessoaId)).data;
+      let audit = getAfter(auditPath(appId, 'usuario_ativado_' + uid + '_' + pessoaId)).data;
+      return request.auth.uid == uid && hasVerifiedEmail()
+        && authorization.pessoaBaseId == pessoaId && authorization.status == 'pendente'
+        && authorization.email == request.auth.token.email
+        && authorization.role in ['admin', 'gestor', 'atendimento']
+        && isActiveMemberData(person) && hasValidAccessEmail(person) && person.email == authorization.email
+        && nextUser.uid == uid && nextUser.pessoaBaseId == pessoaId
+        && nextUser.nome == person.nome && nextUser.email == authorization.email
+        && nextUser.role == authorization.role && nextUser.ativo == true
+        && nextUser.criadoPor == uid && nextUser.autorizadoPor == authorization.criadoPor
+        && nextIndex.pessoaBaseId == pessoaId && nextIndex.uid == uid && nextIndex.criadoPor == uid
+        && nextAuthorization.status == 'utilizado' && nextAuthorization.utilizadoPorUid == uid
+        && nextAuthorization.email == authorization.email && nextAuthorization.role == authorization.role
+        && nextAuthorization.pessoaBaseId == pessoaId && nextAuthorization.criadoPor == authorization.criadoPor
+        && audit.tipo == 'USUARIO_ACESSO_ATIVADO' && audit.alvoUid == uid
+        && audit.pessoaBaseId == pessoaId && audit.role == authorization.role
+        && audit.autorizadoPor == authorization.criadoPor && audit.executadoPor == uid;
+    }
     function canReviewMemberRegistration(appId) { return isAdmin(appId) || isGestor(appId); }
     function approvalAuditPath(appId, inviteId) { return auditPath(appId, 'autocadastro_aprovado_' + inviteId); }
     function rejectionAuditPath(appId, inviteId) { return auditPath(appId, 'autocadastro_rejeitado_' + inviteId); }
@@ -116,7 +143,8 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/usuarios/{uid} {
       allow get: if isAuthenticated() && (request.auth.uid == uid || isAdmin(appId));
       allow list: if isAdmin(appId);
-      allow create: if false;
+      allow create: if request.resource.data.keys().hasOnly(['uid', 'pessoaBaseId', 'nome', 'email', 'role', 'ativo', 'criadoEm', 'criadoPor', 'autorizadoPor', 'atualizadoEm', 'atualizadoPor'])
+        && validAccessClaim(appId, uid, request.resource.data.pessoaBaseId);
       allow update: if isAdmin(appId) && request.resource.data.uid == resource.data.uid
         && request.resource.data.atualizadoPor == request.auth.uid
         && ((resource.data.role == 'pendente' && request.auth.uid != uid
@@ -142,8 +170,11 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/usuario_pessoa_index/{pessoaId} {
-      allow read: if isAdmin(appId);
-      allow create: if isAdmin(appId) && !exists(userPersonIndexPath(appId, pessoaId))
+      allow get: if isAdmin(appId)
+        || (exists(accessAuthorizationPath(appId, pessoaId))
+          && isOwnPendingAuthorization(get(accessAuthorizationPath(appId, pessoaId)).data));
+      allow list: if isAdmin(appId);
+      allow create: if !exists(userPersonIndexPath(appId, pessoaId)) && ((isAdmin(appId)
         && request.resource.data.pessoaBaseId == pessoaId
         && request.resource.data.uid is string
         && request.resource.data.criadoPor == request.auth.uid
@@ -152,15 +183,54 @@ service cloud.firestore {
         && getAfter(arbitraryUserPath(appId, request.resource.data.uid)).data.pessoaBaseId == pessoaId
         && getAfter(auditPath(appId, 'usuario_acesso_' + request.resource.data.uid + '_' + pessoaId)).data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO']
         && getAfter(auditPath(appId, 'usuario_acesso_' + request.resource.data.uid + '_' + pessoaId)).data.alvoUid == request.resource.data.uid
-        && getAfter(auditPath(appId, 'usuario_acesso_' + request.resource.data.uid + '_' + pessoaId)).data.pessoaBaseId == pessoaId;
+        && getAfter(auditPath(appId, 'usuario_acesso_' + request.resource.data.uid + '_' + pessoaId)).data.pessoaBaseId == pessoaId)
+        || (request.auth.uid == request.resource.data.uid
+          && request.resource.data.keys().hasOnly(['pessoaBaseId', 'uid', 'criadoEm', 'criadoPor'])
+          && validAccessClaim(appId, request.resource.data.uid, pessoaId)));
       allow update, delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/autorizacoes_acesso/{pessoaId} {
+      allow get, list: if isAdmin(appId) || isOwnPendingAuthorization(resource.data);
+      allow create: if isAdmin(appId)
+        && request.resource.data.keys().hasOnly(['pessoaBaseId', 'email', 'role', 'status', 'criadoEm', 'criadoPor', 'atualizadoEm', 'atualizadoPor', 'auditoriaPreautorizacaoId'])
+        && request.resource.data.pessoaBaseId == pessoaId
+        && request.resource.data.status == 'pendente'
+        && request.resource.data.role in ['admin', 'gestor', 'atendimento']
+        && request.resource.data.criadoPor == request.auth.uid && request.resource.data.atualizadoPor == request.auth.uid
+        && isActiveMemberData(get(personPath(appId, pessoaId)).data)
+        && hasValidAccessEmail(get(personPath(appId, pessoaId)).data)
+        && get(personPath(appId, pessoaId)).data.email == request.resource.data.email
+        && !exists(userPersonIndexPath(appId, pessoaId))
+        && getAfter(auditPath(appId, request.resource.data.auditoriaPreautorizacaoId)).data.tipo == 'USUARIO_ACESSO_PREAUTORIZADO';
+      allow update: if (isAdmin(appId)
+          && resource.data.status in ['pendente', 'cancelado']
+          && ((resource.data.status == 'pendente' && request.resource.data.status == 'cancelado'
+              && request.resource.data.canceladoPor == request.auth.uid
+              && request.resource.data.email == resource.data.email && request.resource.data.role == resource.data.role
+              && request.resource.data.pessoaBaseId == resource.data.pessoaBaseId
+              && request.resource.data.criadoPor == resource.data.criadoPor && request.resource.data.criadoEm == resource.data.criadoEm
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'canceladoEm', 'canceladoPor', 'atualizadoEm', 'atualizadoPor', 'auditoriaCancelamentoId'])
+              && getAfter(auditPath(appId, request.resource.data.auditoriaCancelamentoId)).data.tipo == 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA')
+            || (resource.data.status == 'cancelado' && request.resource.data.status == 'pendente'
+              && request.resource.data.criadoPor == request.auth.uid
+              && request.resource.data.pessoaBaseId == pessoaId
+              && request.resource.data.role in ['admin', 'gestor', 'atendimento']
+              && isActiveMemberData(get(personPath(appId, pessoaId)).data)
+              && hasValidAccessEmail(get(personPath(appId, pessoaId)).data)
+              && request.resource.data.email == get(personPath(appId, pessoaId)).data.email
+              && !exists(userPersonIndexPath(appId, pessoaId))
+              && getAfter(auditPath(appId, request.resource.data.auditoriaPreautorizacaoId)).data.tipo == 'USUARIO_ACESSO_PREAUTORIZADO')))
+        || (isOwnPendingAuthorization(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'utilizadoEm', 'utilizadoPorUid', 'atualizadoEm', 'atualizadoPor'])
+          && validAccessClaim(appId, request.auth.uid, pessoaId));
+      allow delete: if false;
     }
 
     match /artifacts/{appId}/public/data/auditoria/{id} {
       allow read: if isAdmin(appId);
-      allow create: if isInternal(appId)
-        && request.resource.data.executadoPor == request.auth.uid
-        && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO', 'USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO'])
+      allow create: if request.resource.data.executadoPor == request.auth.uid
+        && ((isInternal(appId) && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO', 'USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO', 'USUARIO_ACESSO_PREAUTORIZADO', 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA'])
           || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
           || (canRelocate(appId)
             && request.resource.data.tipo in ['ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO']
@@ -179,12 +249,16 @@ service cloud.firestore {
             && id == 'autocadastro_rejeitado_' + request.resource.data.inviteId
             && request.resource.data.motivo is string && request.resource.data.motivo.size() > 0
             && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.statusCadastro == 'rejeitado'
-            && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.motivoRejeicao == request.resource.data.motivo));
+            && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.motivoRejeicao == request.resource.data.motivo)))
+          || (request.resource.data.tipo == 'USUARIO_ACESSO_ATIVADO'
+            && id == 'usuario_ativado_' + request.auth.uid + '_' + request.resource.data.pessoaBaseId
+            && validAccessClaim(appId, request.auth.uid, request.resource.data.pessoaBaseId)));
       allow update, delete: if false;
     }
 
     match /artifacts/{appId}/public/data/pessoas/{id} {
-      allow read: if isInternal(appId);
+      allow get: if isInternal(appId) || (exists(accessAuthorizationPath(appId, id)) && isOwnPendingAuthorization(get(accessAuthorizationPath(appId, id)).data));
+      allow list: if isInternal(appId);
       allow create: if ((isAdmin(appId) || isGestor(appId))
           && request.resource.data.get('origemCadastro', 'administrativo') != 'autocadastro')
         || (canReviewMemberRegistration(appId)

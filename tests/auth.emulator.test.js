@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import process from 'node:process';
 import { initializeApp, deleteApp } from 'firebase/app';
-import { applyActionCode, connectAuthEmulator, createUserWithEmailAndPassword, getAuth, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { applyActionCode, connectAuthEmulator, createUserWithEmailAndPassword, getAuth, sendEmailVerification, sendPasswordResetEmail, sendSignInLinkToEmail, signInWithEmailAndPassword, signInWithEmailLink, signOut, updatePassword } from 'firebase/auth';
 import { connectFirestoreEmulator, doc, getDoc, getFirestore } from 'firebase/firestore';
 
 const projectId = process.env.GCLOUD_PROJECT || 'santa-fe-auth-test';
@@ -41,6 +41,30 @@ test('conta password nasce não verificada, autentica e conclui verificação no
     assert.equal(signedIn.user.emailVerified, true);
     assert.equal((await signedIn.user.getIdTokenResult()).claims.email_verified, true);
     assert.ok(oobCodes.some(code => code.requestType === 'PASSWORD_RESET' && code.email === email));
+  } finally {
+    await deleteApp(app);
+  }
+});
+
+test('email link autentica o e-mail confirmado e permite criar a própria senha', async () => {
+  const app = initializeApp({ apiKey: 'fake-api-key', projectId }, `email-link-test-${Date.now()}`);
+  const auth = getAuth(app);
+  connectAuthEmulator(auth, `http://${authHost}`, { disableWarnings: true });
+  const email = `ativacao.${Date.now()}@santafe.local`;
+  const password = 'SenhaAtivacao123';
+  try {
+    await sendSignInLinkToEmail(auth, email, { url: 'http://localhost/ativar-acesso', handleCodeInApp: true });
+    const response = await fetch(`http://${authHost}/emulator/v1/projects/${projectId}/oobCodes`);
+    const { oobCodes } = await response.json();
+    const activation = [...oobCodes].reverse().find(code => code.requestType === 'EMAIL_SIGNIN' && code.email === email);
+    assert.ok(activation?.oobLink);
+    const credential = await signInWithEmailLink(auth, email, activation.oobLink);
+    assert.equal(credential.user.email, email);
+    assert.equal(credential.user.emailVerified, true);
+    await updatePassword(credential.user, password);
+    await signOut(auth);
+    const passwordCredential = await signInWithEmailAndPassword(auth, email, password);
+    assert.equal(passwordCredential.user.uid, credential.user.uid);
   } finally {
     await deleteApp(app);
   }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { auth, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, onSnapshot } from './services/firebase';
+import { auth, findAndClaimAuthorizedAccess, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, onSnapshot } from './services/firebase';
 import { ROLES, ROLE_TABS } from './constants/roles';
 import { ToastProvider } from './components/ui/Toast';
 import { useToast } from './components/ui/useToast';
@@ -19,6 +19,7 @@ import { AutocadastrosModule } from './modules/Autocadastros/AutocadastrosModule
 import { ConfiguracoesModule } from './modules/Configuracoes/ConfiguracoesModule';
 import { UsuariosModule } from './modules/Usuarios/UsuariosModule';
 import { AutocadastroMembroPage } from './modules/Autocadastro/AutocadastroMembroPage';
+import { AtivacaoAcessoPage } from './modules/AtivacaoAcesso/AtivacaoAcessoPage';
 import { Clock3, MailCheck, ShieldOff, ShieldQuestion } from 'lucide-react';
 
 function AppContent() {
@@ -51,6 +52,7 @@ function AppContent() {
     let authGeneration = 0;
     const unsubscribeAuth = onAuthStateChanged(auth, authenticatedUser => {
       const generation = ++authGeneration;
+      let claimingAccess = false;
       unsubscribeProfile();
       unsubscribeProfile = () => {};
       setLoading(true);
@@ -62,14 +64,25 @@ function AppContent() {
         unsubscribeProfile = onSnapshot(ref, profileSnapshot => {
           if (generation !== authGeneration) return;
           if (!profileSnapshot.exists()) {
-            unsubscribeProfile();
-            unsubscribeProfile = () => {};
+            if (claimingAccess) return;
+            claimingAccess = true;
             setProfile(null);
-            setLoading(false);
-            void rejectUnauthorizedSession({ auth, signOutUser: signOut, notify: toastError }).catch(error => {
+            setLoading(true);
+            void findAndClaimAuthorizedAccess({ uid: authenticatedUser.uid, email: authenticatedUser.email, emailVerified: authenticatedUser.emailVerified }).then(claimed => {
+              if (generation !== authGeneration || claimed) return;
+              unsubscribeProfile();
+              unsubscribeProfile = () => {};
+              setLoading(false);
+              return rejectUnauthorizedSession({ auth, signOutUser: signOut, notify: toastError });
+            }).catch(error => {
               console.error(error);
-              if (generation === authGeneration) setLoading(false);
-            });
+              if (generation !== authGeneration) return;
+              unsubscribeProfile();
+              unsubscribeProfile = () => {};
+              setLoading(false);
+              toastError('Não foi possível concluir a ativação do acesso. Procure um administrador.');
+              void signOut(auth);
+            }).finally(() => { claimingAccess = false; });
             return;
           }
           setProfile({ id: profileSnapshot.id, ...profileSnapshot.data() });
@@ -176,5 +189,6 @@ function AppContent() {
 
 export default function App() {
   const isPublicSelfRegistration = window.location.pathname === '/autocadastro';
-  return <ToastProvider>{isPublicSelfRegistration ? <AutocadastroMembroPage /> : <AppContent />}</ToastProvider>;
+  const isAccessActivation = window.location.pathname === '/ativar-acesso';
+  return <ToastProvider>{isPublicSelfRegistration ? <AutocadastroMembroPage /> : isAccessActivation ? <AtivacaoAcessoPage /> : <AppContent />}</ToastProvider>;
 }
