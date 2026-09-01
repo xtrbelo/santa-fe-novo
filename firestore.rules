@@ -10,6 +10,50 @@ service cloud.firestore {
     function isGestor(appId) { return isActive(appId) && currentUser(appId).role == 'gestor'; }
     function isAtendimento(appId) { return isActive(appId) && currentUser(appId).role == 'atendimento'; }
     function isInternal(appId) { return isActive(appId) && currentUser(appId).role in ['admin', 'gestor', 'atendimento']; }
+    function isOwnLinkedPerson(appId, pessoaId) {
+      return isInternal(appId) && currentUser(appId).get('pessoaBaseId', '') == pessoaId;
+    }
+    function validMyRegistrationUpdate(appId, pessoaId) {
+      return isOwnLinkedPerson(appId, pessoaId)
+        && request.resource.data.atualizadoPor == request.auth.uid
+        && request.resource.data.atualizadoEm is timestamp
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'contato', 'estadoCivil', 'endereco', 'busca', 'atualizadoEm', 'atualizadoPor'
+        ])
+        && (request.resource.data.contato == null
+          || (request.resource.data.contato is string
+            && request.resource.data.contato.matches('^[0-9]{1,11}$')))
+        && request.resource.data.estadoCivil in ['solteiro', 'casado', 'uniao_estavel', 'separado', 'divorciado', 'viuvo', 'outro', 'nao_informado']
+        && request.resource.data.endereco is map
+        && request.resource.data.endereco.keys().hasOnly([
+          'cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf'
+        ])
+        && (request.resource.data.endereco.cep == null
+          || (request.resource.data.endereco.cep is string
+            && request.resource.data.endereco.cep.matches('^[0-9]{8}$')))
+        && (request.resource.data.endereco.uf == null
+          || (request.resource.data.endereco.uf is string
+            && request.resource.data.endereco.uf.matches('^[A-Z]{2}$')))
+        && (request.resource.data.endereco.logradouro == null || request.resource.data.endereco.logradouro is string)
+        && (request.resource.data.endereco.numero == null || request.resource.data.endereco.numero is string)
+        && (request.resource.data.endereco.complemento == null || request.resource.data.endereco.complemento is string)
+        && (request.resource.data.endereco.bairro == null || request.resource.data.endereco.bairro is string)
+        && (request.resource.data.endereco.cidade == null || request.resource.data.endereco.cidade is string);
+    }
+    function validMyRegistrationAudit(appId) {
+      return request.resource.data.tipo == 'MEU_CADASTRO_ATUALIZADO'
+        && request.resource.data.keys().hasOnly([
+          'tipo', 'pessoaBaseId', 'camposAlterados', 'executadoPor', 'criadoEm'
+        ])
+        && request.resource.data.pessoaBaseId == currentUser(appId).get('pessoaBaseId', '')
+        && request.resource.data.camposAlterados is list
+        && request.resource.data.camposAlterados.size() > 0
+        && request.resource.data.camposAlterados.hasOnly([
+          'contato', 'estadoCivil', 'endereco.cep', 'endereco.logradouro', 'endereco.numero',
+          'endereco.complemento', 'endereco.bairro', 'endereco.cidade', 'endereco.uf'
+        ])
+        && request.resource.data.criadoEm is timestamp;
+    }
     function canRelocate(appId) { return isActive(appId) && currentUser(appId).role in ['admin', 'gestor']; }
     function auditPath(appId, id) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/auditoria/$(id); }
     function arbitraryUserPath(appId, uid) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(uid); }
@@ -239,6 +283,7 @@ service cloud.firestore {
             && getAfter(appointmentPath(appId, request.resource.data.destinoAgendamentoId)).data.origemRealocacao.realocacaoId == id
             && getAfter(activeLockPath(appId, request.resource.data.destinoAgendaId, getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.pessoaBaseId)).data.agendamentoId == request.resource.data.destinoAgendamentoId)
           || (isAdmin(appId) && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO')
+          || validMyRegistrationAudit(appId)
           || (canReviewMemberRegistration(appId)
             && request.resource.data.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO'
             && id == 'autocadastro_aprovado_' + request.resource.data.inviteId
@@ -289,7 +334,8 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'nome', 'dataNascimento', 'cpf', 'contato', 'email', 'responsavelCpf', 'responsavelNome',
             'responsavelContato', 'busca', 'atualizadoEm', 'atualizadoPor'
-          ]));
+          ]))
+        || validMyRegistrationUpdate(appId, id);
       allow delete: if false;
     }
 

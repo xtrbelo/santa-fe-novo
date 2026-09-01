@@ -733,3 +733,58 @@ describe('M. integridade transacional da realocação', () => {
     await assertFails(deleteDoc(ref(authDb('admin-a'), `${root}/agendamentos_ativos/agenda-1_pessoa-1`)));
   });
 });
+
+describe('N. Meu Cadastro', () => {
+  const ownPath = `${root}/pessoas/meu-cadastro-atendimento`;
+  const otherPath = `${root}/pessoas/meu-cadastro-alheio`;
+  const address = { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null };
+  const metadata = { atualizadoEm: new Date(), atualizadoPor: 'atendimento' };
+
+  beforeEach(async () => environment.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    await updateDoc(ref(db, paths.user('atendimento')), { pessoaBaseId: 'meu-cadastro-atendimento' });
+    await setDoc(ref(db, ownPath), canonicalMember({ contato: null, estadoCivil: 'nao_informado', endereco: address }));
+    await setDoc(ref(db, otherPath), canonicalMember({ nome: 'Outro membro', cpf: '98765432100', endereco: address }));
+  }));
+
+  test('usuário vinculado lê a própria Pessoa', async () => {
+    await assertSucceeds(getDoc(ref(authDb('atendimento'), ownPath)));
+  });
+
+  test('altera contato, estado civil e endereço, isolados ou combinados', async () => {
+    const db = authDb('atendimento');
+    await assertSucceeds(updateDoc(ref(db, ownPath), { contato: '11999999999', ...metadata }));
+    await assertSucceeds(updateDoc(ref(db, ownPath), { estadoCivil: 'casado', ...metadata }));
+    await assertSucceeds(updateDoc(ref(db, ownPath), {
+      contato: '11888888888', estadoCivil: 'uniao_estavel',
+      endereco: { cep: '01001000', logradouro: 'Praça da Sé', numero: '1', complemento: null, bairro: 'Sé', cidade: 'São Paulo', uf: 'SP' },
+      ...metadata
+    }));
+  });
+
+  for (const [campo, valor] of [
+    ['nome', 'Nome fraudado'], ['cpf', '11111111111'], ['email', 'fraude@example.test'],
+    ['vinculo', 'consulente'], ['funcoesCasa', []], ['dadosCasa', {}], ['ativo', false],
+    ['statusCadastro', 'rejeitado'], ['origemCadastro', 'fraude']
+  ]) {
+    test(`nega alteração própria de ${campo}`, async () => {
+      await assertFails(updateDoc(ref(authDb('atendimento'), ownPath), { [campo]: valor, ...metadata }));
+    });
+  }
+
+  test('nega atualização da Pessoa alheia', async () => {
+    await assertFails(updateDoc(ref(authDb('atendimento'), otherPath), { contato: '11999999999', ...metadata }));
+  });
+
+  test('aceita auditoria mínima e nega dados pessoais adicionais', async () => {
+    const db = authDb('atendimento');
+    const audit = { tipo: 'MEU_CADASTRO_ATUALIZADO', pessoaBaseId: 'meu-cadastro-atendimento', camposAlterados: ['contato'], executadoPor: 'atendimento', criadoEm: new Date() };
+    await assertSucceeds(setDoc(ref(db, `${root}/auditoria/meu-cadastro-ok`), audit));
+    await assertFails(setDoc(ref(db, `${root}/auditoria/meu-cadastro-pii`), { ...audit, valorAnterior: '11999999999' }));
+  });
+
+  test('admin e gestor mantêm as permissões administrativas existentes', async () => {
+    await assertSucceeds(updateDoc(ref(authDb('admin-a'), otherPath), { nome: 'Alterado pelo admin' }));
+    await assertSucceeds(updateDoc(ref(authDb('gestor'), otherPath), { nome: 'Alterado pelo gestor', atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+  });
+});

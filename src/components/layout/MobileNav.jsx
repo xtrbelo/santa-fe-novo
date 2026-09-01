@@ -7,7 +7,8 @@ import {
   Mail,
   ClipboardCheck,
   UsersRound,
-  Settings 
+  Settings,
+  ContactRound
 } from 'lucide-react';
 
 export const MobileNav = ({ activeTab, onSelectTab, allowedTabs }) => {
@@ -20,6 +21,7 @@ export const MobileNav = ({ activeTab, onSelectTab, allowedTabs }) => {
     { id: 'autocadastros', label: 'Cadastros', icon: ClipboardCheck },
     { id: 'usuarios', label: 'Usuários', icon: UsersRound },
     { id: 'config', label: 'Ajustes', icon: Settings },
+    { id: 'meu-cadastro', label: 'Cadastro', icon: ContactRound },
   ];
 
   return (
