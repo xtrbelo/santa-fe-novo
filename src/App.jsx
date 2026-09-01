@@ -50,12 +50,15 @@ function AppContent() {
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) { setLoading(false); return undefined; }
     let unsubscribeProfile = () => {};
+    let unsubscribePerson = () => {};
     let authGeneration = 0;
     const unsubscribeAuth = onAuthStateChanged(auth, authenticatedUser => {
       const generation = ++authGeneration;
       let claimingAccess = false;
       unsubscribeProfile();
+      unsubscribePerson();
       unsubscribeProfile = () => {};
+      unsubscribePerson = () => {};
       setLoading(true);
       setUser(authenticatedUser);
       setProfile(null);
@@ -86,12 +89,24 @@ function AppContent() {
             }).finally(() => { claimingAccess = false; });
             return;
           }
-          setProfile({ id: profileSnapshot.id, ...profileSnapshot.data() });
-          setLoading(false);
+          const nextProfile = { id: profileSnapshot.id, ...profileSnapshot.data() };
+          unsubscribePerson();
+          unsubscribePerson = () => {};
+          if (!nextProfile.pessoaBaseId) {
+            setProfile({ ...nextProfile, pessoaAtiva: true });
+            setLoading(false);
+            return;
+          }
+          setLoading(true);
+          unsubscribePerson = onSnapshot(getAppDoc('pessoas', nextProfile.pessoaBaseId), personSnapshot => {
+            if (generation !== authGeneration) return;
+            setProfile({ ...nextProfile, pessoaAtiva: personSnapshot.exists() && personSnapshot.data().ativo !== false });
+            setLoading(false);
+          }, error => { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível acompanhar o cadastro vinculado.'); setLoading(false); });
         }, error => { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível acompanhar seu perfil de acesso.'); setLoading(false); });
       } catch (error) { if (generation !== authGeneration) return; console.error(error); toastError('Não foi possível carregar seu perfil de acesso.'); setLoading(false); }
     });
-    return () => { authGeneration += 1; unsubscribeAuth(); unsubscribeProfile(); };
+    return () => { authGeneration += 1; unsubscribeAuth(); unsubscribeProfile(); unsubscribePerson(); };
   }, [toastError]);
 
   useEffect(() => {
@@ -169,6 +184,7 @@ function AppContent() {
   if (authView === AUTH_VIEW.UNAUTHORIZED) return withSessionTimeout(<AccessScreen icon={<ShieldQuestion size={44} />} iconClass="text-amber-600" title="Acesso não autorizado" description="Esta conta não possui autorização para acessar o Sistema Santa Fé. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
   if (authView === AUTH_VIEW.EMAIL_NOT_VERIFIED) return withSessionTimeout(<AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />);
   if (authView === AUTH_VIEW.INACTIVE) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />);
+  if (authView === AUTH_VIEW.SUSPENDED) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-amber-600" title="Acesso suspenso — membro inativo" description="Seu cadastro de membro está inativo. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
   if (authView === AUTH_VIEW.PENDING) return withSessionTimeout(<AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />);
 
   const allowedTabs = ROLE_TABS[profile.role] || [];

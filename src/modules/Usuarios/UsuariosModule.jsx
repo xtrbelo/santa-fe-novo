@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { autorizarUsuario, cancelAccessAuthorization, createAccessAuthorization, getAppCollection, getAppDoc, onSnapshot, resendAccessActivationEmail, sendAccessActivationEmail, sendUserPasswordReset, Timestamp, vincularUsuarioPessoa, writeBatch, doc } from '../../services/firebase';
+import { autorizarUsuario, cancelAccessAuthorization, createAccessAuthorization, getAppCollection, getAppDoc, onSnapshot, resendAccessActivationEmail, sendAccessActivationEmail, sendUserPasswordReset, setUserAccessLifecycle, Timestamp, vincularUsuarioPessoa, writeBatch, doc } from '../../services/firebase';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
 import { getPessoaFuncoesCasa } from '../../utils/domain';
 import { getEffectiveMemberFunctions, getMemberFunctionLabels, localTextIncludes, normalizeEmail } from '../../utils/pessoaForm';
@@ -10,6 +10,7 @@ import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { UsuarioCard } from './UsuarioCard';
+import { LifecycleHistoryModal } from '../../components/audit/LifecycleHistoryModal';
 import { Search, ShieldCheck, UsersRound } from 'lucide-react';
 import { maskCPF } from '../../utils/formatters';
 import { validateAccessAuthorization } from '../../utils/accessAuthorization';
@@ -33,6 +34,9 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
   const [accessRole, setAccessRole] = useState(ROLES.ATENDIMENTO);
   const [accessStep, setAccessStep] = useState('person');
   const [confirmation, setConfirmation] = useState(null);
+  const [lifecycleTarget, setLifecycleTarget] = useState(null);
+  const [lifecycleReason, setLifecycleReason] = useState('');
+  const [historyUser, setHistoryUser] = useState(null);
   const [newAccessOpen, setNewAccessOpen] = useState(false);
   const [newAccessStep, setNewAccessStep] = useState('person');
   const [newAccessPessoa, setNewAccessPessoa] = useState(null);
@@ -88,7 +92,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
     } finally { setSaving(false); }
   };
   const requestRoleChange = () => { if (roleTarget && roleTarget.uid !== user.uid && OPERATIONAL_ROLES.includes(selectedRole)) { setConfirmation({ type: 'role', usuario: roleTarget, newValue: selectedRole }); setRoleTarget(null); } };
-  const requestStatusChange = usuario => { if (usuario.uid !== user.uid) setConfirmation({ type: 'status', usuario, newValue: usuario.ativo === false }); };
+  const requestStatusChange = usuario => { if (usuario.uid !== user.uid) { setLifecycleReason(''); setLifecycleTarget(usuario); } };
   const openNewAccess = () => { setNewAccessPessoa(null); setNewAccessRole(ROLES.ATENDIMENTO); setNewAccessStep('person'); setNewAccessOpen(true); };
   const continueNewAccess = () => {
     const error = validateAccessAuthorization({ pessoa: newAccessPessoa, role: newAccessRole });
@@ -149,6 +153,22 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
     } catch (error) { console.error(error); toast.error('Erro ao atualizar usuário.'); } finally { setSaving(false); }
   };
 
+  const applyLifecycle = async () => {
+    if (!lifecycleTarget || lifecycleTarget.uid === user.uid) return;
+    const nextActive = lifecycleTarget.ativo === false;
+    if (!nextActive && !lifecycleReason.trim()) { toast.error('Informe o motivo da revogação.'); return; }
+    setSaving(true);
+    try {
+      await setUserAccessLifecycle({ alvoUid: lifecycleTarget.uid, ativo: nextActive, motivo: lifecycleReason, executadoPor: user.uid });
+      toast.success(nextActive ? 'Acesso reativado.' : 'Acesso revogado.');
+      setLifecycleTarget(null); setLifecycleReason('');
+    } catch (error) {
+      console.error(error);
+      const messages = { MEMBRO_INATIVO: 'Não é possível reativar o acesso enquanto o membro estiver inativo.', AUTO_REVOGACAO_PROIBIDA: 'Você não pode revogar o próprio acesso.', MOTIVO_OBRIGATORIO: 'Informe o motivo da revogação.' };
+      toast.error(messages[error.message] || 'Não foi possível alterar o acesso.');
+    } finally { setSaving(false); }
+  };
+
   return <div className="space-y-6 animate-in fade-in duration-500 pb-10">
     <header className="px-1"><h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tighter uppercase italic">Usuários</h2><p className="text-gray-500 text-sm">Perfis de acesso vinculados aos membros da Casa</p></header>
     <div className="grid sm:grid-cols-3 gap-3"><Card className="!bg-indigo-600 text-white !border-none"><p className="text-2xl font-black">{usuarios.filter(item => item.ativo !== false && OPERATIONAL_ROLES.includes(item.role)).length}</p><p className="text-xs font-bold uppercase">Usuários ativos</p></Card><Card><p className="text-2xl font-black text-indigo-600">{pendingAuthorizations.length}</p><p className="text-xs font-bold uppercase text-gray-500">Autorizações pendentes</p></Card><Card><p className="text-2xl font-black text-amber-600">{pendingCount}</p><p className="text-xs font-bold uppercase text-gray-500">Pendentes legados</p></Card></div>
@@ -156,7 +176,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
     {pendingAuthorizations.length > 0 && <section className="space-y-3"><h3 className="font-black text-gray-900">Autorizações pendentes</h3>{pendingAuthorizations.map(item => <Card key={item.id} className="!border-indigo-100"><p className="font-black">{pessoas[item.pessoaBaseId]?.nome || 'Membro'}</p><p className="text-sm text-gray-600">{item.email}</p><p className="text-xs text-gray-500 mt-1">{ROLE_LABELS[item.role]} · autorizado em {item.criadoEm?.toDate?.().toLocaleString('pt-BR') || 'data indisponível'} · por {usuarios.find(usuario => usuario.uid === item.criadoPor)?.nome || 'Administrador'}</p><div className="mt-3 flex flex-col gap-2 sm:flex-row"><Button variant="secondary" disabled={saving} onClick={() => resendActivation(item)}>Reenviar e-mail de ativação</Button><Button variant="danger" disabled={saving} onClick={() => setConfirmation({ type: 'cancel-authorization', authorization: item })}>Cancelar autorização</Button></div></Card>)}</section>}
     <div className="flex items-center bg-white px-4 rounded-2xl border border-gray-100 shadow-sm"><Search size={18} className="text-indigo-400 mr-3"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar nome, e-mail, membro ou UID..." className="w-full py-3 bg-transparent outline-none text-sm font-bold"/></div>
     <div className="flex gap-2 overflow-x-auto pb-1">{FILTERS.map(([value, label]) => <button key={value} onClick={() => setFilter(value)} className={`px-3 py-2 rounded-xl text-xs font-black whitespace-nowrap ${filter === value ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500'}`}>{label}</button>)}</div>
-    <div className="grid grid-cols-1 gap-3">{filteredUsers.length ? filteredUsers.map(usuario => <UsuarioCard key={usuario.id} usuario={usuario} pessoa={pessoas[usuario.pessoaBaseId]} memberFunctions={effectiveMemberFunctions} currentUid={user.uid} onAuthorize={openAccess} onLink={openAccess} onEditRole={item => { setRoleTarget(item); setSelectedRole(item.role); }} onToggleStatus={requestStatusChange} onResetPassword={resetUserPassword}/>) : <Card className="text-center text-gray-400"><ShieldCheck className="mx-auto mb-2"/><p>Nenhum usuário encontrado.</p></Card>}</div>
+    <div className="grid grid-cols-1 gap-3">{filteredUsers.length ? filteredUsers.map(usuario => <UsuarioCard key={usuario.id} usuario={usuario} pessoa={pessoas[usuario.pessoaBaseId]} memberFunctions={effectiveMemberFunctions} currentUid={user.uid} onAuthorize={openAccess} onLink={openAccess} onEditRole={item => { setRoleTarget(item); setSelectedRole(item.role); }} onToggleStatus={requestStatusChange} onResetPassword={resetUserPassword} onHistory={setHistoryUser}/>) : <Card className="text-center text-gray-400"><ShieldCheck className="mx-auto mb-2"/><p>Nenhum usuário encontrado.</p></Card>}</div>
     <Modal isOpen={!!accessTarget} onClose={() => setAccessTarget(null)} title={accessTarget?.role === ROLES.PENDENTE ? 'Autorizar acesso' : 'Vincular membro'}>
       {accessStep === 'person' && <PessoaSearchSelector value={selectedPessoa} onChange={setSelectedPessoa} allowedVinculos={MEMBER_FILTER} onContinue={() => { if (!selectedPessoa?.email) toast.error('Este membro não possui e-mail cadastrado para acesso ao sistema.'); else if (normalizeEmail(selectedPessoa.email) !== normalizeEmail(accessTarget?.email)) toast.error('O e-mail desta conta não corresponde ao e-mail cadastrado para este membro.'); else setAccessStep(accessTarget?.role === ROLES.PENDENTE ? 'role' : 'confirm'); }}/>}
       {accessStep === 'role' && <div className="space-y-4"><p className="text-sm font-bold">Escolha o perfil de acesso ao sistema:</p><select value={accessRole} onChange={event => setAccessRole(event.target.value)} className="w-full bg-gray-50 px-4 py-3 rounded-xl font-bold">{OPERATIONAL_ROLES.map(role => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select><div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => setAccessStep('person')}>Voltar</Button><Button onClick={() => setAccessStep('confirm')}>Continuar</Button></div></div>}
@@ -168,6 +188,8 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
       {newAccessStep === 'confirm' && <div className="space-y-4"><div className="bg-gray-50 p-4 rounded-xl text-sm space-y-2"><p><strong>Membro:</strong><br/>{newAccessPessoa?.nome}</p><p><strong>CPF:</strong><br/>{maskCPF(newAccessPessoa?.cpf || '') || 'Não informado'}</p><p><strong>E-mail autorizado:</strong><br/>{normalizeEmail(newAccessPessoa?.email)}</p><p><strong>Funções na Casa:</strong><br/>{getMemberFunctionLabels(getPessoaFuncoesCasa(newAccessPessoa), effectiveMemberFunctions).join(', ') || 'Sem função cadastrada'}</p><p><strong>Perfil:</strong><br/>{ROLE_LABELS[newAccessRole]}</p></div><p className="text-xs font-bold text-amber-700 bg-amber-50 p-3 rounded-xl">O sistema enviará um link para este e-mail. O membro criará a própria senha antes de acessar.</p><div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => setNewAccessOpen(false)}>Cancelar</Button><Button onClick={saveNewAccess} disabled={saving}>{saving ? 'Salvando...' : 'Confirmar autorização'}</Button></div></div>}
     </Modal>
     <Modal isOpen={!!roleTarget} onClose={() => setRoleTarget(null)} title="Alterar perfil"><div className="space-y-5"><p className="font-bold text-gray-700">{roleTarget?.nome || roleTarget?.email}</p><select value={selectedRole} onChange={event => setSelectedRole(event.target.value)} className="w-full bg-gray-50 px-4 py-3 rounded-xl font-bold">{OPERATIONAL_ROLES.map(role => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select><Button onClick={requestRoleChange} disabled={selectedRole === roleTarget?.role} className="w-full">Continuar</Button></div></Modal>
+    <Modal isOpen={!!lifecycleTarget} onClose={() => { setLifecycleTarget(null); setLifecycleReason(''); }} title={lifecycleTarget?.ativo === false ? 'Reativar acesso' : 'Revogar acesso'} maxWidth="max-w-md"><div className="space-y-4"><p className="text-sm text-gray-600">Confirme a alteração do acesso de <strong>{lifecycleTarget?.nome || lifecycleTarget?.email}</strong>.</p>{lifecycleTarget?.ativo !== false && <label className="block text-xs font-black uppercase text-gray-500">Motivo *<textarea value={lifecycleReason} onChange={event => setLifecycleReason(event.target.value)} maxLength={500} rows={4} className="mt-2 w-full rounded-xl bg-gray-50 p-3 text-sm normal-case font-medium outline-none focus:ring-2 focus:ring-indigo-300"/></label>}<div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => { setLifecycleTarget(null); setLifecycleReason(''); }}>Cancelar</Button><Button variant={lifecycleTarget?.ativo === false ? 'success' : 'danger'} onClick={applyLifecycle} disabled={saving}>{saving ? 'Salvando...' : lifecycleTarget?.ativo === false ? 'Reativar acesso' : 'Revogar acesso'}</Button></div></div></Modal>
+    <LifecycleHistoryModal target={historyUser} field="alvoUid" actors={Object.fromEntries(usuarios.map(item => [item.uid, item.nome || item.email]))} onClose={() => setHistoryUser(null)} />
     <ConfirmDialog isOpen={!!confirmation} onClose={() => setConfirmation(null)} onConfirm={() => confirmation?.type === 'cancel-authorization' ? cancelAuthorization(confirmation.authorization) : applyChange()} title={confirmation?.type === 'role' ? 'Confirmar alteração de perfil' : confirmation?.type === 'cancel-authorization' ? 'Cancelar autorização' : 'Confirmar alteração de acesso'} message={confirmation?.type === 'role' ? `Alterar ${confirmation.usuario.nome || confirmation.usuario.email} de ${ROLE_LABELS[confirmation.usuario.role]} para ${ROLE_LABELS[confirmation.newValue]}?` : confirmation?.type === 'cancel-authorization' ? 'Cancelar esta autorização pendente?' : `${confirmation?.newValue ? 'Ativar' : 'Desativar'} o acesso de ${confirmation?.usuario.nome || confirmation?.usuario.email}?`} confirmText={saving ? 'Salvando...' : 'Confirmar'}/>
   </div>;
 };

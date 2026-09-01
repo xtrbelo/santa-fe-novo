@@ -5,7 +5,17 @@ service cloud.firestore {
     function hasVerifiedEmail() { return isAuthenticated() && request.auth.token.get('email_verified', false) == true; }
     function userPath(appId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuarios/$(request.auth.uid); }
     function currentUser(appId) { return get(userPath(appId)).data; }
-    function isActive(appId) { return hasVerifiedEmail() && exists(userPath(appId)) && currentUser(appId).ativo == true; }
+    function hasActivePersonLink(appId, userData) {
+      return !userData.keys().hasAny(['pessoaBaseId'])
+        || (exists(personPath(appId, userData.pessoaBaseId))
+          && get(personPath(appId, userData.pessoaBaseId)).data.ativo != false);
+    }
+    function isActive(appId) {
+      let userData = currentUser(appId);
+      return hasVerifiedEmail() && exists(userPath(appId))
+        && userData.ativo == true
+        && hasActivePersonLink(appId, userData);
+    }
     function isAdmin(appId) { return isActive(appId) && currentUser(appId).role == 'admin'; }
     function isGestor(appId) { return isActive(appId) && currentUser(appId).role == 'gestor'; }
     function isAtendimento(appId) { return isActive(appId) && currentUser(appId).role == 'atendimento'; }
@@ -53,6 +63,96 @@ service cloud.firestore {
           'endereco.complemento', 'endereco.bairro', 'endereco.cidade', 'endereco.uf'
         ])
         && request.resource.data.criadoEm is timestamp;
+    }
+    function validMemberLifecycle(appId, pessoaId) {
+      let audit = getAfter(auditPath(appId, request.resource.data.auditoriaLifecycleId)).data;
+      return isAdmin(appId)
+        && currentUser(appId).get('pessoaBaseId', '') != pessoaId
+        && request.resource.data.atualizadoPor == request.auth.uid
+        && request.resource.data.atualizadoEm is timestamp
+        && request.resource.data.auditoriaLifecycleId is string
+        && request.resource.data.auditoriaLifecycleId != resource.data.get('auditoriaLifecycleId', '')
+        && ((resource.data.ativo != false && request.resource.data.ativo == false
+            && request.resource.data.inativadoPor == request.auth.uid
+            && request.resource.data.inativadoEm is timestamp
+            && request.resource.data.motivoInativacao is string
+            && request.resource.data.motivoInativacao.size() > 0
+            && request.resource.data.motivoInativacao.size() <= 500
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'ativo', 'inativadoEm', 'inativadoPor', 'motivoInativacao',
+              'auditoriaLifecycleId', 'atualizadoEm', 'atualizadoPor'
+            ])
+            && audit.tipo == 'MEMBRO_INATIVADO'
+            && audit.motivo == request.resource.data.motivoInativacao)
+          || (resource.data.ativo == false && request.resource.data.ativo == true
+            && request.resource.data.reativadoPor == request.auth.uid
+            && request.resource.data.reativadoEm is timestamp
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'ativo', 'reativadoEm', 'reativadoPor', 'auditoriaLifecycleId', 'atualizadoEm', 'atualizadoPor'
+            ])
+            && audit.tipo == 'MEMBRO_REATIVADO'))
+        && audit.pessoaBaseId == pessoaId
+        && audit.executadoPor == request.auth.uid;
+    }
+    function validUserAccessLifecycle(appId, uid) {
+      let audit = getAfter(auditPath(appId, request.resource.data.auditoriaLifecycleId)).data;
+      return isAdmin(appId) && request.auth.uid != uid
+        && resource.data.role in ['admin', 'gestor', 'atendimento']
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.get('pessoaBaseId', '') == resource.data.get('pessoaBaseId', '')
+        && request.resource.data.get('email', '') == resource.data.get('email', '')
+        && request.resource.data.atualizadoPor == request.auth.uid
+        && request.resource.data.atualizadoEm is timestamp
+        && request.resource.data.auditoriaLifecycleId is string
+        && request.resource.data.auditoriaLifecycleId != resource.data.get('auditoriaLifecycleId', '')
+        && ((resource.data.ativo != false && request.resource.data.ativo == false
+            && request.resource.data.acessoRevogadoPor == request.auth.uid
+            && request.resource.data.acessoRevogadoEm is timestamp
+            && request.resource.data.motivoRevogacao is string
+            && request.resource.data.motivoRevogacao.size() > 0
+            && request.resource.data.motivoRevogacao.size() <= 500
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'ativo', 'acessoRevogadoEm', 'acessoRevogadoPor', 'motivoRevogacao',
+              'auditoriaLifecycleId', 'atualizadoEm', 'atualizadoPor'
+            ])
+            && audit.tipo == 'USUARIO_ACESSO_REVOGADO'
+            && audit.motivo == request.resource.data.motivoRevogacao)
+          || (resource.data.ativo == false && request.resource.data.ativo == true
+            && (!resource.data.keys().hasAny(['pessoaBaseId'])
+              || (exists(personPath(appId, resource.data.pessoaBaseId))
+                && get(personPath(appId, resource.data.pessoaBaseId)).data.ativo != false))
+            && request.resource.data.acessoReativadoPor == request.auth.uid
+            && request.resource.data.acessoReativadoEm is timestamp
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'ativo', 'acessoReativadoEm', 'acessoReativadoPor',
+              'auditoriaLifecycleId', 'atualizadoEm', 'atualizadoPor'
+            ])
+            && audit.tipo == 'USUARIO_ACESSO_REATIVADO'))
+        && audit.alvoUid == uid
+        && audit.get('pessoaBaseId', '') == resource.data.get('pessoaBaseId', '')
+        && audit.executadoPor == request.auth.uid;
+    }
+    function validLifecycleAudit(appId, id) {
+      return isAdmin(appId)
+        && request.resource.data.executadoPor == request.auth.uid
+        && request.resource.data.criadoEm is timestamp
+        && ((request.resource.data.tipo in ['MEMBRO_INATIVADO', 'MEMBRO_REATIVADO']
+            && request.resource.data.pessoaBaseId is string
+            && getAfter(personPath(appId, request.resource.data.pessoaBaseId)).data.auditoriaLifecycleId == id
+            && request.resource.data.keys().hasOnly([
+              'tipo', 'pessoaBaseId', 'motivo', 'executadoPor', 'criadoEm'
+            ])
+            && (request.resource.data.tipo == 'MEMBRO_REATIVADO'
+              || (request.resource.data.motivo is string && request.resource.data.motivo.size() > 0)))
+          || (request.resource.data.tipo in ['USUARIO_ACESSO_REVOGADO', 'USUARIO_ACESSO_REATIVADO']
+            && request.resource.data.alvoUid is string
+            && getAfter(arbitraryUserPath(appId, request.resource.data.alvoUid)).data.auditoriaLifecycleId == id
+            && request.resource.data.keys().hasOnly([
+              'tipo', 'alvoUid', 'pessoaBaseId', 'motivo', 'executadoPor', 'criadoEm'
+            ])
+            && (request.resource.data.tipo == 'USUARIO_ACESSO_REATIVADO'
+              || (request.resource.data.motivo is string && request.resource.data.motivo.size() > 0))));
     }
     function canRelocate(appId) { return isActive(appId) && currentUser(appId).role in ['admin', 'gestor']; }
     function auditPath(appId, id) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/auditoria/$(id); }
@@ -202,9 +302,7 @@ service cloud.firestore {
             && request.resource.data.ativo == resource.data.ativo
             && validUserPersonLink(appId, uid, request.resource.data.pessoaBaseId)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pessoaBaseId', 'atualizadoEm', 'atualizadoPor']))
-          || (request.auth.uid != uid && request.resource.data.role == resource.data.role
-            && request.resource.data.get('pessoaBaseId', '') == resource.data.get('pessoaBaseId', '')
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ativo', 'atualizadoEm', 'atualizadoPor']))
+          || validUserAccessLifecycle(appId, uid)
           || (request.auth.uid != uid && resource.data.keys().hasAny(['pessoaBaseId'])
             && request.resource.data.pessoaBaseId == resource.data.pessoaBaseId
             && request.resource.data.role in ['admin', 'gestor', 'atendimento']
@@ -274,22 +372,26 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/auditoria/{id} {
       allow read: if isAdmin(appId);
       allow create: if request.resource.data.executadoPor == request.auth.uid
-        && ((isInternal(appId) && ((isAdmin(appId) && request.resource.data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO', 'USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO', 'USUARIO_ACESSO_PREAUTORIZADO', 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA'])
+        && validMyRegistrationAudit(appId);
+      allow create: if validLifecycleAudit(appId, id);
+      allow create: if request.resource.data.executadoPor == request.auth.uid
+        && isInternal(appId)
+        && currentUser(appId).role in ['admin', 'gestor']
+        && request.resource.data.tipo in ['ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO']
+        && id == request.resource.data.realocacaoId
+        && getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.ultimaRealocacaoId == id
+        && getAfter(appointmentPath(appId, request.resource.data.destinoAgendamentoId)).data.origemRealocacao.realocacaoId == id
+        && getAfter(activeLockPath(appId, request.resource.data.destinoAgendaId, getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.pessoaBaseId)).data.agendamentoId == request.resource.data.destinoAgendamentoId;
+      allow create: if request.resource.data.executadoPor == request.auth.uid
+        && ((isInternal(appId) && ((currentUser(appId).role == 'admin' && request.resource.data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO', 'USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO', 'USUARIO_ACESSO_PREAUTORIZADO', 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA'])
           || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
-          || (canRelocate(appId)
-            && request.resource.data.tipo in ['ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO']
-            && id == request.resource.data.realocacaoId
-            && getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.ultimaRealocacaoId == id
-            && getAfter(appointmentPath(appId, request.resource.data.destinoAgendamentoId)).data.origemRealocacao.realocacaoId == id
-            && getAfter(activeLockPath(appId, request.resource.data.destinoAgendaId, getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.pessoaBaseId)).data.agendamentoId == request.resource.data.destinoAgendamentoId)
-          || (isAdmin(appId) && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO')
-          || validMyRegistrationAudit(appId)
-          || (canReviewMemberRegistration(appId)
+          || (currentUser(appId).role == 'admin' && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO')
+          || (currentUser(appId).role in ['admin', 'gestor']
             && request.resource.data.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO'
             && id == 'autocadastro_aprovado_' + request.resource.data.inviteId
             && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.statusCadastro == 'aprovado'
             && getAfter(memberSelfRegistrationPath(appId, request.resource.data.inviteId)).data.pessoaId == request.resource.data.pessoaId)
-          || (canReviewMemberRegistration(appId)
+          || (currentUser(appId).role in ['admin', 'gestor']
             && request.resource.data.tipo == 'AUTOCADASTRO_MEMBRO_REJEITADO'
             && id == 'autocadastro_rejeitado_' + request.resource.data.inviteId
             && request.resource.data.motivo is string && request.resource.data.motivo.size() > 0
@@ -318,12 +420,14 @@ service cloud.firestore {
         || (isAtendimento(appId) && isConsulenteData(request.resource.data)
           && request.resource.data.ativo == true
           && request.resource.data.get('funcoesCasa', []).size() == 0);
-      allow update: if isAdmin(appId)
+      allow update: if validMyRegistrationUpdate(appId, id)
+        || validMemberLifecycle(appId, id)
+        || (isAdmin(appId) && request.resource.data.ativo == resource.data.ativo)
         || (isGestor(appId)
           && request.resource.data.atualizadoPor == request.auth.uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'vinculo', 'funcoesCasa', 'tipoPessoa', 'nome', 'dataNascimento', 'cpf', 'contato', 'email',
-          'responsavelCpf', 'responsavelNome', 'responsavelContato', 'ativo', 'sexo', 'estadoCivil',
+          'responsavelCpf', 'responsavelNome', 'responsavelContato', 'sexo', 'estadoCivil',
           'endereco', 'dadosCasa', 'statusCadastro', 'origemCadastro', 'busca', 'atualizadoEm', 'atualizadoPor'
         ]))
         || (isAtendimento(appId) && isConsulenteData(resource.data) && isConsulenteData(request.resource.data)
@@ -334,8 +438,7 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'nome', 'dataNascimento', 'cpf', 'contato', 'email', 'responsavelCpf', 'responsavelNome',
             'responsavelContato', 'busca', 'atualizadoEm', 'atualizadoPor'
-          ]))
-        || validMyRegistrationUpdate(appId, id);
+          ]));
       allow delete: if false;
     }
 
@@ -535,6 +638,13 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/consulentes/{id} {
       allow read: if isInternal(appId);
+      allow update: if request.resource.data.agendaId == resource.data.agendaId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'servicosRealocados', 'ultimaRealocacaoId', 'reagendadoEm', 'reagendadoPor',
+          'reagendadoParaAgendaId', 'reagendadoParaAgendamentoId', 'motivoRealocacao', 'atualizadoEm', 'atualizadoPor'
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys().hasAll(['servicosRealocados', 'ultimaRealocacaoId'])
+        && validRelocationUpdate(appId, id);
       allow create: if isInternal(appId)
         && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
         && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendamentos_ativos/$(request.resource.data.agendaId + '_' + request.resource.data.pessoaBaseId)).data.agendamentoId == id;
