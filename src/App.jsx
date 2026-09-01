@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { auth, findAndClaimAuthorizedAccess, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured, getAppDoc, getDoc, onSnapshot } from './services/firebase';
-import { ROLES, ROLE_TABS } from './constants/roles';
+import { ROLES } from './constants/roles';
+import { canAccessModule, getModuleFromPathname, getModulePath, hasPermission, MODULES, PERMISSIONS } from './constants/permissions';
 import { ToastProvider } from './components/ui/Toast';
 import { useToast } from './components/ui/useToast';
 import { Sidebar } from './components/layout/Sidebar';
@@ -8,6 +9,7 @@ import { MobileNav } from './components/layout/MobileNav';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { AccessScreen } from './components/auth/AccessScreen';
 import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
+import { PermissionDenied } from './components/auth/PermissionDenied';
 import { useInactivityTimeout } from './hooks/useInactivityTimeout';
 import { AUTH_VIEW, getAuthErrorMessage, normalizeAuthEmail, rejectUnauthorizedSession, resolveAuthView } from './utils/auth';
 import { HomeModule } from './modules/Home/HomeModule';
@@ -27,7 +29,7 @@ function AppContent() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(isFirebaseConfigured);
-  const [tab, setTab] = useState('home');
+  const [tab, setTab] = useState(() => getModuleFromPathname(window.location.pathname));
   const [usersFilter, setUsersFilter] = useState('todos');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
@@ -117,6 +119,12 @@ function AppContent() {
     return () => clearTimeout(timer);
   }, [verificationCooldownUntil]);
 
+  useEffect(() => {
+    const handleHistoryNavigation = () => setTab(getModuleFromPathname(window.location.pathname));
+    window.addEventListener('popstate', handleHistoryNavigation);
+    return () => window.removeEventListener('popstate', handleHistoryNavigation);
+  }, []);
+
   const handleGoogleLogin = async () => {
     if (!auth) return;
     setIsLoggingIn(true);
@@ -187,22 +195,24 @@ function AppContent() {
   if (authView === AUTH_VIEW.SUSPENDED) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-amber-600" title="Acesso suspenso — membro inativo" description="Seu cadastro de membro está inativo. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
   if (authView === AUTH_VIEW.PENDING) return withSessionTimeout(<AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />);
 
-  const allowedTabs = ROLE_TABS[profile.role] || [];
-  const selectTab = nextTab => setTab(allowedTabs.includes(nextTab) ? nextTab : 'home');
-  const openPendingUsers = () => { if (profile.role === ROLES.ADMIN) { setUsersFilter('pendentes'); setTab('usuarios'); } };
-  const renderContent = () => {
-    if (!allowedTabs.includes(tab)) return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;
-    if (tab === 'agendas') return <AgendasModule user={user} profile={profile} />;
-    if (tab === 'fluxo') return <FluxoModule user={user} profile={profile} />;
-    if (tab === 'pessoas') return <PessoasModule user={user} profile={profile} />;
-    if (tab === 'convites') return <ConvitesModule user={user} profile={profile} />;
-    if (tab === 'autocadastros') return <AutocadastrosModule user={user} profile={profile} />;
-    if (tab === 'usuarios') return profile.role === ROLES.ADMIN ? <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} /> : <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} />;
-    if (tab === 'meu-cadastro') return <MeuCadastroModule user={user} profile={profile} />;
-    if (tab === 'config') return <ConfiguracoesModule user={user} profile={profile} />;
-    return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;
+  const selectTab = nextTab => {
+    setTab(nextTab);
+    window.history.pushState({}, '', getModulePath(nextTab));
   };
-  return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} allowedTabs={allowedTabs} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} allowedTabs={allowedTabs} /></div>);
+  const openPendingUsers = () => { if (hasPermission(profile, PERMISSIONS.USERS_MANAGE)) { setUsersFilter('pendentes'); selectTab(MODULES.USERS); } };
+  const renderContent = () => {
+    if (!canAccessModule(profile, tab)) return <PermissionDenied />;
+    if (tab === MODULES.AGENDAS) return <AgendasModule user={user} profile={profile} />;
+    if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} />;
+    if (tab === MODULES.PEOPLE) return <PessoasModule user={user} profile={profile} />;
+    if (tab === MODULES.MEMBER_INVITES) return <ConvitesModule user={user} profile={profile} />;
+    if (tab === MODULES.MEMBER_REGISTRATIONS) return <AutocadastrosModule user={user} profile={profile} />;
+    if (tab === MODULES.USERS) return <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} />;
+    if (tab === MODULES.MY_REGISTRATION) return <MeuCadastroModule user={user} profile={profile} />;
+    if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} />;
+    return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenPendingUsers={openPendingUsers} />;
+  };
+  return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} profile={profile} /></div>);
 }
 
 export default function App() {

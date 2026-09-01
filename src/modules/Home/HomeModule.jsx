@@ -1,19 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../../components/ui/Card';
 import { getAppCollection, onSnapshot } from '../../services/firebase';
+import { canAccessModule, hasPermission, MODULES, PERMISSIONS } from '../../constants/permissions';
 import { ROLES } from '../../constants/roles';
 import { CalendarDays, BookOpenCheck, Users, Sparkles, UserRoundCog } from 'lucide-react';
 
-export const HomeModule = ({ user, profile, onSelectTab, allowedTabs, onOpenPendingUsers }) => {
+export const HomeModule = ({ user, profile, onSelectTab, onOpenPendingUsers }) => {
   const firstName = user?.displayName?.split(' ')[0] || 'Utilizador';
   const [pendingCount, setPendingCount] = useState(0);
+  const canViewUsers = hasPermission(profile, PERMISSIONS.USERS_VIEW);
 
   useEffect(() => {
-    if (profile?.role !== ROLES.ADMIN) return undefined;
+    if (!canViewUsers) return undefined;
     return onSnapshot(getAppCollection('usuarios'), snapshot => {
       setPendingCount(snapshot.docs.filter(item => item.data().role === ROLES.PENDENTE && item.data().ativo !== false).length);
     });
-  }, [profile?.role]);
+  }, [canViewUsers]);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -30,9 +32,9 @@ export const HomeModule = ({ user, profile, onSelectTab, allowedTabs, onOpenPend
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {profile?.role === ROLES.ADMIN && <Card onClick={onOpenPendingUsers} className="!bg-gradient-to-br from-indigo-600 to-blue-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundCog size={28} /></div><p className="font-black text-2xl uppercase italic">Usuários pendentes</p><p className="text-indigo-100 text-[11px] font-bold uppercase mt-1">{pendingCount} aguardando liberação</p></Card>}
-        {allowedTabs.includes('agendas') && <Card
-          onClick={() => onSelectTab('agendas')}
+        {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={onOpenPendingUsers} className="!bg-gradient-to-br from-indigo-600 to-blue-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundCog size={28} /></div><p className="font-black text-2xl uppercase italic">Usuários pendentes</p><p className="text-indigo-100 text-[11px] font-bold uppercase mt-1">{pendingCount} aguardando liberação</p></Card>}
+        {canAccessModule(profile, MODULES.AGENDAS) && <Card
+          onClick={() => onSelectTab(MODULES.AGENDAS)}
           className="!bg-gradient-to-br from-amber-500 to-amber-600 text-white !p-6 shadow-xl shadow-amber-500/20 group !border-none hover:-translate-y-1 transition-all"
         >
           <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6">
@@ -46,8 +48,8 @@ export const HomeModule = ({ user, profile, onSelectTab, allowedTabs, onOpenPend
           </p>
         </Card>}
 
-        {allowedTabs.includes('fluxo') && <Card
-          onClick={() => onSelectTab('fluxo')}
+        {canAccessModule(profile, MODULES.ATTENDANCE) && <Card
+          onClick={() => onSelectTab(MODULES.ATTENDANCE)}
           className="!bg-gradient-to-br from-emerald-600 to-emerald-700 text-white !p-6 shadow-xl shadow-emerald-600/20 group !border-none hover:-translate-y-1 transition-all"
         >
           <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6">
@@ -61,8 +63,8 @@ export const HomeModule = ({ user, profile, onSelectTab, allowedTabs, onOpenPend
           </p>
         </Card>}
 
-        {allowedTabs.includes('pessoas') && <Card
-          onClick={() => onSelectTab('pessoas')}
+        {canAccessModule(profile, MODULES.PEOPLE) && <Card
+          onClick={() => onSelectTab(MODULES.PEOPLE)}
           className="!bg-gradient-to-br from-purple-600 to-purple-700 text-white !p-6 shadow-xl shadow-purple-600/20 group !border-none hover:-translate-y-1 transition-all sm:col-span-2 lg:col-span-1"
         >
           <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6">

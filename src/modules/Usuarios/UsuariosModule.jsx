@@ -14,6 +14,7 @@ import { LifecycleHistoryModal } from '../../components/audit/LifecycleHistoryMo
 import { Search, ShieldCheck, UsersRound } from 'lucide-react';
 import { maskCPF } from '../../utils/formatters';
 import { validateAccessAuthorization } from '../../utils/accessAuthorization';
+import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 
 const FILTERS = [['todos', 'Todos'], ['pendentes', 'Pendentes'], ['admin', 'Administradores'], ['gestor', 'Gestores / Dirigentes'], ['atendimento', 'Atendimento / Recepção'], ['inativos', 'Inativos'], ['sem-vinculo', 'Sem vínculo']];
 const OPERATIONAL_ROLES = [ROLES.ADMIN, ROLES.GESTOR, ROLES.ATENDIMENTO];
@@ -43,16 +44,18 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
   const [newAccessRole, setNewAccessRole] = useState(ROLES.ATENDIMENTO);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
+  const canViewUsers = hasPermission(profile, PERMISSIONS.USERS_VIEW);
+  const canManageUsers = hasPermission(profile, PERMISSIONS.USERS_MANAGE);
 
   useEffect(() => setFilter(initialFilter), [initialFilter]);
   useEffect(() => {
-    if (profile?.role !== ROLES.ADMIN) return undefined;
+    if (!canViewUsers) return undefined;
     const unsubUsers = onSnapshot(getAppCollection('usuarios'), snapshot => setUsuarios(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))));
     const unsubPeople = onSnapshot(getAppCollection('pessoas'), snapshot => setPessoas(Object.fromEntries(snapshot.docs.map(item => [item.id, { id: item.id, ...item.data() }]))));
     const unsubFunctions = onSnapshot(getAppCollection('config_funcoes_membro'), snapshot => setMemberFunctions(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))));
     const unsubAuthorizations = onSnapshot(getAppCollection('autorizacoes_acesso'), snapshot => setAuthorizations(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))));
     return () => { unsubUsers(); unsubPeople(); unsubFunctions(); unsubAuthorizations(); };
-  }, [profile?.role]);
+  }, [canViewUsers]);
 
   const pendingCount = usuarios.filter(item => item.ativo !== false && item.role === ROLES.PENDENTE).length;
   const pendingAuthorizations = authorizations.filter(item => item.status === 'pendente');
@@ -70,7 +73,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
     });
   }, [usuarios, pessoas, search, filter]);
 
-  if (profile?.role !== ROLES.ADMIN) return <Card><p className="font-bold text-rose-600">Acesso restrito a administradores.</p></Card>;
+  if (!canManageUsers) return <Card><p className="font-bold text-rose-600">Você não possui permissão para acessar esta funcionalidade.</p></Card>;
 
   const openAccess = usuario => { setAccessTarget(usuario); setSelectedPessoa(null); setAccessRole(ROLES.ATENDIMENTO); setAccessStep('person'); };
   const confirmAccess = async () => {

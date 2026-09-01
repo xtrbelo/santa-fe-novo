@@ -7,10 +7,12 @@ import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
+import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 
 export const ConfiguracoesModule = ({ user, profile }) => {
+  const canManageConfig = hasPermission(profile, PERMISSIONS.CONFIG_MANAGE);
   const [funcoes, setFuncoes] = useState([]);
   const [trabalhos, setTrabalhos] = useState([]);
   const [servicos, setServicos] = useState([]);
@@ -102,7 +104,7 @@ export const ConfiguracoesModule = ({ user, profile }) => {
       <Button onClick={addService} variant="success" className="w-full"><Plus size={16}/> Adicionar Serviço</Button>
       {servicos.map(s => <div key={s.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{s.nome}</strong><p className="text-[10px] text-gray-500">{servicoControlaVagas(s) ? 'Controla vagas' : 'Sem limite'} · {(s.tipoTrabalhoIds || []).map(id => trabalhos.find(t => t.id === id)?.nome).filter(Boolean).join(', ') || 'Legado/global'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_servicos', id: s.id })}><Trash2 size={16}/></button></div>)}
     </Card>
-    {profile?.role === 'admin' && <Card className="space-y-4">
+    {canManageConfig && <Card className="space-y-4">
       <h3 className="font-black uppercase text-blue-700 flex gap-2"><DatabaseZap size={18}/> Manutenção</h3>
       <p className="text-sm text-gray-600">Reconstrói somente o índice derivado usado na busca de pessoas, em lotes seguros.</p>
       <Button onClick={rebuildIndex} disabled={rebuilding} className="w-full">{rebuilding ? 'Atualizando índice...' : 'Atualizar índice de busca de pessoas'}</Button>

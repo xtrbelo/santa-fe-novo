@@ -10,6 +10,29 @@ React 19 + Vite + Firebase Auth + Firestore.
 
 Nunca usar LEGACY para novos deploys.
 
+## Contexto consolidado
+- `main` = baseline válida das fases concluídas.
+- Não reanalisar fases anteriores sem regressão evidente.
+- Não ler o repositório inteiro.
+- Ler primeiro apenas os arquivos citados no prompt.
+- Expandir a leitura só por dependência direta.
+- Não repetir arquitetura já documentada.
+- Não reproduzir arquivos completos nem logs extensos.
+- Durante a implementação, executar só testes focados.
+- Rodar `test:all` + lint + `build:hml` + `build:prod` + diff-check somente no checkpoint final.
+- Build HML e PROD usam o mesmo `dist`; após validação sequencial, nunca fazer deploy direto desse `dist`.
+- Antes de deploy, gerar novamente o build do ambiente alvo.
+- Resposta final curta: arquivos, comportamento, testes, lint/build/diff/status e riscos.
+
+### Estado consolidado
+- Fases 9A–9H concluídas em PROD.
+- Fase 9I homologada em HML, aguardando fechamento.
+- Modelo: Pessoa → Membro → Usuário opcional.
+- Firebase Auth != autorização.
+- HML: `santa-fe-v2-hml`.
+- PROD: `santa-fe-v2-prod`.
+- LEGACY: `santa-fe-v2`, Hosting desativado.
+
 ## Modelo de domínio
 PESSOA → MEMBRO → USUÁRIO DO SISTEMA (opcional)
 
