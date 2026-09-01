@@ -47,6 +47,7 @@ import { validateCPF } from '../utils/formatters.js';
 import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedUser, validateAccessAuthorization } from '../utils/accessAuthorization.js';
 import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
 import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
+import { LIFECYCLE_AUDIT_TYPES, requireLifecycleReason } from '../utils/lifecycle.js';
 
 const hasViteEnv = typeof import.meta.env === 'object';
 const viteEnv = hasViteEnv ? {
@@ -577,6 +578,67 @@ export const updateMyRegistration = async ({ uid, data }, firestore = db) => {
     transaction.set(auditRef, { tipo: 'MEU_CADASTRO_ATUALIZADO', pessoaBaseId, camposAlterados: changedFields, executadoPor: uid, criadoEm: now });
   });
   return { camposAlterados: changedFields };
+};
+
+export const setMemberLifecycle = async ({ pessoaBaseId, ativo, motivo, executadoPor }, firestore = db) => {
+  if (!pessoaBaseId || !executadoPor || typeof ativo !== 'boolean') throw new Error('LIFECYCLE_INVALIDO');
+  const reason = ativo ? null : requireLifecycleReason(motivo);
+  const personRef = getDataDoc(firestore, 'pessoas', pessoaBaseId);
+  const executorRef = getDataDoc(firestore, 'usuarios', executadoPor);
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  await runTransaction(firestore, async transaction => {
+    const [personSnapshot, executorSnapshot] = await Promise.all([transaction.get(personRef), transaction.get(executorRef)]);
+    if (!personSnapshot.exists()) throw new Error('PESSOA_NAO_ENCONTRADA');
+    if (!executorSnapshot.exists() || executorSnapshot.data().role !== 'admin' || executorSnapshot.data().ativo === false) throw new Error('ADMIN_OBRIGATORIO');
+    if (executorSnapshot.data().pessoaBaseId === pessoaBaseId) throw new Error('AUTO_INATIVACAO_PROIBIDA');
+    const person = personSnapshot.data();
+    if ((person.ativo !== false) === ativo) throw new Error('SITUACAO_JA_APLICADA');
+    const now = Timestamp.now();
+    const auditType = ativo ? LIFECYCLE_AUDIT_TYPES.MEMBER_REACTIVATED : LIFECYCLE_AUDIT_TYPES.MEMBER_DEACTIVATED;
+    transaction.update(personRef, {
+      ativo,
+      ...(ativo
+        ? { reativadoEm: now, reativadoPor: executadoPor }
+        : { inativadoEm: now, inativadoPor: executadoPor, motivoInativacao: reason }),
+      auditoriaLifecycleId: auditRef.id,
+      atualizadoEm: now,
+      atualizadoPor: executadoPor,
+    });
+    transaction.set(auditRef, { tipo: auditType, pessoaBaseId, ...(reason ? { motivo: reason } : {}), executadoPor, criadoEm: now });
+  });
+};
+
+export const setUserAccessLifecycle = async ({ alvoUid, ativo, motivo, executadoPor }, firestore = db) => {
+  if (!alvoUid || !executadoPor || typeof ativo !== 'boolean') throw new Error('LIFECYCLE_INVALIDO');
+  if (alvoUid === executadoPor) throw new Error('AUTO_REVOGACAO_PROIBIDA');
+  const reason = ativo ? null : requireLifecycleReason(motivo);
+  const targetRef = getDataDoc(firestore, 'usuarios', alvoUid);
+  const executorRef = getDataDoc(firestore, 'usuarios', executadoPor);
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  await runTransaction(firestore, async transaction => {
+    const [targetSnapshot, executorSnapshot] = await Promise.all([transaction.get(targetRef), transaction.get(executorRef)]);
+    if (!targetSnapshot.exists()) throw new Error('USUARIO_NAO_ENCONTRADO');
+    if (!executorSnapshot.exists() || executorSnapshot.data().role !== 'admin' || executorSnapshot.data().ativo === false) throw new Error('ADMIN_OBRIGATORIO');
+    const target = targetSnapshot.data();
+    if (!['admin', 'gestor', 'atendimento'].includes(target.role)) throw new Error('ROLE_INSTITUCIONAL_INVALIDA');
+    if ((target.ativo !== false) === ativo) throw new Error('SITUACAO_JA_APLICADA');
+    if (ativo && target.pessoaBaseId) {
+      const personSnapshot = await transaction.get(getDataDoc(firestore, 'pessoas', target.pessoaBaseId));
+      if (!personSnapshot.exists() || personSnapshot.data().ativo === false) throw new Error('MEMBRO_INATIVO');
+    }
+    const now = Timestamp.now();
+    const auditType = ativo ? LIFECYCLE_AUDIT_TYPES.ACCESS_REACTIVATED : LIFECYCLE_AUDIT_TYPES.ACCESS_REVOKED;
+    transaction.update(targetRef, {
+      ativo,
+      ...(ativo
+        ? { acessoReativadoEm: now, acessoReativadoPor: executadoPor }
+        : { acessoRevogadoEm: now, acessoRevogadoPor: executadoPor, motivoRevogacao: reason }),
+      auditoriaLifecycleId: auditRef.id,
+      atualizadoEm: now,
+      atualizadoPor: executadoPor,
+    });
+    transaction.set(auditRef, { tipo: auditType, alvoUid, ...(target.pessoaBaseId ? { pessoaBaseId: target.pessoaBaseId } : {}), ...(reason ? { motivo: reason } : {}), executadoPor, criadoEm: now });
+  });
 };
 
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {

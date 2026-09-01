@@ -4,11 +4,11 @@ import { Button } from '../../components/ui/Button';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
 import { getPessoaFuncoesCasa } from '../../utils/domain';
 import { getMemberFunctionLabels } from '../../utils/pessoaForm';
-import { KeyRound, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
+import { History, KeyRound, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
 
 const formatTimestamp = timestamp => timestamp?.toDate?.().toLocaleString('pt-BR') || 'Não disponível';
 
-export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAuthorize, onLink, onEditRole, onToggleStatus, onResetPassword }) => {
+export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAuthorize, onLink, onEditRole, onToggleStatus, onResetPassword, onHistory }) => {
   const isOwnAccount = usuario.uid === currentUid;
   const isPending = usuario.role === ROLES.PENDENTE;
   return (
@@ -20,6 +20,7 @@ export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAu
             <h3 className="font-black text-gray-900 truncate">{usuario.nome || 'Usuário sem nome'}</h3>
             {isOwnAccount && <span className="text-[9px] font-black uppercase bg-blue-100 text-blue-700 px-2 py-1 rounded-full">Sua conta</span>}
             {usuario.ativo === false && <span className="text-[9px] font-black uppercase bg-rose-100 text-rose-700 px-2 py-1 rounded-full">Inativo</span>}
+            {usuario.ativo !== false && pessoa?.ativo === false && <span className="text-[9px] font-black uppercase bg-amber-100 text-amber-800 px-2 py-1 rounded-full">Acesso suspenso — membro inativo</span>}
           </div>
           <p className="text-xs text-gray-500 truncate mt-1">{usuario.email || 'E-mail não informado'}</p>
           <p className="text-[10px] text-gray-400 break-all mt-1">UID: {usuario.uid}</p>
@@ -37,10 +38,11 @@ export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, onAu
           Perfil: {ROLE_LABELS[usuario.role] || usuario.role}
         </Button>
         </>}
-        <Button variant={usuario.ativo === false ? 'success' : 'danger'} onClick={() => onToggleStatus(usuario)} disabled={isOwnAccount} className="flex-1">
-          {usuario.ativo === false ? <><UserRoundCheck size={16} /> Ativar</> : <><UserRoundX size={16} /> Desativar</>}
+        <Button variant={usuario.ativo === false ? 'success' : 'danger'} onClick={() => onToggleStatus(usuario)} disabled={isOwnAccount || (usuario.ativo === false && pessoa?.ativo === false)} className="flex-1">
+          {usuario.ativo === false ? <><UserRoundCheck size={16} /> Reativar acesso</> : <><UserRoundX size={16} /> Revogar acesso</>}
         </Button>
       </div>
+      {!isPending && <Button variant="ghost" onClick={() => onHistory(usuario)} className="mt-2 w-full"><History size={16}/> Histórico</Button>}
       {!isPending && usuario.email && <Button variant="ghost" onClick={() => onResetPassword(usuario)} className="mt-2 w-full"><KeyRound size={16}/> Enviar redefinição de senha</Button>}
     </Card>
   );

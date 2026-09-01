@@ -3,12 +3,12 @@ import {
   getAppCollection, 
   getAppDoc, 
   onSnapshot, 
-  updateDoc, 
   Timestamp,
   runTransaction,
   doc,
   findPessoaByCpf,
-  withPessoaSearchIndex
+  withPessoaSearchIndex,
+  setMemberLifecycle
 } from '../../services/firebase';
 import { 
   calcularIdade, 
@@ -24,7 +24,6 @@ import { normalizeSearchText } from '../../utils/pessoaSearch';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
-import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { PessoaHistoricoModal } from './PessoaHistoricoModal';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { MembroDadosComplementares } from '../../components/pessoas/MembroDadosComplementares';
@@ -52,6 +51,7 @@ export const PessoasModule = ({ user, profile }) => {
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
+  const [lifecycleReason, setLifecycleReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyPerson, setHistoryPerson] = useState(null);
   const [selectedPerson, setSelectedPerson] = useState(null);
@@ -219,17 +219,21 @@ export const PessoasModule = ({ user, profile }) => {
     }
   };
 
-  const handleDelete = async () => {
+  const handleLifecycle = async () => {
     if (!itemToDelete) return;
+    const nextActive = itemToDelete.ativo === false;
+    if (!nextActive && !lifecycleReason.trim()) { toast.error('Informe o motivo da inativação.'); return; }
+    setIsSubmitting(true);
     try {
-      const nextActive = itemToDelete.ativo === false;
-      await updateDoc(getAppDoc('pessoas', itemToDelete.id), { ativo: nextActive, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+      await setMemberLifecycle({ pessoaBaseId: itemToDelete.id, ativo: nextActive, motivo: lifecycleReason, executadoPor: user.uid });
       toast.success(`Registro de ${itemToDelete.nome} ${nextActive ? 'reativado' : 'inativado'}.`);
       setItemToDelete(null);
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao alterar a situação do registro.');
-    }
+      setLifecycleReason('');
+    } catch (error) {
+      console.error(error);
+      const messages = { AUTO_INATIVACAO_PROIBIDA: 'Você não pode inativar sua própria Pessoa vinculada.', MOTIVO_OBRIGATORIO: 'Informe o motivo da inativação.' };
+      toast.error(messages[error.message] || 'Erro ao alterar a situação do registro.');
+    } finally { setIsSubmitting(false); }
   };
 
   const cleanSearch = normalizeSearchText(buscaTexto);
@@ -350,12 +354,12 @@ export const PessoasModule = ({ user, profile }) => {
                 >
                   <Edit size={14} /> Editar
                 </Button>}
-                {!readOnly && <Button
+                {profile?.role === 'admin' && <Button
                   variant={p.ativo === false ? 'success' : 'danger'}
                   onClick={() => setItemToDelete(p)} 
                   className="px-4 py-2 h-10 rounded-xl"
                 >
-                  {p.ativo === false ? 'Reativar' : <><Trash2 size={16} /> Inativar</>}
+                  {p.ativo === false ? 'Reativar membro' : <><Trash2 size={16} /> Inativar membro</>}
                 </Button>}
               </div>
             </Card>
@@ -497,22 +501,21 @@ export const PessoasModule = ({ user, profile }) => {
         pessoa={selectedPerson}
         functionOptions={effectiveMemberFunctions}
         canEdit={!readOnly || getPessoaVinculo(selectedPerson) === 'consulente'}
-        canToggleActive={!readOnly}
+        canToggleActive={profile?.role === 'admin'}
         onClose={() => setSelectedPerson(null)}
         onHistory={() => { setHistoryPerson(selectedPerson); setSelectedPerson(null); }}
         onEdit={() => { const pessoa = selectedPerson; setSelectedPerson(null); openEdit(pessoa); }}
         onToggleActive={() => { setItemToDelete(selectedPerson); setSelectedPerson(null); }}
       />
 
-      <ConfirmDialog 
-        isOpen={!!itemToDelete}
-        onClose={() => setItemToDelete(null)}
-        onConfirm={handleDelete}
-        title={itemToDelete?.ativo === false ? 'Reativar Registro' : 'Inativar Registro'}
-        message={`Deseja ${itemToDelete?.ativo === false ? 'reativar' : 'inativar'} o registro de "${itemToDelete?.nome}"?`}
-        confirmText={itemToDelete?.ativo === false ? 'Sim, Reativar' : 'Sim, Inativar'}
-      />
-      <PessoaHistoricoModal pessoa={historyPerson} onClose={() => setHistoryPerson(null)} />
+      <Modal isOpen={!!itemToDelete} onClose={() => { setItemToDelete(null); setLifecycleReason(''); }} title={itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'} maxWidth="max-w-md">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">Confirme a alteração de situação de <strong>{itemToDelete?.nome}</strong>.</p>
+          {itemToDelete?.ativo !== false && <label className="block text-xs font-black uppercase text-gray-500">Motivo *<textarea value={lifecycleReason} onChange={event => setLifecycleReason(event.target.value)} maxLength={500} rows={4} className="mt-2 w-full rounded-xl bg-gray-50 p-3 text-sm normal-case font-medium outline-none focus:ring-2 focus:ring-purple-300"/></label>}
+          <div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => { setItemToDelete(null); setLifecycleReason(''); }}>Cancelar</Button><Button variant={itemToDelete?.ativo === false ? 'success' : 'danger'} onClick={handleLifecycle} disabled={isSubmitting}>{isSubmitting ? 'Salvando...' : itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'}</Button></div>
+        </div>
+      </Modal>
+      <PessoaHistoricoModal pessoa={historyPerson} profile={profile} onClose={() => setHistoryPerson(null)} />
     </div>
   );
 };

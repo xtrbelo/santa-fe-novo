@@ -34,7 +34,9 @@ import {
   findAndClaimAuthorizedAccess,
   resendAccessActivationEmail,
   getMyRegistration,
-  updateMyRegistration
+  updateMyRegistration,
+  setMemberLifecycle,
+  setUserAccessLifecycle
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
 import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
@@ -249,6 +251,57 @@ describe('Fase 9G - Meu Cadastro', () => {
     await seedDocuments([['usuarios', legacyUid, { uid: legacyUid, email: 'legado.9g@example.test', role: 'gestor', ativo: true }]]);
     assert.equal(await getMyRegistration({ uid: legacyUid }, legacyDb), null);
     await assert.rejects(updateMyRegistration({ uid: legacyUid, data: { contato: null, estadoCivil: 'nao_informado', endereco: address } }, legacyDb), /USUARIO_SEM_PESSOA/);
+  });
+});
+
+describe('Fase 9H - inativação, histórico e revogação', () => {
+  const pessoaId = 'membro-9h';
+  const targetUid = 'usuario-9h';
+  const seedLifecycle = () => seedDocuments([
+    ['pessoas', pessoaId, { nome: 'Membro Nove H', cpf: '12345678900', vinculo: 'membro', tipoPessoa: 'Membro', funcoesCasa: ['medium'], dadosCasa: { dataIngresso: '2020-01-01' }, statusCadastro: 'aprovado', ativo: true }],
+    ['usuarios', targetUid, { uid: targetUid, email: 'membro.9h@example.test', role: 'atendimento', ativo: true, pessoaBaseId: pessoaId }],
+    ['usuario_pessoa_index', pessoaId, { uid: targetUid, pessoaBaseId: pessoaId }]
+  ]);
+
+  test('inativa e reativa Membro preservando histórico e auditando', async () => {
+    await seedLifecycle();
+    await setMemberLifecycle({ pessoaBaseId: pessoaId, ativo: false, motivo: ' Afastamento institucional ', executadoPor: USER_ID }, adminDb());
+    let member = (await getDoc(doc(adminDb(), path('pessoas', pessoaId)))).data();
+    assert.equal(member.ativo, false); assert.equal(member.statusCadastro, 'aprovado'); assert.deepEqual(member.funcoesCasa, ['medium']); assert.deepEqual(member.dadosCasa, { dataIngresso: '2020-01-01' });
+    await setMemberLifecycle({ pessoaBaseId: pessoaId, ativo: true, executadoPor: USER_ID }, adminDb());
+    member = (await getDoc(doc(adminDb(), path('pessoas', pessoaId)))).data();
+    assert.equal(member.ativo, true); assert.equal(member.motivoInativacao, 'Afastamento institucional');
+    const events = (await getDocs(collection(adminDb(), `${root}/auditoria`))).docs.map(item => item.data()).filter(item => item.pessoaBaseId === pessoaId && item.tipo.startsWith('MEMBRO_'));
+    assert.deepEqual(events.map(item => item.tipo).sort(), ['MEMBRO_INATIVADO', 'MEMBRO_REATIVADO']);
+  });
+
+  test('motivo é obrigatório e Admin não inativa a própria Pessoa', async () => {
+    await seedLifecycle();
+    await assert.rejects(setMemberLifecycle({ pessoaBaseId: pessoaId, ativo: false, motivo: '', executadoPor: USER_ID }, adminDb()), /MOTIVO_OBRIGATORIO/);
+    await seedDocuments([['usuarios', USER_ID, { uid: USER_ID, email: 'admin@santafe.local', role: 'admin', ativo: true, pessoaBaseId: pessoaId }]]);
+    await assert.rejects(setMemberLifecycle({ pessoaBaseId: pessoaId, ativo: false, motivo: 'Fraude', executadoPor: USER_ID }, adminDb()), /AUTO_INATIVACAO_PROIBIDA/);
+  });
+
+  test('revoga e reativa acesso preservando role, vínculo e índice', async () => {
+    await seedLifecycle();
+    await setUserAccessLifecycle({ alvoUid: targetUid, ativo: false, motivo: 'Revogação institucional', executadoPor: USER_ID }, adminDb());
+    let target = (await getDoc(doc(adminDb(), path('usuarios', targetUid)))).data();
+    assert.equal(target.ativo, false); assert.equal(target.role, 'atendimento'); assert.equal(target.pessoaBaseId, pessoaId);
+    assert.equal((await getDoc(doc(adminDb(), path('usuario_pessoa_index', pessoaId)))).exists(), true);
+    await setUserAccessLifecycle({ alvoUid: targetUid, ativo: true, executadoPor: USER_ID }, adminDb());
+    target = (await getDoc(doc(adminDb(), path('usuarios', targetUid)))).data();
+    assert.equal(target.ativo, true); assert.equal(target.motivoRevogacao, 'Revogação institucional');
+  });
+
+  test('não reativa acesso com Pessoa inativa e suporta usuário legado', async () => {
+    await seedLifecycle();
+    await setUserAccessLifecycle({ alvoUid: targetUid, ativo: false, motivo: 'Revogação', executadoPor: USER_ID }, adminDb());
+    await setMemberLifecycle({ pessoaBaseId: pessoaId, ativo: false, motivo: 'Afastamento', executadoPor: USER_ID }, adminDb());
+    await assert.rejects(setUserAccessLifecycle({ alvoUid: targetUid, ativo: true, executadoPor: USER_ID }, adminDb()), /MEMBRO_INATIVO/);
+    await seedDocuments([['usuarios', 'legado-9h', { uid: 'legado-9h', role: 'gestor', ativo: true }]]);
+    await setUserAccessLifecycle({ alvoUid: 'legado-9h', ativo: false, motivo: 'Revogação', executadoPor: USER_ID }, adminDb());
+    await setUserAccessLifecycle({ alvoUid: 'legado-9h', ativo: true, executadoPor: USER_ID }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('usuarios', 'legado-9h')))).data().ativo, true);
   });
 });
 

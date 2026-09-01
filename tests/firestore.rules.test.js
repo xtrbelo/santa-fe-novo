@@ -37,6 +37,7 @@ async function seed() {
       ['atendimento', 'atendimento', true], ['pendente', 'pendente', true], ['inativo-admin', 'admin', false]
     ];
     await Promise.all(users.map(([uid, role, ativo]) => setDoc(ref(db, paths.user(uid)), { uid, nome: uid, email: `${uid}@example.test`, role, ativo, ...(role !== 'pendente' ? { pessoaBaseId: `membro-${uid}` } : {}), criadoEm: new Date(), atualizadoEm: new Date() })));
+    await Promise.all(users.filter(([, role]) => role !== 'pendente').map(([uid]) => setDoc(ref(db, `${root}/pessoas/membro-${uid}`), canonicalMember({ nome: `Membro ${uid}`, email: `${uid}@example.test` }))));
     await Promise.all([
       setDoc(ref(db, paths.people), { nome: 'Pessoa', vinculo: 'consulente', tipoPessoa: 'Consulente', funcoesCasa: [], ativo: true }),
       setDoc(ref(db, `${root}/pessoas/membro-autorizacao`), { nome: 'Membro Autorização', email: 'pendente@example.test', vinculo: 'membro', ativo: true }),
@@ -351,12 +352,11 @@ describe('D. admin', () => {
     await assertSucceeds(updateDoc(ref(db, paths.people), { nome: 'Alterada' }));
     await assertFails(deleteDoc(ref(db, paths.people)));
   });
-  test('cria Membro no novo modelo e Admin pode inativar e reativar', async () => {
+  test('cria Membro no novo modelo e exige lifecycle auditado para alterar situação', async () => {
     const db = authDb('admin-a');
     const memberRef = ref(db, `${root}/pessoas/membro-9a-admin`);
     await assertSucceeds(setDoc(memberRef, canonicalMember()));
-    await assertSucceeds(updateDoc(memberRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
-    await assertSucceeds(updateDoc(memberRef, { ativo: true, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(updateDoc(memberRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
   test('opera Agendas e consulentes', async () => {
     const db = authDb('admin-a');
@@ -380,10 +380,10 @@ describe('D. admin', () => {
     await assertSucceeds(getDocs(collection(db, `${root}/usuarios`)));
     await assertSucceeds(updateDoc(ref(db, paths.user('gestor')), { role: 'atendimento', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
-  test('altera o status de outro usuário', async () => assertSucceeds(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
+  test('não altera o status de outro usuário sem lifecycle auditado', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
   test('pode desativar usuário legado sem vínculo, sem alterar seu role', async () => {
     await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/usuarios/legado-sem-vinculo`), { uid: 'legado-sem-vinculo', role: 'atendimento', ativo: true }));
-    await assertSucceeds(updateDoc(ref(authDb('admin-a'), `${root}/usuarios/legado-sem-vinculo`), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(updateDoc(ref(authDb('admin-a'), `${root}/usuarios/legado-sem-vinculo`), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
     await assertFails(updateDoc(ref(authDb('admin-a'), `${root}/usuarios/legado-sem-vinculo`), { role: 'gestor', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
   test('não exclui usuário', async () => assertFails(deleteDoc(ref(authDb('admin-a'), paths.user('gestor')))));
@@ -406,13 +406,12 @@ describe('E. gestor', () => {
     await assertSucceeds(setDoc(ref(db, `${root}/agendas/gestor`), { tipo: 'Agenda' }));
     await assertSucceeds(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
   });
-  test('cria, edita novos campos e Gestor pode inativar e reativar Membro', async () => {
+  test('cria e edita novos campos, mas Gestor não altera lifecycle de Membro', async () => {
     const db = authDb('gestor');
     const memberRef = ref(db, `${root}/pessoas/membro-9a-gestor`);
     await assertSucceeds(setDoc(memberRef, canonicalMember()));
     await assertSucceeds(updateDoc(memberRef, { sexo: 'feminino', estadoCivil: 'solteiro', endereco: { cep: '68900000', logradouro: 'Rua A', numero: '1', complemento: null, bairro: 'Centro', cidade: 'Macapá', uf: 'AP' }, dadosCasa: { dataIngresso: '2020-01-01', dataBatismoCaesf: null }, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
-    await assertSucceeds(updateDoc(memberRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
-    await assertSucceeds(updateDoc(memberRef, { ativo: true, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+    await assertFails(updateDoc(memberRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
   });
   test('Gestor não atualiza Pessoa com campo arbitrário', async () => {
     await assertFails(updateDoc(ref(authDb('gestor'), paths.people), { sexo: 'masculino', campoNaoPermitido: 'teste', atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
@@ -786,5 +785,71 @@ describe('N. Meu Cadastro', () => {
   test('admin e gestor mantêm as permissões administrativas existentes', async () => {
     await assertSucceeds(updateDoc(ref(authDb('admin-a'), otherPath), { nome: 'Alterado pelo admin' }));
     await assertSucceeds(updateDoc(ref(authDb('gestor'), otherPath), { nome: 'Alterado pelo gestor', atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+  });
+});
+
+describe('O. Fase 9H - lifecycle e revogação', () => {
+  const memberLifecycleBatch = (pessoaId, active, auditId, reason = null) => {
+    const db = authDb('admin-a'); const batch = writeBatch(db); const now = new Date();
+    batch.update(ref(db, `${root}/pessoas/${pessoaId}`), active
+      ? { ativo: true, reativadoEm: now, reativadoPor: 'admin-a', auditoriaLifecycleId: auditId, atualizadoEm: now, atualizadoPor: 'admin-a' }
+      : { ativo: false, inativadoEm: now, inativadoPor: 'admin-a', motivoInativacao: reason, auditoriaLifecycleId: auditId, atualizadoEm: now, atualizadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/auditoria/${auditId}`), { tipo: active ? 'MEMBRO_REATIVADO' : 'MEMBRO_INATIVADO', pessoaBaseId: pessoaId, ...(reason ? { motivo: reason } : {}), executadoPor: 'admin-a', criadoEm: now });
+    return batch;
+  };
+  const userLifecycleBatch = (uid, active, auditId, reason = null, pessoaBaseId = `membro-${uid}`) => {
+    const db = authDb('admin-a'); const batch = writeBatch(db); const now = new Date();
+    batch.update(ref(db, paths.user(uid)), active
+      ? { ativo: true, acessoReativadoEm: now, acessoReativadoPor: 'admin-a', auditoriaLifecycleId: auditId, atualizadoEm: now, atualizadoPor: 'admin-a' }
+      : { ativo: false, acessoRevogadoEm: now, acessoRevogadoPor: 'admin-a', motivoRevogacao: reason, auditoriaLifecycleId: auditId, atualizadoEm: now, atualizadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/auditoria/${auditId}`), { tipo: active ? 'USUARIO_ACESSO_REATIVADO' : 'USUARIO_ACESSO_REVOGADO', alvoUid: uid, ...(pessoaBaseId ? { pessoaBaseId } : {}), ...(reason ? { motivo: reason } : {}), executadoPor: 'admin-a', criadoEm: now });
+    return batch;
+  };
+
+  test('Admin inativa e reativa Membro com auditoria, preservando os demais dados', async () => {
+    await assertSucceeds(memberLifecycleBatch('membro-gestor', false, 'membro-off', 'Afastamento').commit());
+    const inactive = (await getDoc(ref(authDb('admin-a'), `${root}/pessoas/membro-gestor`))).data();
+    assert.equal(inactive.ativo, false); assert.equal(inactive.cpf, '12345678900'); assert.deepEqual(inactive.funcoesCasa, ['medium']);
+    await assertSucceeds(memberLifecycleBatch('membro-gestor', true, 'membro-on').commit());
+  });
+
+  test('motivo é obrigatório e Gestor/Atendimento não alteram lifecycle', async () => {
+    await assertFails(memberLifecycleBatch('membro-gestor', false, 'sem-motivo').commit());
+    for (const uid of ['gestor', 'atendimento']) await assertFails(updateDoc(ref(authDb(uid), `${root}/pessoas/membro-admin-b`), { ativo: false, atualizadoEm: new Date(), atualizadoPor: uid }));
+  });
+
+  test('Admin não inativa a própria Pessoa vinculada', async () => {
+    await assertFails(memberLifecycleBatch('membro-admin-a', false, 'self-member', 'Fraude').commit());
+  });
+
+  test('Membro inativo bloqueia imediatamente o usuário vinculado e reativação restaura elegibilidade', async () => {
+    await assertSucceeds(memberLifecycleBatch('membro-gestor', false, 'suspende-gestor', 'Afastamento').commit());
+    await assertFails(getDoc(ref(authDb('gestor'), paths.people)));
+    await assertSucceeds(memberLifecycleBatch('membro-gestor', true, 'restaura-gestor').commit());
+    await assertSucceeds(getDoc(ref(authDb('gestor'), paths.people)));
+  });
+
+  test('Admin revoga e reativa acesso sem alterar role, vínculo ou índice', async () => {
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/usuario_pessoa_index/membro-gestor`), { uid: 'gestor', pessoaBaseId: 'membro-gestor' }));
+    await assertSucceeds(userLifecycleBatch('gestor', false, 'access-off', 'Revogação institucional').commit());
+    await assertFails(getDoc(ref(authDb('gestor'), paths.people)));
+    const revoked = (await getDoc(ref(authDb('admin-a'), paths.user('gestor')))).data();
+    assert.equal(revoked.role, 'gestor'); assert.equal(revoked.pessoaBaseId, 'membro-gestor');
+    await assertSucceeds(userLifecycleBatch('gestor', true, 'access-on').commit());
+    assert.equal((await getDoc(ref(authDb('admin-a'), `${root}/usuario_pessoa_index/membro-gestor`))).exists(), true);
+  });
+
+  test('não reativa acesso com Pessoa inativa e não revoga o próprio acesso', async () => {
+    await assertSucceeds(userLifecycleBatch('gestor', false, 'access-off-2', 'Revogação').commit());
+    await assertSucceeds(memberLifecycleBatch('membro-gestor', false, 'member-off-2', 'Afastamento').commit());
+    await assertFails(userLifecycleBatch('gestor', true, 'access-on-invalid').commit());
+    await assertFails(userLifecycleBatch('admin-a', false, 'self-access', 'Fraude', 'membro-admin-a').commit());
+  });
+
+  test('usuário legado pode ser revogado e reativado, e auditoria falsa é negada', async () => {
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/usuarios/legado-9h`), { uid: 'legado-9h', role: 'atendimento', ativo: true }));
+    await assertSucceeds(userLifecycleBatch('legado-9h', false, 'legacy-off', 'Revogação', null).commit());
+    await assertSucceeds(userLifecycleBatch('legado-9h', true, 'legacy-on', null, null).commit());
+    await assertFails(setDoc(ref(authDb('admin-a'), `${root}/auditoria/falsa-9h`), { tipo: 'MEMBRO_INATIVADO', pessoaBaseId: 'membro-gestor', motivo: 'Falso', executadoPor: 'admin-a', criadoEm: new Date() }));
   });
 });

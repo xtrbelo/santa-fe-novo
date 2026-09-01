@@ -7,8 +7,9 @@ import { CalendarClock } from 'lucide-react';
 const toMillis = value => value?.toMillis?.() || value?.toDate?.().getTime?.() || 0;
 const formatTime = value => value?.toDate?.().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) || null;
 
-export const PessoaHistoricoModal = ({ pessoa, onClose }) => {
+export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
   const [items, setItems] = useState([]);
+  const [lifecycleEvents, setLifecycleEvents] = useState([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -33,8 +34,18 @@ export const PessoaHistoricoModal = ({ pessoa, onClose }) => {
     }, () => setLoading(false));
   }, [pessoa]);
 
+  useEffect(() => {
+    if (!pessoa || profile?.role !== 'admin') { setLifecycleEvents([]); return undefined; }
+    return onSnapshot(query(getAppCollection('auditoria'), where('pessoaBaseId', '==', pessoa.id)), async snapshot => {
+      const relevant = snapshot.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => ['MEMBRO_INATIVADO', 'MEMBRO_REATIVADO'].includes(item.tipo));
+      const actors = await Promise.all(relevant.map(item => getDoc(getAppDoc('usuarios', item.executadoPor))));
+      setLifecycleEvents(relevant.map((item, index) => ({ ...item, responsavel: actors[index].data()?.nome || actors[index].data()?.email || 'Administrador' })).sort((a, b) => toMillis(b.criadoEm) - toMillis(a.criadoEm)));
+    });
+  }, [pessoa, profile?.role]);
+
   return <Modal isOpen={!!pessoa} onClose={onClose} title={`Histórico de ${pessoa?.nome || ''}`}>
     <div className="space-y-3 max-h-[65vh] overflow-y-auto">
+      {lifecycleEvents.length > 0 && <section className="space-y-2"><h4 className="text-xs font-black uppercase text-purple-700">Ciclo de vida</h4>{lifecycleEvents.map(event => <div key={event.id} className="rounded-2xl border border-purple-100 bg-purple-50/50 p-4"><p className="font-black text-sm text-gray-900">{event.tipo === 'MEMBRO_INATIVADO' ? 'Membro inativado' : 'Membro reativado'}</p><p className="mt-1 text-xs text-gray-500">{event.criadoEm?.toDate?.().toLocaleString('pt-BR') || 'Data indisponível'} · {event.responsavel}</p>{event.motivo && <p className="mt-2 text-sm text-gray-700"><strong>Motivo:</strong> {event.motivo}</p>}</div>)}</section>}
       {loading && <p className="text-center text-sm text-gray-400 py-8">Carregando histórico...</p>}
       {!loading && items.length === 0 && <p className="text-center text-sm text-gray-400 py-8">Nenhum atendimento registrado.</p>}
       {items.map(item => <div key={item.id} className="border border-gray-100 rounded-2xl p-4 bg-gray-50/60">

@@ -51,6 +51,12 @@ test('mantém estados explícitos para e-mail não verificado e perfil inativo',
   assert.equal(resolveAuthView({ loading: false, user: { providerData: [], emailVerified: true }, profile: { role: 'admin', ativo: false }, pendingRole: 'pendente' }), AUTH_VIEW.INACTIVE);
 });
 
+test('suspende acesso de perfil vinculado a Membro inativo sem afetar legado', () => {
+  const user = { providerData: [{ providerId: 'google.com' }], emailVerified: true };
+  assert.equal(resolveAuthView({ loading: false, user, profile: { role: 'gestor', ativo: true, pessoaBaseId: 'membro-1', pessoaAtiva: false }, pendingRole: 'pendente' }), AUTH_VIEW.SUSPENDED);
+  assert.equal(resolveAuthView({ loading: false, user, profile: { role: 'gestor', ativo: true, pessoaAtiva: true }, pendingRole: 'pendente' }), AUTH_VIEW.AUTHORIZED);
+});
+
 test('inicialização carrega e logout retorna ao login', () => {
   assert.equal(resolveAuthView({ loading: true, user: null, profile: null, pendingRole: 'pendente' }), AUTH_VIEW.LOADING);
   assert.equal(resolveAuthView({ loading: false, user: null, profile: null, pendingRole: 'pendente' }), AUTH_VIEW.LOGIN);
