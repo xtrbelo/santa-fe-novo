@@ -15,8 +15,8 @@ export const ROLE_LABELS = Object.freeze({
 export const VALID_ROLES = Object.freeze(Object.values(ROLES));
 
 export const ROLE_TABS = Object.freeze({
-  [ROLES.ADMIN]: ['home', 'agendas', 'fluxo', 'pessoas', 'convites', 'autocadastros', 'usuarios', 'config'],
-  [ROLES.GESTOR]: ['home', 'agendas', 'fluxo', 'pessoas', 'convites', 'autocadastros'],
-  [ROLES.ATENDIMENTO]: ['home', 'agendas', 'fluxo', 'pessoas'],
+  [ROLES.ADMIN]: ['home', 'agendas', 'fluxo', 'pessoas', 'convites', 'autocadastros', 'usuarios', 'config', 'meu-cadastro'],
+  [ROLES.GESTOR]: ['home', 'agendas', 'fluxo', 'pessoas', 'convites', 'autocadastros', 'meu-cadastro'],
+  [ROLES.ATENDIMENTO]: ['home', 'agendas', 'fluxo', 'pessoas', 'meu-cadastro'],
   [ROLES.PENDENTE]: []
 });

@@ -32,7 +32,9 @@ import {
   cancelAccessAuthorization,
   createAccessAuthorization,
   findAndClaimAuthorizedAccess,
-  resendAccessActivationEmail
+  resendAccessActivationEmail,
+  getMyRegistration,
+  updateMyRegistration
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
 import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
@@ -189,6 +191,64 @@ describe('Fase 9F - autorização institucional de acesso', () => {
     await seedDocuments([['usuarios', 'existente-9f', { uid: 'existente-9f', email, role: 'atendimento', ativo: true }], ['usuarios', 'pendente-9f', { uid: 'pendente-9f', email, role: 'pendente', ativo: true }]]);
     assert.equal((await getDoc(doc(accessDb('existente-9f', email), path('usuarios', 'existente-9f')))).data().role, 'atendimento');
     assert.equal((await getDoc(doc(accessDb('pendente-9f', email), path('usuarios', 'pendente-9f')))).data().role, 'pendente');
+  });
+});
+
+describe('Fase 9G - Meu Cadastro', () => {
+  const uid = 'atendimento-9g';
+  const pessoaId = 'membro-9g';
+  const email = 'membro.9g@example.test';
+  const db = () => accessDb(uid, email);
+  const address = { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null };
+
+  async function seedLinkedUser() {
+    await seedDocuments([
+      ['usuarios', uid, { uid, email, role: 'atendimento', ativo: true, pessoaBaseId: pessoaId }],
+      ['pessoas', pessoaId, { nome: 'Membro Nove G', cpf: '12345678900', email, vinculo: 'membro', tipoPessoa: 'Membro', funcoesCasa: ['medium'], dadosCasa: {}, ativo: true, estadoCivil: 'nao_informado', contato: null, endereco: address }]
+    ]);
+  }
+
+  test('lê somente a Pessoa indicada pelo perfil autenticado', async () => {
+    await seedLinkedUser();
+    const cadastro = await getMyRegistration({ uid }, db());
+    assert.equal(cadastro.id, pessoaId);
+    assert.equal(cadastro.nome, 'Membro Nove G');
+  });
+
+  test('salva campos permitidos, atualiza busca e registra auditoria sem dados pessoais', async () => {
+    await seedLinkedUser();
+    const result = await updateMyRegistration({ uid, data: {
+      contato: '(11) 99999-9999', estadoCivil: 'casado',
+      endereco: { cep: '01001-000', logradouro: 'Praça da Sé', numero: '1', complemento: '', bairro: 'Sé', cidade: 'São Paulo', uf: 'SP' }
+    } }, db());
+    assert.ok(result.camposAlterados.includes('contato'));
+    assert.ok(result.camposAlterados.includes('endereco.cep'));
+    const saved = (await getDoc(doc(db(), path('pessoas', pessoaId)))).data();
+    assert.equal(saved.contato, '11999999999');
+    assert.equal(saved.estadoCivil, 'casado');
+    assert.equal(saved.nome, 'Membro Nove G');
+    assert.ok(saved.busca.termos.includes('11999999999'));
+    assert.equal(saved.atualizadoPor, uid);
+    const audits = (await getDocs(collection(adminDb(), `${root}/auditoria`))).docs.map(item => item.data()).filter(item => item.tipo === 'MEU_CADASTRO_ATUALIZADO');
+    assert.equal(audits.length, 1);
+    assert.deepEqual(Object.keys(audits[0]).sort(), ['camposAlterados', 'criadoEm', 'executadoPor', 'pessoaBaseId', 'tipo']);
+    assert.equal(JSON.stringify(audits[0]).includes('11999999999'), false);
+  });
+
+  test('rejeita campos protegidos e pessoaBaseId arbitrário', async () => {
+    await seedLinkedUser();
+    const base = { contato: null, estadoCivil: 'nao_informado', endereco: address };
+    for (const field of ['nome', 'cpf', 'email', 'vinculo', 'funcoesCasa', 'dadosCasa', 'ativo', 'pessoaBaseId']) {
+      await assert.rejects(updateMyRegistration({ uid, data: { ...base, [field]: 'fraude' } }, db()), /CAMPOS_INVALIDOS/);
+    }
+  });
+
+  test('usuário legado sem pessoaBaseId recebe estado sem cadastro e não cria vínculo', async () => {
+    const legacyUid = 'legado-9g';
+    const legacyDb = accessDb(legacyUid, 'legado.9g@example.test');
+    await seedDocuments([['usuarios', legacyUid, { uid: legacyUid, email: 'legado.9g@example.test', role: 'gestor', ativo: true }]]);
+    assert.equal(await getMyRegistration({ uid: legacyUid }, legacyDb), null);
+    await assert.rejects(updateMyRegistration({ uid: legacyUid, data: { contato: null, estadoCivil: 'nao_informado', endereco: address } }, legacyDb), /USUARIO_SEM_PESSOA/);
   });
 });
 

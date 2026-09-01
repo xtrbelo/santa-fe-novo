@@ -8,6 +8,7 @@ import {
   ClipboardCheck,
   UsersRound,
   Settings, 
+  ContactRound,
   LogOut 
 } from 'lucide-react';
 import { ROLE_LABELS } from '../../constants/roles';
@@ -22,6 +23,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs, profil
     { id: 'autocadastros', label: 'Autocadastros', icon: <ClipboardCheck size={22} /> },
     { id: 'usuarios', label: 'Usuários', icon: <UsersRound size={22} /> },
     { id: 'config', label: 'Configurações', icon: <Settings size={22} /> },
+    { id: 'meu-cadastro', label: 'Meu Cadastro', icon: <ContactRound size={22} /> },
   ];
 
   return (

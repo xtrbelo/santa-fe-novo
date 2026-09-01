@@ -20,6 +20,7 @@ import { ConfiguracoesModule } from './modules/Configuracoes/ConfiguracoesModule
 import { UsuariosModule } from './modules/Usuarios/UsuariosModule';
 import { AutocadastroMembroPage } from './modules/Autocadastro/AutocadastroMembroPage';
 import { AtivacaoAcessoPage } from './modules/AtivacaoAcesso/AtivacaoAcessoPage';
+import { MeuCadastroModule } from './modules/MeuCadastro/MeuCadastroModule';
 import { Clock3, MailCheck, ShieldOff, ShieldQuestion } from 'lucide-react';
 
 function AppContent() {
@@ -181,6 +182,7 @@ function AppContent() {
     if (tab === 'convites') return <ConvitesModule user={user} profile={profile} />;
     if (tab === 'autocadastros') return <AutocadastrosModule user={user} profile={profile} />;
     if (tab === 'usuarios') return profile.role === ROLES.ADMIN ? <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} /> : <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} />;
+    if (tab === 'meu-cadastro') return <MeuCadastroModule user={user} profile={profile} />;
     if (tab === 'config') return <ConfiguracoesModule user={user} profile={profile} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} allowedTabs={allowedTabs} onOpenPendingUsers={openPendingUsers} />;
   };

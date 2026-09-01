@@ -46,6 +46,7 @@ import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelf
 import { validateCPF } from '../utils/formatters.js';
 import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedUser, validateAccessAuthorization } from '../utils/accessAuthorization.js';
 import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
+import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
 
 const hasViteEnv = typeof import.meta.env === 'object';
 const viteEnv = hasViteEnv ? {
@@ -541,6 +542,41 @@ export const findAndClaimAuthorizedAccess = async ({ uid, email, emailVerified }
   if (snapshot.size !== 1) throw new Error('MULTIPLAS_AUTORIZACOES_ACESSO');
   await claimAuthorizedAccess({ authorizationId: snapshot.docs[0].id, uid, email, emailVerified }, firestore);
   return true;
+};
+
+export const getMyRegistration = async ({ uid }, firestore = db) => {
+  if (!uid) throw new Error('USUARIO_INVALIDO');
+  const userSnapshot = await getDoc(getDataDoc(firestore, 'usuarios', uid));
+  if (!userSnapshot.exists() || userSnapshot.data().ativo === false) throw new Error('USUARIO_SEM_ACESSO');
+  const pessoaBaseId = userSnapshot.data().pessoaBaseId;
+  if (!pessoaBaseId) return null;
+  const personSnapshot = await getDoc(getDataDoc(firestore, 'pessoas', pessoaBaseId));
+  if (!personSnapshot.exists()) throw new Error('CADASTRO_NAO_ENCONTRADO');
+  return { id: personSnapshot.id, ...personSnapshot.data() };
+};
+
+export const updateMyRegistration = async ({ uid, data }, firestore = db) => {
+  if (!uid) throw new Error('USUARIO_INVALIDO');
+  const userRef = getDataDoc(firestore, 'usuarios', uid);
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  let changedFields = [];
+  await runTransaction(firestore, async transaction => {
+    const userSnapshot = await transaction.get(userRef);
+    if (!userSnapshot.exists() || userSnapshot.data().ativo === false) throw new Error('USUARIO_SEM_ACESSO');
+    const pessoaBaseId = userSnapshot.data().pessoaBaseId;
+    if (!pessoaBaseId) throw new Error('USUARIO_SEM_PESSOA');
+    const personRef = getDataDoc(firestore, 'pessoas', pessoaBaseId);
+    const personSnapshot = await transaction.get(personRef);
+    if (!personSnapshot.exists()) throw new Error('CADASTRO_NAO_ENCONTRADO');
+    const current = personSnapshot.data();
+    const update = buildMyRegistrationUpdate(current, data);
+    changedFields = update.fields;
+    if (!changedFields.length) return;
+    const now = Timestamp.now();
+    transaction.update(personRef, withPessoaSearchIndex({ ...current, ...update.data, atualizadoEm: now, atualizadoPor: uid }));
+    transaction.set(auditRef, { tipo: 'MEU_CADASTRO_ATUALIZADO', pessoaBaseId, camposAlterados: changedFields, executadoPor: uid, criadoEm: now });
+  });
+  return { camposAlterados: changedFields };
 };
 
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
