@@ -28,7 +28,11 @@ import {
   approveMemberSelfRegistration,
   rejectMemberSelfRegistration,
   autorizarUsuario,
-  vincularUsuarioPessoa
+  vincularUsuarioPessoa,
+  cancelAccessAuthorization,
+  createAccessAuthorization,
+  findAndClaimAuthorizedAccess,
+  resendAccessActivationEmail
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
 import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
@@ -45,6 +49,7 @@ let environment;
 const adminDb = () => environment.authenticatedContext(USER_ID, { email_verified: true }).firestore();
 const gestorDb = () => environment.authenticatedContext('gestor-business', { email_verified: true }).firestore();
 const publicDb = () => environment.unauthenticatedContext().firestore();
+const accessDb = (uid, email, emailVerified = true) => environment.authenticatedContext(uid, { email, email_verified: emailVerified }).firestore();
 
 async function seedDocuments(entries) {
   await environment.withSecurityRulesDisabled(async context => {
@@ -120,6 +125,70 @@ describe('Fase 8A - autorização e vínculo de acesso', () => {
     await vincularUsuarioPessoa({ uid: USER_ID, pessoaBaseId: 'membro-admin', executadoPor: USER_ID }, db);
     const usuario = (await getDoc(doc(db, path('usuarios', USER_ID)))).data();
     assert.equal(usuario.role, 'admin'); assert.equal(usuario.ativo, true); assert.equal(usuario.pessoaBaseId, 'membro-admin');
+  });
+});
+
+describe('Fase 9F - autorização institucional de acesso', () => {
+  const pessoaId = 'membro-9f'; const email = 'membro.9f@example.test';
+  const seedMember = () => seedDocuments([['pessoas', pessoaId, { nome: 'Membro Nove F', email, vinculo: 'membro', ativo: true }]]);
+
+  test('Admin pré-autoriza e Google correto consome tudo atomicamente', async () => {
+    await seedMember();
+    await createAccessAuthorization({ pessoaBaseId: pessoaId, role: 'gestor', executadoPor: USER_ID }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('autorizacoes_acesso', pessoaId)))).data().status, 'pendente');
+    const claimed = await findAndClaimAuthorizedAccess({ uid: 'google-9f', email, emailVerified: true }, accessDb('google-9f', email));
+    assert.equal(claimed, true);
+    const usuario = (await getDoc(doc(accessDb('google-9f', email), path('usuarios', 'google-9f')))).data();
+    assert.equal(usuario.nome, 'Membro Nove F'); assert.equal(usuario.role, 'gestor'); assert.equal(usuario.autorizadoPor, USER_ID);
+    assert.equal((await getDoc(doc(adminDb(), path('usuario_pessoa_index', pessoaId)))).data().uid, 'google-9f');
+    assert.equal((await getDoc(doc(adminDb(), path('autorizacoes_acesso', pessoaId)))).data().status, 'utilizado');
+    assert.equal((await getDoc(doc(adminDb(), path('auditoria', `usuario_ativado_google-9f_${pessoaId}`)))).data().tipo, 'USUARIO_ACESSO_ATIVADO');
+  });
+
+  test('Google errado ou autorização cancelada não cria usuário nem índice', async () => {
+    await seedMember();
+    await createAccessAuthorization({ pessoaBaseId: pessoaId, role: 'atendimento', executadoPor: USER_ID }, adminDb());
+    assert.equal(await findAndClaimAuthorizedAccess({ uid: 'errado-9f', email: 'errado@example.test', emailVerified: true }, accessDb('errado-9f', 'errado@example.test')), false);
+    await cancelAccessAuthorization({ pessoaBaseId: pessoaId, executadoPor: USER_ID }, adminDb());
+    assert.equal(await findAndClaimAuthorizedAccess({ uid: 'cancelado-9f', email, emailVerified: true }, accessDb('cancelado-9f', email)), false);
+    assert.equal((await getDoc(doc(adminDb(), path('usuario_pessoa_index', pessoaId)))).exists(), false);
+  });
+
+  test('reenvio usa somente o e-mail da autorização pendente e recusa cancelada ou utilizada', async () => {
+    await seedMember();
+    await createAccessAuthorization({ pessoaBaseId: pessoaId, role: 'atendimento', executadoPor: USER_ID }, adminDb());
+    const sent = [];
+    await resendAccessActivationEmail({ pessoaBaseId: pessoaId, origin: 'https://sistema.example' }, adminDb(), {}, async (_auth, targetEmail, settings) => sent.push({ targetEmail, settings }));
+    assert.deepEqual(sent, [{ targetEmail: email, settings: { url: 'https://sistema.example/ativar-acesso', handleCodeInApp: true } }]);
+    await cancelAccessAuthorization({ pessoaBaseId: pessoaId, executadoPor: USER_ID }, adminDb());
+    await assert.rejects(resendAccessActivationEmail({ pessoaBaseId: pessoaId, origin: 'https://sistema.example' }, adminDb(), {}, async () => {}), /AUTORIZACAO_NAO_PENDENTE/);
+
+    const usedId = `${pessoaId}-utilizada`;
+    await seedDocuments([
+      ['pessoas', usedId, { nome: 'Membro Utilizado', email: 'utilizado@example.test', vinculo: 'membro', ativo: true }],
+      ['autorizacoes_acesso', usedId, { pessoaBaseId: usedId, email: 'utilizado@example.test', role: 'gestor', status: 'utilizado' }],
+    ]);
+    await assert.rejects(resendAccessActivationEmail({ pessoaBaseId: usedId, origin: 'https://sistema.example' }, adminDb(), {}, async () => {}), /AUTORIZACAO_NAO_PENDENTE/);
+  });
+
+  test('dois claims concorrentes permitem somente um usuário por Pessoa', async () => {
+    await seedMember();
+    await createAccessAuthorization({ pessoaBaseId: pessoaId, role: 'atendimento', executadoPor: USER_ID }, adminDb());
+    const attempts = await Promise.allSettled([
+      findAndClaimAuthorizedAccess({ uid: 'concorrente-a', email, emailVerified: true }, accessDb('concorrente-a', email)),
+      findAndClaimAuthorizedAccess({ uid: 'concorrente-b', email, emailVerified: true }, accessDb('concorrente-b', email))
+    ]);
+    assert.equal(attempts.filter(item => item.status === 'fulfilled' && item.value === true).length, 1);
+    const index = (await getDoc(doc(adminDb(), path('usuario_pessoa_index', pessoaId)))).data();
+    assert.ok(['concorrente-a', 'concorrente-b'].includes(index.uid));
+    const users = await Promise.all(['concorrente-a', 'concorrente-b'].map(uid => getDoc(doc(adminDb(), path('usuarios', uid)))));
+    assert.equal(users.filter(item => item.exists()).length, 1);
+  });
+
+  test('perfil existente e pendente legado continuam fora do claim novo', async () => {
+    await seedDocuments([['usuarios', 'existente-9f', { uid: 'existente-9f', email, role: 'atendimento', ativo: true }], ['usuarios', 'pendente-9f', { uid: 'pendente-9f', email, role: 'pendente', ativo: true }]]);
+    assert.equal((await getDoc(doc(accessDb('existente-9f', email), path('usuarios', 'existente-9f')))).data().role, 'atendimento');
+    assert.equal((await getDoc(doc(accessDb('pendente-9f', email), path('usuarios', 'pendente-9f')))).data().role, 'pendente');
   });
 });
 

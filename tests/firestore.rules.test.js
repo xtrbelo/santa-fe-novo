@@ -2,7 +2,7 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
 
 const PROJECT_ID = 'santa-fe-rules-test';
 const APP_ID = PROJECT_ID;
@@ -19,6 +19,7 @@ const inviteId = 'a'.repeat(64);
 const invitePath = id => `${root}/convites_membro/${id}`;
 const inviteIndexPath = cpf => `${root}/convite_membro_cpf_index/${cpf}`;
 const registrationPath = id => `${root}/autocadastros_membro/${id}`;
+const authorizationPath = pessoaId => `${root}/autorizacoes_acesso/${pessoaId}`;
 const inviteData = (uid, overrides = {}) => ({ nome: 'Pessoa Convidada', cpf: '52998224725', email: 'convite@example.test', status: 'ativo', criadoEm: new Date(), criadoPor: uid, expiraEm: new Date(Date.now() + 7 * 86400000), atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
 const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: null, email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
 
@@ -460,6 +461,87 @@ describe('G. criação do próprio perfil', () => {
       await assertFails(setDoc(ref(authDb(uid, { email: `${uid}@example.test` }), paths.user(uid)), { ...validProfile(uid), role }));
     });
   }
+});
+
+describe('G2. autorização institucional de acesso', () => {
+  const pessoaId = 'membro-novo-acesso';
+  const email = 'novo-acesso@example.test';
+  const authorization = (overrides = {}) => ({ pessoaBaseId: pessoaId, email, role: 'atendimento', status: 'pendente', criadoEm: new Date(), criadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a', auditoriaPreautorizacaoId: 'preauth-audit', ...overrides });
+  const seedMember = async () => environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/pessoas/${pessoaId}`), { nome: 'Novo Acesso', email, vinculo: 'membro', ativo: true }));
+
+  test('somente Admin cria e lista pré-autorização válida com auditoria', async () => {
+    await seedMember();
+    const admin = authDb('admin-a'); const batch = writeBatch(admin);
+    batch.set(ref(admin, authorizationPath(pessoaId)), authorization());
+    batch.set(ref(admin, `${root}/auditoria/preauth-audit`), { tipo: 'USUARIO_ACESSO_PREAUTORIZADO', pessoaBaseId: pessoaId, email, role: 'atendimento', executadoPor: 'admin-a', criadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+    await assertSucceeds(getDocs(collection(admin, `${root}/autorizacoes_acesso`)));
+    for (const uid of ['gestor', 'atendimento']) await assertFails(setDoc(ref(authDb(uid), authorizationPath(`${pessoaId}-${uid}`)), authorization({ pessoaBaseId: `${pessoaId}-${uid}`, criadoPor: uid, atualizadoPor: uid })));
+  });
+
+  test('bloqueia pré-autorização para e-mail inválido e duplicação pendente', async () => {
+    const invalidId = `${pessoaId}-email-invalido`;
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/pessoas/${invalidId}`), { nome: 'Sem Email Válido', email: 'email-invalido', vinculo: 'membro', ativo: true }));
+    const admin = authDb('admin-a');
+    const invalidBatch = writeBatch(admin);
+    invalidBatch.set(ref(admin, authorizationPath(invalidId)), authorization({ pessoaBaseId: invalidId, email: 'email-invalido', auditoriaPreautorizacaoId: 'preauth-invalid' }));
+    invalidBatch.set(ref(admin, `${root}/auditoria/preauth-invalid`), { tipo: 'USUARIO_ACESSO_PREAUTORIZADO', pessoaBaseId: invalidId, email: 'email-invalido', role: 'atendimento', executadoPor: 'admin-a', criadoEm: new Date() });
+    await assertFails(invalidBatch.commit());
+
+    await seedMember();
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), authorizationPath(pessoaId)), authorization()));
+    await assertFails(updateDoc(ref(admin, authorizationPath(pessoaId)), { atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+  });
+
+  test('conta sem perfil lê somente autorização pendente do próprio e-mail verificado', async () => {
+    await seedMember();
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), authorizationPath(pessoaId)), authorization()));
+    const ownDb = authDb('novo-uid', { email, email_verified: true });
+    await assertSucceeds(getDocs(query(collection(ownDb, `${root}/autorizacoes_acesso`), where('email', '==', email), where('status', '==', 'pendente'), limit(2))));
+    await assertFails(getDoc(ref(authDb('outro-uid', { email: 'outro@example.test' }), authorizationPath(pessoaId))));
+    await assertFails(getDoc(ref(authDb('nao-verificado', { email, email_verified: false }), authorizationPath(pessoaId))));
+    await assertFails(getDocs(collection(ownDb, `${root}/autorizacoes_acesso`)));
+  });
+
+  test('somente Admin cancela autorização pendente com auditoria', async () => {
+    await seedMember();
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), authorizationPath(pessoaId)), authorization()));
+    const gestor = authDb('gestor');
+    await assertFails(updateDoc(ref(gestor, authorizationPath(pessoaId)), { status: 'cancelado', canceladoEm: new Date(), canceladoPor: 'gestor', atualizadoEm: new Date(), atualizadoPor: 'gestor', auditoriaCancelamentoId: 'cancel-gestor' }));
+    const admin = authDb('admin-a'); const batch = writeBatch(admin);
+    batch.update(ref(admin, authorizationPath(pessoaId)), { status: 'cancelado', canceladoEm: new Date(), canceladoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a', auditoriaCancelamentoId: 'cancel-admin' });
+    batch.set(ref(admin, `${root}/auditoria/cancel-admin`), { tipo: 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA', pessoaBaseId: pessoaId, executadoPor: 'admin-a', criadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+  });
+
+  test('claim correto cria usuário, índice e auditoria e consome autorização atomicamente', async () => {
+    await seedMember();
+    await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), authorizationPath(pessoaId)), authorization()));
+    const uid = 'novo-uid'; const db = authDb(uid, { email, email_verified: true }); const now = new Date(); const batch = writeBatch(db);
+    batch.set(ref(db, paths.user(uid)), { uid, pessoaBaseId: pessoaId, nome: 'Novo Acesso', email, role: 'atendimento', ativo: true, criadoEm: now, criadoPor: uid, autorizadoPor: 'admin-a', atualizadoEm: now, atualizadoPor: uid });
+    batch.set(ref(db, `${root}/usuario_pessoa_index/${pessoaId}`), { pessoaBaseId: pessoaId, uid, criadoEm: now, criadoPor: uid });
+    batch.update(ref(db, authorizationPath(pessoaId)), { status: 'utilizado', utilizadoEm: now, utilizadoPorUid: uid, atualizadoEm: now, atualizadoPor: uid });
+    batch.set(ref(db, `${root}/auditoria/usuario_ativado_${uid}_${pessoaId}`), { tipo: 'USUARIO_ACESSO_ATIVADO', alvoUid: uid, pessoaBaseId: pessoaId, role: 'atendimento', autorizadoPor: 'admin-a', executadoPor: uid, criadoEm: now });
+    await assertSucceeds(batch.commit());
+  });
+
+  test('nega claim parcial, role divergente, e-mail errado, não verificado, cancelado e utilizado', async () => {
+    await seedMember();
+    for (const [suffix, claims, authOverrides, userOverrides, omit] of [
+      ['role', { email }, {}, { role: 'admin' }, null], ['email', { email: 'errado@example.test' }, {}, {}, null],
+      ['unverified', { email, email_verified: false }, {}, {}, null], ['cancelled', { email }, { status: 'cancelado' }, {}, null],
+      ['used', { email }, { status: 'utilizado' }, {}, null], ['no-index', { email }, {}, {}, 'index'], ['no-audit', { email }, {}, {}, 'audit'], ['no-consume', { email }, {}, {}, 'authorization']
+    ]) {
+      const id = `${pessoaId}-${suffix}`; const uid = `uid-${suffix}`;
+      await environment.withSecurityRulesDisabled(async context => { const db = context.firestore(); await setDoc(ref(db, `${root}/pessoas/${id}`), { nome: 'Novo Acesso', email, vinculo: 'membro', ativo: true }); await setDoc(ref(db, authorizationPath(id)), authorization({ pessoaBaseId: id, ...authOverrides })); });
+      const db = authDb(uid, { email_verified: true, ...claims }); const now = new Date(); const batch = writeBatch(db);
+      batch.set(ref(db, paths.user(uid)), { uid, pessoaBaseId: id, nome: 'Novo Acesso', email, role: 'atendimento', ativo: true, criadoEm: now, criadoPor: uid, autorizadoPor: 'admin-a', atualizadoEm: now, atualizadoPor: uid, ...userOverrides });
+      if (omit !== 'index') batch.set(ref(db, `${root}/usuario_pessoa_index/${id}`), { pessoaBaseId: id, uid, criadoEm: now, criadoPor: uid });
+      if (omit !== 'authorization') batch.update(ref(db, authorizationPath(id)), { status: 'utilizado', utilizadoEm: now, utilizadoPorUid: uid, atualizadoEm: now, atualizadoPor: uid });
+      if (omit !== 'audit') batch.set(ref(db, `${root}/auditoria/usuario_ativado_${uid}_${id}`), { tipo: 'USUARIO_ACESSO_ATIVADO', alvoUid: uid, pessoaBaseId: id, role: 'atendimento', autorizadoPor: 'admin-a', executadoPor: uid, criadoEm: now });
+      await assertFails(batch.commit());
+    }
+  });
 });
 
 describe('H. auditoria', () => {

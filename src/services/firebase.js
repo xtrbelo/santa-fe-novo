@@ -3,12 +3,16 @@ import {
   getAuth, 
   connectAuthEmulator,
   GoogleAuthProvider, 
+  isSignInWithEmailLink,
   sendEmailVerification,
   sendPasswordResetEmail,
+  sendSignInLinkToEmail,
+  signInWithEmailLink,
   signInWithEmailAndPassword,
   signInWithPopup, 
   signOut, 
   onAuthStateChanged,
+  updatePassword,
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -40,6 +44,8 @@ import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteEffecti
 import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPayload } from '../utils/memberSelfRegistration.js';
 import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelfRegistrationApproval, validateSelfRegistrationRejection } from '../utils/memberSelfRegistrationReview.js';
 import { validateCPF } from '../utils/formatters.js';
+import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedUser, validateAccessAuthorization } from '../utils/accessAuthorization.js';
+import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
 
 const hasViteEnv = typeof import.meta.env === 'object';
 const viteEnv = hasViteEnv ? {
@@ -439,6 +445,104 @@ const linkUserToPessoa = async ({ uid, pessoaBaseId, role = null, executadoPor, 
 export const autorizarUsuario = (params, firestore = db) => linkUserToPessoa({ ...params, requirePending: true }, firestore);
 export const vincularUsuarioPessoa = (params, firestore = db) => linkUserToPessoa({ ...params, requirePending: false }, firestore);
 
+export const createAccessAuthorization = async ({ pessoaBaseId, role, executadoPor }, firestore = db) => {
+  const personRef = getDataDoc(firestore, 'pessoas', pessoaBaseId);
+  const indexRef = getDataDoc(firestore, 'usuario_pessoa_index', pessoaBaseId);
+  const authorizationRef = getDataDoc(firestore, 'autorizacoes_acesso', pessoaBaseId);
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  let createdAuthorization;
+  await runTransaction(firestore, async transaction => {
+    const [personSnapshot, indexSnapshot, authorizationSnapshot] = await Promise.all([
+      transaction.get(personRef), transaction.get(indexRef), transaction.get(authorizationRef)
+    ]);
+    if (!personSnapshot.exists()) throw new Error('PESSOA_NAO_E_MEMBRO_ATIVO');
+    const validation = validateAccessAuthorization({ pessoa: personSnapshot.data(), role });
+    if (validation) throw new Error(validation);
+    if (indexSnapshot.exists()) throw new Error('PESSOA_JA_POSSUI_ACESSO');
+    if (authorizationSnapshot.exists() && authorizationSnapshot.data().status === ACCESS_AUTHORIZATION_STATUS.PENDING) throw new Error('AUTORIZACAO_PENDENTE_JA_EXISTE');
+    if (authorizationSnapshot.exists() && authorizationSnapshot.data().status === ACCESS_AUTHORIZATION_STATUS.USED) throw new Error('INDICE_AUTORIZACAO_INVALIDO');
+    const now = Timestamp.now();
+    const authorization = buildAccessAuthorization({ pessoaId: pessoaBaseId, pessoa: personSnapshot.data(), role, adminUid: executadoPor, auditId: auditRef.id, now });
+    createdAuthorization = authorization;
+    transaction.set(authorizationRef, authorization);
+    transaction.set(auditRef, { tipo: 'USUARIO_ACESSO_PREAUTORIZADO', pessoaBaseId, email: authorization.email, role, executadoPor, criadoEm: now });
+  });
+  return { pessoaBaseId, email: createdAuthorization.email, role: createdAuthorization.role };
+};
+
+export const sendAccessActivationEmail = async ({ email, origin }, authInstance = auth, sendLink = sendSignInLinkToEmail) => {
+  if (!authInstance) throw new Error('AUTH_NAO_INICIALIZADO');
+  const authorizedEmail = normalizeAccessActivationEmail(email);
+  await sendLink(authInstance, authorizedEmail, buildAccessActivationActionCodeSettings(origin));
+};
+
+export const resendAccessActivationEmail = async ({ pessoaBaseId, origin }, firestore = db, authInstance = auth, sendLink = sendSignInLinkToEmail) => {
+  const [authorizationSnapshot, personSnapshot] = await Promise.all([
+    getDoc(getDataDoc(firestore, 'autorizacoes_acesso', pessoaBaseId)),
+    getDoc(getDataDoc(firestore, 'pessoas', pessoaBaseId)),
+  ]);
+  if (!authorizationSnapshot.exists() || authorizationSnapshot.data().status !== ACCESS_AUTHORIZATION_STATUS.PENDING || !personSnapshot.exists()) {
+    throw new Error('AUTORIZACAO_NAO_PENDENTE');
+  }
+  const authorization = authorizationSnapshot.data();
+  const personEmail = normalizeAccessActivationEmail(personSnapshot.data().email);
+  if (authorization.pessoaBaseId !== pessoaBaseId || normalizeAccessActivationEmail(authorization.email) !== personEmail) {
+    throw new Error('AUTORIZACAO_INCONSISTENTE');
+  }
+  await sendAccessActivationEmail({ email: authorization.email, origin }, authInstance, sendLink);
+};
+
+export const sendUserPasswordReset = async ({ email }, authInstance = auth, sendReset = sendPasswordResetEmail) => {
+  if (!authInstance) throw new Error('AUTH_NAO_INICIALIZADO');
+  await sendReset(authInstance, normalizeAccessActivationEmail(email));
+};
+
+export const cancelAccessAuthorization = async ({ pessoaBaseId, executadoPor }, firestore = db) => {
+  const authorizationRef = getDataDoc(firestore, 'autorizacoes_acesso', pessoaBaseId);
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(authorizationRef);
+    if (!snapshot.exists() || snapshot.data().status !== ACCESS_AUTHORIZATION_STATUS.PENDING) throw new Error('AUTORIZACAO_NAO_PENDENTE');
+    const now = Timestamp.now();
+    transaction.update(authorizationRef, { status: ACCESS_AUTHORIZATION_STATUS.CANCELLED, canceladoEm: now, canceladoPor: executadoPor, atualizadoEm: now, atualizadoPor: executadoPor, auditoriaCancelamentoId: auditRef.id });
+    transaction.set(auditRef, { tipo: 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA', pessoaBaseId, executadoPor, criadoEm: now });
+  });
+};
+
+export const claimAuthorizedAccess = async ({ authorizationId, uid, email, emailVerified }, firestore = db) => {
+  if (!uid || !emailVerified) throw new Error('ATIVACAO_ACESSO_INVALIDA');
+  const authorizationRef = getDataDoc(firestore, 'autorizacoes_acesso', authorizationId);
+  const personRef = getDataDoc(firestore, 'pessoas', authorizationId);
+  const userRef = getDataDoc(firestore, 'usuarios', uid);
+  const indexRef = getDataDoc(firestore, 'usuario_pessoa_index', authorizationId);
+  const auditRef = getDataDoc(firestore, 'auditoria', `usuario_ativado_${uid}_${authorizationId}`);
+  await runTransaction(firestore, async transaction => {
+    const [authorizationSnapshot, personSnapshot, userSnapshot, indexSnapshot] = await Promise.all([
+      transaction.get(authorizationRef), transaction.get(personRef), transaction.get(userRef), transaction.get(indexRef)
+    ]);
+    if (!authorizationSnapshot.exists() || authorizationSnapshot.data().status !== ACCESS_AUTHORIZATION_STATUS.PENDING) throw new Error('ATIVACAO_ACESSO_INVALIDA');
+    const authorization = authorizationSnapshot.data();
+    if (authorization.pessoaBaseId !== authorizationId || normalizeEmail(authorization.email) !== normalizeEmail(email)) throw new Error('ATIVACAO_ACESSO_INVALIDA');
+    if (!personSnapshot.exists() || validateAccessAuthorization({ pessoa: personSnapshot.data(), role: authorization.role })) throw new Error('ATIVACAO_ACESSO_INVALIDA');
+    if (normalizeEmail(personSnapshot.data().email) !== authorization.email || userSnapshot.exists() || indexSnapshot.exists()) throw new Error('ATIVACAO_ACESSO_INVALIDA');
+    const now = Timestamp.now();
+    transaction.set(userRef, buildAuthorizedUser({ uid, pessoa: personSnapshot.data(), authorization, now }));
+    transaction.set(indexRef, { pessoaBaseId: authorizationId, uid, criadoEm: now, criadoPor: uid });
+    transaction.update(authorizationRef, { status: ACCESS_AUTHORIZATION_STATUS.USED, utilizadoEm: now, utilizadoPorUid: uid, atualizadoEm: now, atualizadoPor: uid });
+    transaction.set(auditRef, { tipo: 'USUARIO_ACESSO_ATIVADO', alvoUid: uid, pessoaBaseId: authorizationId, role: authorization.role, autorizadoPor: authorization.criadoPor, executadoPor: uid, criadoEm: now });
+  });
+};
+
+export const findAndClaimAuthorizedAccess = async ({ uid, email, emailVerified }, firestore = db) => {
+  if (!uid || !emailVerified || !normalizeEmail(email)) return false;
+  const authorizationQuery = query(getDataCollection(firestore, 'autorizacoes_acesso'), where('email', '==', normalizeEmail(email)), where('status', '==', ACCESS_AUTHORIZATION_STATUS.PENDING), limit(2));
+  const snapshot = await getDocs(authorizationQuery);
+  if (snapshot.empty) return false;
+  if (snapshot.size !== 1) throw new Error('MULTIPLAS_AUTORIZACOES_ACESSO');
+  await claimAuthorizedAccess({ authorizationId: snapshot.docs[0].id, uid, email, emailVerified }, firestore);
+  return true;
+};
+
 export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
   if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
   const permittedTypes = getAgendaPublicosPermitidos(agenda);
@@ -818,12 +922,16 @@ export const excluirAgendaVazia = async ({ agendaId, userId }, firestore = db) =
 
 export {
   GoogleAuthProvider,
+  isSignInWithEmailLink,
   sendEmailVerification,
   sendPasswordResetEmail,
+  sendSignInLinkToEmail,
+  signInWithEmailLink,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   onAuthStateChanged,
+  updatePassword,
   collection,
   doc,
   addDoc,
