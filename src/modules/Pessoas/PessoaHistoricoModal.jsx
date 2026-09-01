@@ -3,6 +3,7 @@ import { getAppCollection, getAppDoc, getDoc, onSnapshot, query, where } from '.
 import { getStatusColor } from '../../utils/formatters';
 import { Modal } from '../../components/ui/Modal';
 import { CalendarClock } from 'lucide-react';
+import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 
 const toMillis = value => value?.toMillis?.() || value?.toDate?.().getTime?.() || 0;
 const formatTime = value => value?.toDate?.().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) || null;
@@ -11,6 +12,7 @@ export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
   const [items, setItems] = useState([]);
   const [lifecycleEvents, setLifecycleEvents] = useState([]);
   const [loading, setLoading] = useState(false);
+  const canViewAudit = hasPermission(profile, PERMISSIONS.AUDIT_VIEW);
 
   useEffect(() => {
     if (!pessoa) return undefined;
@@ -35,13 +37,13 @@ export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
   }, [pessoa]);
 
   useEffect(() => {
-    if (!pessoa || profile?.role !== 'admin') { setLifecycleEvents([]); return undefined; }
+    if (!pessoa || !canViewAudit) { setLifecycleEvents([]); return undefined; }
     return onSnapshot(query(getAppCollection('auditoria'), where('pessoaBaseId', '==', pessoa.id)), async snapshot => {
       const relevant = snapshot.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => ['MEMBRO_INATIVADO', 'MEMBRO_REATIVADO'].includes(item.tipo));
       const actors = await Promise.all(relevant.map(item => getDoc(getAppDoc('usuarios', item.executadoPor))));
       setLifecycleEvents(relevant.map((item, index) => ({ ...item, responsavel: actors[index].data()?.nome || actors[index].data()?.email || 'Administrador' })).sort((a, b) => toMillis(b.criadoEm) - toMillis(a.criadoEm)));
     });
-  }, [pessoa, profile?.role]);
+  }, [pessoa, canViewAudit]);
 
   return <Modal isOpen={!!pessoa} onClose={onClose} title={`Histórico de ${pessoa?.nome || ''}`}>
     <div className="space-y-3 max-h-[65vh] overflow-y-auto">

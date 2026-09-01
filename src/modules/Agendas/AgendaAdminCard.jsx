@@ -67,8 +67,8 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
   const filaOperacional = fila.filter(isAtendimentoOperacional);
   const summary = filaOperacional.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
   const hasExecutedAppointment = filaOperacional.some(item => ['Presente', 'Concluído'].includes(item.status));
-  const canManageAgenda = hasPermission(profile, PERMISSIONS.MANAGE_AGENDAS);
-  const canRelocate = hasPermission(profile, PERMISSIONS.RELOCATE);
+  const canManageAgenda = hasPermission(profile, PERMISSIONS.AGENDA_MANAGE);
+  const canRelocate = hasPermission(profile, PERMISSIONS.ATTENDANCE_RELOCATE);
 
   useEffect(() => {
     if (!expanded || !user) return;
@@ -281,7 +281,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>
                     {['Agendado', 'Presente'].includes(c.status) && !isClosed && <button onClick={() => setCancelTarget(c)} className="text-rose-500 hover:text-rose-700" title="Cancelar agendamento"><XCircle size={18} /></button>}
-                    {hasPermission(profile, PERMISSIONS.CORRECT_STATUS) && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
+                    {hasPermission(profile, PERMISSIONS.ATTENDANCE_STATUS_CORRECT) && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
                     {canRelocate && c.status === 'Agendado' && <button onClick={() => { setRelocationTarget(c); setRelocationServiceId(null); }} className="text-xs font-bold text-indigo-700 hover:text-indigo-900">Reagendar / Realocar</button>}
                   </div>
                 </div>
@@ -289,7 +289,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
             )}
           </div>
 
-          {!isClosed && canManageAgenda ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{hasPermission(profile, PERMISSIONS.DELETE_AGENDA) && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.</p>}</div> : isClosed ? <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div> : null}
+          {!isClosed && canManageAgenda ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{hasPermission(profile, PERMISSIONS.AGENDA_DELETE) && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.</p>}</div> : isClosed ? <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div> : null}
         </div>
       )}
 

@@ -29,6 +29,7 @@ import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { MembroDadosComplementares } from '../../components/pessoas/MembroDadosComplementares';
 import { PessoaDetalhesModal } from '../../components/pessoas/PessoaDetalhesModal';
 import { useToast } from '../../components/ui/useToast';
+import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { 
   UserPlus, 
   Search, 
@@ -41,7 +42,10 @@ import {
 } from 'lucide-react';
 
 export const PessoasModule = ({ user, profile }) => {
-  const readOnly = profile?.role === 'atendimento';
+  const canManagePeople = hasPermission(profile, PERMISSIONS.PEOPLE_MANAGE);
+  const canManageConsulentes = hasPermission(profile, PERMISSIONS.CONSULENTES_MANAGE);
+  const canManageLifecycle = hasPermission(profile, PERMISSIONS.LIFECYCLE_MANAGE);
+  const readOnly = !canManagePeople;
   const [pessoas, setPessoas] = useState([]);
   const [funcoesMembro, setFuncoesMembro] = useState([]);
   const [abaAtiva, setAbaAtiva] = useState('todos');
@@ -347,14 +351,14 @@ export const PessoasModule = ({ user, profile }) => {
 
               <div className="flex gap-2 border-t border-gray-50 pt-3" onClick={event => event.stopPropagation()}>
                 <Button variant="secondary" onClick={() => setHistoryPerson(p)} className="flex-1 py-2 text-xs h-10 rounded-xl text-blue-700 hover:bg-blue-50"><History size={14} /> Histórico</Button>
-                {(!readOnly || getPessoaVinculo(p) === 'consulente') && <Button
+                {(canManagePeople || (canManageConsulentes && getPessoaVinculo(p) === 'consulente')) && <Button
                   variant="secondary" 
                   onClick={() => openEdit(p)} 
                   className="flex-1 py-2 text-xs h-10 rounded-xl text-purple-700 hover:bg-purple-50"
                 >
                   <Edit size={14} /> Editar
                 </Button>}
-                {profile?.role === 'admin' && <Button
+                {canManageLifecycle && <Button
                   variant={p.ativo === false ? 'success' : 'danger'}
                   onClick={() => setItemToDelete(p)} 
                   className="px-4 py-2 h-10 rounded-xl"
@@ -496,12 +500,12 @@ export const PessoasModule = ({ user, profile }) => {
           </Button>
         </form>
       </Modal>
-      <PessoaFormModal isOpen={isNewModalOpen} user={user} allowedVinculos={readOnly ? ['consulente'] : ['consulente', 'membro']} onClose={() => setIsNewModalOpen(false)} onSaved={() => toast.success('Nova pessoa cadastrada com sucesso!')} />
+      <PessoaFormModal isOpen={isNewModalOpen} user={user} allowedVinculos={canManagePeople ? ['consulente', 'membro'] : ['consulente']} onClose={() => setIsNewModalOpen(false)} onSaved={() => toast.success('Nova pessoa cadastrada com sucesso!')} />
       <PessoaDetalhesModal
         pessoa={selectedPerson}
         functionOptions={effectiveMemberFunctions}
-        canEdit={!readOnly || getPessoaVinculo(selectedPerson) === 'consulente'}
-        canToggleActive={profile?.role === 'admin'}
+        canEdit={canManagePeople || (canManageConsulentes && getPessoaVinculo(selectedPerson) === 'consulente')}
+        canToggleActive={canManageLifecycle}
         onClose={() => setSelectedPerson(null)}
         onHistory={() => { setHistoryPerson(selectedPerson); setSelectedPerson(null); }}
         onEdit={() => { const pessoa = selectedPerson; setSelectedPerson(null); openEdit(pessoa); }}

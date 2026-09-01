@@ -20,6 +20,9 @@ service cloud.firestore {
     function isGestor(appId) { return isActive(appId) && currentUser(appId).role == 'gestor'; }
     function isAtendimento(appId) { return isActive(appId) && currentUser(appId).role == 'atendimento'; }
     function isInternal(appId) { return isActive(appId) && currentUser(appId).role in ['admin', 'gestor', 'atendimento']; }
+    function canManageUsers(appId) { return isAdmin(appId); }
+    function canManageLifecycle(appId) { return isAdmin(appId); }
+    function canManageMemberIntake(appId) { return isAdmin(appId) || isGestor(appId); }
     function isOwnLinkedPerson(appId, pessoaId) {
       return isInternal(appId) && currentUser(appId).get('pessoaBaseId', '') == pessoaId;
     }
@@ -66,7 +69,7 @@ service cloud.firestore {
     }
     function validMemberLifecycle(appId, pessoaId) {
       let audit = getAfter(auditPath(appId, request.resource.data.auditoriaLifecycleId)).data;
-      return isAdmin(appId)
+      return canManageLifecycle(appId)
         && currentUser(appId).get('pessoaBaseId', '') != pessoaId
         && request.resource.data.atualizadoPor == request.auth.uid
         && request.resource.data.atualizadoEm is timestamp
@@ -96,7 +99,7 @@ service cloud.firestore {
     }
     function validUserAccessLifecycle(appId, uid) {
       let audit = getAfter(auditPath(appId, request.resource.data.auditoriaLifecycleId)).data;
-      return isAdmin(appId) && request.auth.uid != uid
+      return canManageLifecycle(appId) && request.auth.uid != uid
         && resource.data.role in ['admin', 'gestor', 'atendimento']
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.role == resource.data.role
@@ -134,7 +137,7 @@ service cloud.firestore {
         && audit.executadoPor == request.auth.uid;
     }
     function validLifecycleAudit(appId, id) {
-      return isAdmin(appId)
+      return canManageLifecycle(appId)
         && request.resource.data.executadoPor == request.auth.uid
         && request.resource.data.criadoEm is timestamp
         && ((request.resource.data.tipo in ['MEMBRO_INATIVADO', 'MEMBRO_REATIVADO']
@@ -192,7 +195,7 @@ service cloud.firestore {
         && audit.pessoaBaseId == pessoaId && audit.role == authorization.role
         && audit.autorizadoPor == authorization.criadoPor && audit.executadoPor == uid;
     }
-    function canReviewMemberRegistration(appId) { return isAdmin(appId) || isGestor(appId); }
+    function canReviewMemberRegistration(appId) { return canManageMemberIntake(appId); }
     function approvalAuditPath(appId, inviteId) { return auditPath(appId, 'autocadastro_aprovado_' + inviteId); }
     function rejectionAuditPath(appId, inviteId) { return auditPath(appId, 'autocadastro_rejeitado_' + inviteId); }
     function validApprovedSelfRegistration(appId, pessoaId, pessoaData) {
@@ -285,11 +288,11 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/usuarios/{uid} {
-      allow get: if isAuthenticated() && (request.auth.uid == uid || isAdmin(appId));
-      allow list: if isAdmin(appId);
+      allow get: if isAuthenticated() && (request.auth.uid == uid || canManageUsers(appId));
+      allow list: if canManageUsers(appId);
       allow create: if request.resource.data.keys().hasOnly(['uid', 'pessoaBaseId', 'nome', 'email', 'role', 'ativo', 'criadoEm', 'criadoPor', 'autorizadoPor', 'atualizadoEm', 'atualizadoPor'])
         && validAccessClaim(appId, uid, request.resource.data.pessoaBaseId);
-      allow update: if isAdmin(appId) && request.resource.data.uid == resource.data.uid
+      allow update: if canManageUsers(appId) && request.resource.data.uid == resource.data.uid
         && request.resource.data.atualizadoPor == request.auth.uid
         && ((resource.data.role == 'pendente' && request.auth.uid != uid
             && request.resource.data.role in ['admin', 'gestor', 'atendimento']
@@ -312,11 +315,11 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/usuario_pessoa_index/{pessoaId} {
-      allow get: if isAdmin(appId)
+      allow get: if canManageUsers(appId)
         || (exists(accessAuthorizationPath(appId, pessoaId))
           && isOwnPendingAuthorization(get(accessAuthorizationPath(appId, pessoaId)).data));
-      allow list: if isAdmin(appId);
-      allow create: if !exists(userPersonIndexPath(appId, pessoaId)) && ((isAdmin(appId)
+      allow list: if canManageUsers(appId);
+      allow create: if !exists(userPersonIndexPath(appId, pessoaId)) && ((canManageUsers(appId)
         && request.resource.data.pessoaBaseId == pessoaId
         && request.resource.data.uid is string
         && request.resource.data.criadoPor == request.auth.uid
@@ -333,8 +336,8 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/autorizacoes_acesso/{pessoaId} {
-      allow get, list: if isAdmin(appId) || isOwnPendingAuthorization(resource.data);
-      allow create: if isAdmin(appId)
+      allow get, list: if canManageUsers(appId) || isOwnPendingAuthorization(resource.data);
+      allow create: if canManageUsers(appId)
         && request.resource.data.keys().hasOnly(['pessoaBaseId', 'email', 'role', 'status', 'criadoEm', 'criadoPor', 'atualizadoEm', 'atualizadoPor', 'auditoriaPreautorizacaoId'])
         && request.resource.data.pessoaBaseId == pessoaId
         && request.resource.data.status == 'pendente'
@@ -345,7 +348,7 @@ service cloud.firestore {
         && get(personPath(appId, pessoaId)).data.email == request.resource.data.email
         && !exists(userPersonIndexPath(appId, pessoaId))
         && getAfter(auditPath(appId, request.resource.data.auditoriaPreautorizacaoId)).data.tipo == 'USUARIO_ACESSO_PREAUTORIZADO';
-      allow update: if (isAdmin(appId)
+      allow update: if (canManageUsers(appId)
           && resource.data.status in ['pendente', 'cancelado']
           && ((resource.data.status == 'pendente' && request.resource.data.status == 'cancelado'
               && request.resource.data.canceladoPor == request.auth.uid
@@ -370,7 +373,7 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/auditoria/{id} {
-      allow read: if isAdmin(appId);
+      allow read: if canManageUsers(appId);
       allow create: if request.resource.data.executadoPor == request.auth.uid
         && validMyRegistrationAudit(appId);
       allow create: if validLifecycleAudit(appId, id);
@@ -457,13 +460,13 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/convites_membro/{inviteId} {
-      allow get: if isAdmin(appId) || isGestor(appId)
+      allow get: if canManageMemberIntake(appId)
         || (request.auth == null
           && resource.data.status in ['ativo', 'respondido']
           && resource.data.expiraEm is timestamp
           && resource.data.expiraEm > request.time);
-      allow list: if isAdmin(appId) || isGestor(appId);
-      allow create: if (isAdmin(appId) || isGestor(appId))
+      allow list: if canManageMemberIntake(appId);
+      allow create: if canManageMemberIntake(appId)
         && inviteId.size() == 64
         && request.resource.data.keys().hasOnly([
           'nome', 'cpf', 'email', 'status', 'criadoEm', 'criadoPor', 'expiraEm', 'atualizadoEm', 'atualizadoPor'
@@ -480,7 +483,7 @@ service cloud.firestore {
         && request.resource.data.atualizadoPor == request.auth.uid
         && !exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cpf_index/$(request.resource.data.cpf))
         && getAfter(memberInviteCpfIndexPath(appId, request.resource.data.cpf)).data.inviteId == inviteId;
-      allow update: if ((isAdmin(appId) || isGestor(appId))
+      allow update: if (canManageMemberIntake(appId)
         && resource.data.status == 'ativo'
         && request.resource.data.status == 'revogado'
         && request.resource.data.revogadoEm is timestamp
@@ -520,7 +523,7 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/autocadastros_membro/{inviteId} {
-      allow get, list: if isAdmin(appId) || isGestor(appId);
+      allow get, list: if canManageMemberIntake(appId);
       allow create: if request.auth == null
         && inviteId.matches('^[a-f0-9]{64}$')
         && !exists(memberSelfRegistrationPath(appId, inviteId))
@@ -588,8 +591,8 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/convite_membro_cpf_index/{cpf} {
-      allow read: if isAdmin(appId) || isGestor(appId);
-      allow create: if (isAdmin(appId) || isGestor(appId))
+      allow read: if canManageMemberIntake(appId);
+      allow create: if canManageMemberIntake(appId)
         && request.resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
         && request.resource.data.inviteId is string && request.resource.data.inviteId.size() == 64
         && request.resource.data.criadoEm is timestamp
@@ -597,7 +600,7 @@ service cloud.firestore {
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.cpf == cpf
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.status == 'ativo'
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.criadoPor == request.auth.uid;
-      allow update: if (isAdmin(appId) || isGestor(appId))
+      allow update: if canManageMemberIntake(appId)
         && resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
         && resource.data.inviteId is string && resource.data.inviteId.size() == 64
         && request.resource.data.keys().hasOnly(['inviteId', 'criadoEm', 'criadoPor'])
@@ -615,7 +618,7 @@ service cloud.firestore {
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.expiraEm is timestamp
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.expiraEm > request.time
         && getAfter(memberInvitePath(appId, request.resource.data.inviteId)).data.criadoPor == request.auth.uid;
-      allow delete: if (isAdmin(appId) || isGestor(appId))
+      allow delete: if canManageMemberIntake(appId)
         && resource.data.inviteId is string
         && ((get(memberInvitePath(appId, resource.data.inviteId)).data.status == 'ativo'
             && getAfter(memberInvitePath(appId, resource.data.inviteId)).data.status == 'revogado')

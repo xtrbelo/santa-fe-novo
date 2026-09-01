@@ -12,8 +12,9 @@ import {
   LogOut 
 } from 'lucide-react';
 import { ROLE_LABELS } from '../../constants/roles';
+import { canAccessModule } from '../../constants/permissions';
 
-export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs, profile }) => {
+export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
   const navItems = [
     { id: 'home', label: 'Painel', icon: <LayoutDashboard size={22} /> },
     { id: 'agendas', label: 'Agendas', icon: <CalendarDays size={22} /> },
@@ -43,7 +44,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, allowedTabs, profil
       </div>
 
       <nav className="flex-grow space-y-2.5">
-        {navItems.filter(item => allowedTabs.includes(item.id)).map((item) => {
+        {navItems.filter(item => canAccessModule(profile, item.id)).map((item) => {
           const isActive = activeTab === item.id;
           return (
             <button
