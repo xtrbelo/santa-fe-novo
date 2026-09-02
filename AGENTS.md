@@ -25,12 +25,16 @@ Nunca usar LEGACY para novos deploys.
 - Resposta final curta: arquivos, comportamento, testes, lint/build/diff/status e riscos.
 
 ### Estado consolidado
-- Fases 9A–9I concluídas.
-- Fase 10A concluída, homologada e publicada em PROD.
-- PROD Fase 10A: commit `8515916d953d91a99177c001754d2e0787f50559`, tag `production-phase10a`.
-- Hotfix de identidade visual/logo concluído e publicado em PROD: commit `a7faca3`, merge na `main` `3599517`.
-- Logo oficial: `public/logo_santa_fe.png`.
-- URL PROD: `https://santa-fe-v2-prod.web.app`.
+- Fases 9A–10B concluídas em PROD.
+- Fase 10A: commit `8515916d953d91a99177c001754d2e0787f50559`, tag `production-phase10a`.
+- Hotfix de identidade visual: merge na `main` `3599517`; logo oficial `public/logo_santa_fe.png`.
+- Fase 10B: commit `1f851309f7f1ef11228acb88797a4c11041d7a45`, tag `production-phase10b`, testes finais 309/309.
+- Autocadastro de Membro possui Dados da Casa; `dataIngresso` é opcional.
+- `batizadoCaesf` exige Sim/Não; `dataBatismoCaesf` é obrigatória somente quando batizado = Sim.
+- Funções da Casa espelham `config_funcoes_membro`, considerando `ativo !== false`, com múltipla seleção.
+- “Sem função” é uma função configurável normal; autocadastros legados permanecem compatíveis.
+- Aprovação de autocadastro não cria Usuário do Sistema automaticamente.
+- Versão possui fonte central: PROD exibe “Versão 10B” e HML exibe “Versão 10B • HML”.
 - Programação = disponibilidade da Casa.
 - Agendamentos = marcação de Pessoa.
 - Fluxo do Dia = execução.
