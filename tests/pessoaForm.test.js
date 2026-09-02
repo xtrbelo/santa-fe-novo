@@ -59,6 +59,11 @@ test('funções efetivas sempre incluem Médium e Cambone e acrescentam personal
 test('funções efetivas ignoram inativas e configuração substitui nome sem duplicar código', () => {
   const effective = getEffectiveMemberFunctions([{ codigo: 'medium', nome: 'Médium da Casa', ativo: true }, { codigo: 'inativa', nome: 'Inativa', ativo: false }]); assert.deepEqual(effective.map(item => item.id), ['medium', 'cambone']); assert.deepEqual(getMemberFunctionLabels(['medium', 'cambone'], effective), ['Médium da Casa', 'Cambone']);
 });
+test('funções efetivas aceitam legado, removem inativas e usam código normalizado', () => {
+  const effective = getEffectiveMemberFunctions([{ id: 'doc-medium', codigo: 'medium', nome: 'Médium', ativo: true }, { id: 'doc-cambone', slug: 'cambone', nome: 'Cambone' }, { id: 'sem-funcao', codigo: 'sem_funcao', nome: 'Sem função' }, { id: 'desativada', codigo: 'desativada', nome: 'Desativada', ativo: false }]);
+  assert.deepEqual(effective.map(item => [item.id, item.nome]), [['medium', 'Médium'], ['cambone', 'Cambone'], ['sem_funcao', 'Sem função']]);
+  assert.deepEqual(getEffectiveMemberFunctions([{ codigo: 'medium', nome: 'Médium', ativo: false }]).map(item => item.id), ['cambone']);
+});
 test('label de função personalizada usa o nome configurado', () => { assert.deepEqual(getMemberFunctionLabels(['dirigente'], [{ codigo: 'dirigente', nome: 'Dirigente' }]), ['Dirigente']); });
 
 test('normaliza Membro batizado e preserva a data opcional', () => {

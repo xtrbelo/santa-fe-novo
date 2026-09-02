@@ -1,7 +1,23 @@
-import { ESTADOS_CIVIS, SEXOS, isValidEmail, normalizeEmail, normalizeEndereco, normalizeEstadoCivil, normalizeSexo } from './pessoaForm.js';
+import { ESTADOS_CIVIS, SEXOS, isValidEmail, normalizeDadosCasa, normalizeEmail, normalizeEndereco, normalizeEstadoCivil, normalizeSexo } from './pessoaForm.js';
 
 const nullableText = value => String(value ?? '').trim() || null;
 const digits = (value, limit) => String(value ?? '').replace(/\D/g, '').slice(0, limit);
+const isIsoDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !Number.isNaN(Date.parse(`${value}T00:00:00`));
+const todayIso = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+export const validateSelfRegistrationHouseData = (dadosCasa, today = todayIso()) => {
+  const normalized = normalizeDadosCasa(dadosCasa);
+  if (normalized.dataIngresso && !isIsoDate(normalized.dataIngresso)) return 'AUTOCADASTRO_DATA_INGRESSO_INVALIDA';
+  if (typeof normalized.batizadoCaesf !== 'boolean') return 'AUTOCADASTRO_BATIZADO_OBRIGATORIO';
+  if (normalized.batizadoCaesf && !isIsoDate(normalized.dataBatismoCaesf)) return 'AUTOCADASTRO_DATA_BATISMO_OBRIGATORIA';
+  if (normalized.dataIngresso && normalized.dataIngresso > today) return 'AUTOCADASTRO_DATA_INGRESSO_FUTURA';
+  if (normalized.dataBatismoCaesf && normalized.dataBatismoCaesf > today) return 'AUTOCADASTRO_DATA_BATISMO_FUTURA';
+  if (normalized.dataIngresso && normalized.dataBatismoCaesf && normalized.dataBatismoCaesf < normalized.dataIngresso) return 'AUTOCADASTRO_BATISMO_ANTERIOR_INGRESSO';
+  return null;
+};
 
 export const maskSelfRegistrationCep = value => {
   const clean = digits(value, 8);
@@ -30,6 +46,7 @@ export const buildMemberSelfRegistrationPayload = (invite, data = {}) => ({
   sexo: normalizeSexo(data.sexo),
   estadoCivil: normalizeEstadoCivil(data.estadoCivil),
   endereco: normalizeEndereco(data.endereco),
+  dadosCasa: normalizeDadosCasa(data.dadosCasa),
   statusCadastro: 'aguardando_validacao',
   origemCadastro: 'autocadastro',
 });
@@ -43,5 +60,7 @@ export const validateMemberSelfRegistrationPayload = data => {
   if (data.dataNascimento && !/^\d{4}-\d{2}-\d{2}$/.test(data.dataNascimento)) return 'AUTOCADASTRO_DATA_INVALIDA';
   if (data.endereco.cep && data.endereco.cep.length !== 8) return 'AUTOCADASTRO_CEP_INVALIDO';
   if (data.endereco.uf && !/^[A-Z]{2}$/.test(data.endereco.uf)) return 'AUTOCADASTRO_UF_INVALIDA';
+  const houseDataError = validateSelfRegistrationHouseData(data.dadosCasa);
+  if (houseDataError) return houseDataError;
   return null;
 };

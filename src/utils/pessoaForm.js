@@ -8,9 +8,11 @@ export const ORIGENS_CADASTRO = ['administrativo', 'autocadastro'];
 
 export const getEffectiveMemberFunctions = configuredFunctions => {
   const byId = new Map(FALLBACK_FUNCOES_MEMBRO.map(item => [item.id, { ...item }]));
-  (configuredFunctions || []).filter(item => item?.ativo !== false).forEach(item => {
+  (configuredFunctions || []).forEach(item => {
     const id = String(item.codigo || item.slug || item.id || '').trim();
-    if (id && item.nome) byId.set(id, { id, nome: String(item.nome).trim() });
+    if (!id) return;
+    if (item.ativo === false) byId.delete(id);
+    else if (item.nome) byId.set(id, { id, nome: String(item.nome).trim() });
   });
   return [...byId.values()];
 };

@@ -414,7 +414,7 @@ service cloud.firestore {
         || (canReviewMemberRegistration(appId)
           && request.resource.data.vinculo == 'membro'
           && request.resource.data.tipoPessoa == 'Membro'
-          && request.resource.data.funcoesCasa.size() == 0
+          && request.resource.data.funcoesCasa.size() > 0
           && request.resource.data.ativo == true
           && request.resource.data.statusCadastro == 'aprovado'
           && request.resource.data.criadoPor == request.auth.uid
@@ -528,7 +528,7 @@ service cloud.firestore {
         && inviteId.matches('^[a-f0-9]{64}$')
         && !exists(memberSelfRegistrationPath(appId, inviteId))
         && request.resource.data.keys().hasOnly([
-          'inviteId', 'nome', 'cpf', 'dataNascimento', 'contato', 'email', 'sexo', 'estadoCivil', 'endereco',
+          'inviteId', 'nome', 'cpf', 'dataNascimento', 'contato', 'email', 'sexo', 'estadoCivil', 'endereco', 'dadosCasa',
           'statusCadastro', 'origemCadastro', 'enviadoEm', 'atualizadoEm'
         ])
         && request.resource.data.inviteId == inviteId
@@ -548,6 +548,20 @@ service cloud.firestore {
         && (request.resource.data.endereco.bairro == null || request.resource.data.endereco.bairro is string && request.resource.data.endereco.bairro.size() <= 100)
         && (request.resource.data.endereco.cidade == null || request.resource.data.endereco.cidade is string && request.resource.data.endereco.cidade.size() <= 100)
         && (request.resource.data.endereco.uf == null || request.resource.data.endereco.uf is string && request.resource.data.endereco.uf.matches('^[A-Z]{2}$'))
+        && request.resource.data.dadosCasa is map
+        && request.resource.data.dadosCasa.keys().hasOnly(['dataIngresso', 'batizadoCaesf', 'dataBatismoCaesf'])
+        && (request.resource.data.dadosCasa.dataIngresso == null
+          || request.resource.data.dadosCasa.dataIngresso is string
+            && request.resource.data.dadosCasa.dataIngresso.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && timestamp.value(request.resource.data.dadosCasa.dataIngresso + 'T00:00:00Z') <= request.time)
+        && request.resource.data.dadosCasa.batizadoCaesf is bool
+        && ((request.resource.data.dadosCasa.batizadoCaesf == false && request.resource.data.dadosCasa.dataBatismoCaesf == null)
+          || (request.resource.data.dadosCasa.batizadoCaesf == true
+            && request.resource.data.dadosCasa.dataBatismoCaesf is string
+            && request.resource.data.dadosCasa.dataBatismoCaesf.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && (request.resource.data.dadosCasa.dataIngresso == null
+              || request.resource.data.dadosCasa.dataBatismoCaesf >= request.resource.data.dadosCasa.dataIngresso)
+            && timestamp.value(request.resource.data.dadosCasa.dataBatismoCaesf + 'T00:00:00Z') <= request.time))
         && request.resource.data.statusCadastro == 'aguardando_validacao'
         && request.resource.data.origemCadastro == 'autocadastro'
         && request.resource.data.enviadoEm == request.time

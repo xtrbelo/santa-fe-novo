@@ -39,7 +39,7 @@ import {
 } from 'firebase/firestore';
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
-import { buildPessoaPayload, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
+import { buildPessoaPayload, getEffectiveMemberFunctions, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
 import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteEffectiveStatus, getMemberInviteExpiration, hashMemberInviteToken, isValidMemberInviteToken } from '../utils/memberInvite.js';
 import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPayload } from '../utils/memberSelfRegistration.js';
 import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelfRegistrationApproval, validateSelfRegistrationRejection } from '../utils/memberSelfRegistrationReview.js';
@@ -308,16 +308,23 @@ const validateRegistrationOrigin = ({ registration, inviteId, invite, inviteInde
   if (!inviteIndex || inviteIndex.inviteId !== inviteId) throw new Error('INDICE_CONVITE_INVALIDO');
 };
 
-export const approveMemberSelfRegistration = async ({ inviteId, userId }, firestore = db) => {
+export const approveMemberSelfRegistration = async ({ inviteId, userId, funcoesCasa = [], dadosCasa }, firestore = db) => {
   const registrationRef = getDataDoc(firestore, 'autocadastros_membro', inviteId);
   const inviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
   const pessoaRef = doc(getDataCollection(firestore, 'pessoas'));
   const auditRef = getDataDoc(firestore, 'auditoria', `autocadastro_aprovado_${inviteId}`);
+  const configuredFunctionsSnapshot = await getDocs(getDataCollection(firestore, 'config_funcoes_membro'));
+  const allowedFunctionCodes = new Set(getEffectiveMemberFunctions(configuredFunctionsSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))).map(item => item.id));
+  const selectedFunctionCodes = [...new Set((funcoesCasa || []).map(value => String(value || '').trim()).filter(Boolean))];
   await runTransaction(firestore, async transaction => {
     const registrationSnapshot = await transaction.get(registrationRef);
     if (!registrationSnapshot.exists()) throw new Error('AUTOCADASTRO_NAO_ENCONTRADO');
     const registration = registrationSnapshot.data();
-    const validationError = validateSelfRegistrationApproval(registration);
+    if (registration.statusCadastro !== 'aguardando_validacao') throw new Error('AUTOCADASTRO_JA_ANALISADO');
+    if (selectedFunctionCodes.length === 0) throw new Error('FUNCAO_CASA_OBRIGATORIA');
+    if (selectedFunctionCodes.some(code => !allowedFunctionCodes.has(code))) throw new Error('FUNCAO_CASA_INVALIDA');
+    const approvalData = { funcoesCasa: selectedFunctionCodes, dadosCasa: dadosCasa ?? registration.dadosCasa };
+    const validationError = validateSelfRegistrationApproval(registration, approvalData);
     if (validationError) throw new Error(validationError);
     const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', registration.cpf);
     const cpfIndexRef = getDataDoc(firestore, 'cpf_index', registration.cpf);
@@ -329,7 +336,7 @@ export const approveMemberSelfRegistration = async ({ inviteId, userId }, firest
     if (cpfIndexSnapshot.exists()) throw new Error('CPF_DUPLICADO');
     const now = Timestamp.now();
     const pessoa = withPessoaSearchIndex({
-      ...buildPessoaFromSelfRegistration(registration),
+      ...buildPessoaFromSelfRegistration(registration, approvalData),
       criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId,
     });
     transaction.set(pessoaRef, pessoa);
