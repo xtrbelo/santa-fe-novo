@@ -14,6 +14,7 @@ import { useInactivityTimeout } from './hooks/useInactivityTimeout';
 import { AUTH_VIEW, getAuthErrorMessage, normalizeAuthEmail, rejectUnauthorizedSession, resolveAuthView } from './utils/auth';
 import { HomeModule } from './modules/Home/HomeModule';
 import { AgendasModule } from './modules/Agendas/AgendasModule';
+import { ProgramacaoModule } from './modules/Programacao/ProgramacaoModule';
 import { FluxoModule } from './modules/Fluxo/FluxoModule';
 import { PessoasModule } from './modules/Pessoas/PessoasModule';
 import { ConvitesModule } from './modules/Convites/ConvitesModule';
@@ -203,6 +204,7 @@ function AppContent() {
   const renderContent = () => {
     if (!canAccessModule(profile, tab)) return <PermissionDenied />;
     if (tab === MODULES.AGENDAS) return <AgendasModule user={user} profile={profile} />;
+    if (tab === MODULES.PROGRAMACAO) return <ProgramacaoModule user={user} profile={profile} />;
     if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} />;
     if (tab === MODULES.PEOPLE) return <PessoasModule user={user} profile={profile} />;
     if (tab === MODULES.MEMBER_INVITES) return <ConvitesModule user={user} profile={profile} />;

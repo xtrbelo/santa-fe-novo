@@ -17,7 +17,8 @@ import { canAccessModule } from '../../constants/permissions';
 export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
   const navItems = [
     { id: 'home', label: 'Painel', icon: <LayoutDashboard size={22} /> },
-    { id: 'agendas', label: 'Agendas', icon: <CalendarDays size={22} /> },
+    { id: 'agendas', label: 'Agendamentos', icon: <CalendarDays size={22} /> },
+    { id: 'programacao', label: 'Programação', icon: <Settings size={22} /> },
     { id: 'fluxo', label: 'Fluxo do Dia', icon: <BookOpenCheck size={22} /> },
     { id: 'pessoas', label: 'Pessoas', icon: <Users size={22} /> },
     { id: 'convites', label: 'Convites', icon: <Mail size={22} /> },

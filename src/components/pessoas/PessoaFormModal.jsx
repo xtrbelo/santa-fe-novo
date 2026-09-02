@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { createPessoa, getAppCollection, onSnapshot } from '../../services/firebase';
+import { createPessoa, getAppCollection, getPessoaByCpf, onSnapshot } from '../../services/firebase';
 import { calcularIdade, cleanDigits, maskCPF, maskPhone, validateCPF } from '../../utils/formatters';
 import { buildPessoaPayload, createEmptyMemberDetails, getEffectiveMemberFunctions, validatePessoaPayload } from '../../utils/pessoaForm';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { MembroDadosComplementares } from './MembroDadosComplementares';
 
-export const PessoaFormModal = ({ isOpen, onClose, onSaved, user, initialName = '', allowedVinculos = ['consulente', 'membro'] }) => {
+export const PessoaFormModal = ({ isOpen, onClose, onSaved, user, initialName = '', allowedVinculos = ['consulente', 'membro'], createOperation = createPessoa }) => {
   const defaultVinculo = allowedVinculos[0] || 'consulente';
   const [form, setForm] = useState({ nome: initialName, cpf: '', dataNascimento: '', contato: '', email: '', responsavelCpf: '', responsavelNome: '', responsavelContato: '', vinculo: defaultVinculo, funcoesCasa: [], ...createEmptyMemberDetails() });
   const [funcoes, setFuncoes] = useState([]);
@@ -27,8 +27,15 @@ export const PessoaFormModal = ({ isOpen, onClose, onSaved, user, initialName = 
     if (validationError) { setError(validationError); return; }
     if (rawCpf && !validateCPF(rawCpf)) { setError('Informe um CPF válido.'); return; }
     setSaving(true); setError('');
-    try { const pessoa = await createPessoa({ data, userId: user.uid }); onSaved(pessoa); onClose(); }
-    catch (cause) { console.error(cause); setError(cause.message === 'CPF_DUPLICADO' ? 'Já existe uma pessoa cadastrada com este CPF.' : 'Não foi possível salvar a pessoa.'); }
+    try { const pessoa = await createOperation({ data, userId: user.uid }); onSaved(pessoa); onClose(); }
+    catch (cause) {
+      console.error(cause);
+      if (cause.message === 'CPF_DUPLICADO' && rawCpf) {
+        const existing = await getPessoaByCpf(rawCpf).catch(() => null);
+        if (existing) { onSaved(existing, { existing: true }); onClose(); return; }
+      }
+      setError(cause.message === 'CPF_DUPLICADO' ? 'Já existe uma pessoa cadastrada com este CPF.' : 'Não foi possível salvar a pessoa.');
+    }
     finally { setSaving(false); }
   };
   const member = form.vinculo === 'membro';

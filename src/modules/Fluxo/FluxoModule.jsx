@@ -61,7 +61,7 @@ export const FluxoModule = ({ user, profile }) => {
               Nenhuma agenda programada para hoje
             </p>
             <p className="text-gray-400 text-xs mt-1">
-              Verifique ou crie uma nova data no módulo de Agendas.
+              Verifique a disponibilidade no módulo de Programação.
             </p>
           </div>
         ) : (

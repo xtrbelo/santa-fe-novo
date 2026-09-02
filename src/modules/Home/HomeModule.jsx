@@ -41,7 +41,7 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenPendingUsers }) =
             <CalendarDays size={28} />
           </div>
           <p className="font-black text-2xl uppercase italic tracking-tighter leading-tight">
-            Agendas
+            Agendamentos
           </p>
           <p className="text-amber-100 text-[11px] font-bold uppercase tracking-widest mt-1">
             Planejamento & Calendário
