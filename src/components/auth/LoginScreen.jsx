@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, LayoutDashboard, LogIn } from 'lucide-react';
+import { Eye, EyeOff, LogIn } from 'lucide-react';
 import { getLoginAutocomplete } from '../../utils/auth';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -27,7 +27,7 @@ export function LoginScreen({ onEmailLogin, onGoogleLogin, onResetPassword, busy
 
   return <div className="flex min-h-screen items-center justify-center bg-gray-100/70 p-4">
     <Card className="w-full max-w-md p-7 shadow-2xl !border-none sm:p-10">
-      <div className="mb-8 text-center"><div className="mx-auto flex h-16 w-16 rotate-6 items-center justify-center rounded-[22px] bg-indigo-600 text-white shadow-xl"><LayoutDashboard size={32} /></div><h1 className="mt-5 text-3xl font-black uppercase italic text-gray-900">Casa Santa Fé</h1><p className="mt-2 text-[11px] font-bold uppercase text-gray-400">Sistema de Gestão Interna</p></div>
+      <div className="mb-8 text-center"><img src="/logo_santa_fe.png" alt="Casa Santa Fé" className="mx-auto h-auto w-36 max-w-[45vw] object-contain" /><h1 className="mt-5 text-3xl font-black uppercase italic text-gray-900">Casa Santa Fé</h1><p className="mt-2 text-[11px] font-bold uppercase text-gray-400">Sistema de Gestão Interna</p></div>
       <form onSubmit={submit} autoComplete={autocomplete.form} className="space-y-4">
         <Field label="E-mail" name="email" type="email" value={form.email} onChange={update} autoComplete={autocomplete.email} required />
         <PasswordField label="Senha" name="senha" value={form.senha} onChange={update} autoComplete={autocomplete.password} required />

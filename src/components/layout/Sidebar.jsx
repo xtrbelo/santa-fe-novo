@@ -31,9 +31,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-gray-100 hidden lg:flex flex-col p-8 z-50">
       <div className="flex items-center gap-4 mb-14 px-2">
-        <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-xl rotate-3">
-          <LayoutDashboard size={28} />
-        </div>
+        <img src="/logo_santa_fe.png" alt="Casa Santa Fé" className="h-12 w-12 shrink-0 object-contain" />
         <div>
           <span className="font-black text-2xl text-gray-900 italic uppercase tracking-tighter leading-none block">
             Santa Fé
