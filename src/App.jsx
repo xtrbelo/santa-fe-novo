@@ -214,7 +214,15 @@ function AppContent() {
     if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenPendingUsers={openPendingUsers} />;
   };
-  return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col"><Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} profile={profile} /><main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main><MobileNav activeTab={tab} onSelectTab={selectTab} profile={profile} /></div>);
+  return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col">
+    <Sidebar activeTab={tab} onSelectTab={selectTab} onSignOut={handleSignOut} profile={profile} />
+    <header className="flex items-center gap-3 border-b border-gray-100 bg-white px-4 py-2.5 lg:hidden">
+      <img src="/logo_santa_fe.png" alt="Casa Santa Fé" className="h-9 w-9 shrink-0 object-contain" />
+      <span className="text-sm font-black uppercase italic tracking-tight text-gray-900">Casa Santa Fé</span>
+    </header>
+    <main className="flex-grow max-w-4xl mx-auto w-full p-4 pt-6 sm:p-10 pb-32 lg:pb-10">{renderContent()}</main>
+    <MobileNav activeTab={tab} onSelectTab={selectTab} profile={profile} />
+  </div>);
 }
 
 export default function App() {
