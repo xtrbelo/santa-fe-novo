@@ -6,6 +6,7 @@ import { ToastProvider } from './components/ui/Toast';
 import { useToast } from './components/ui/useToast';
 import { Sidebar } from './components/layout/Sidebar';
 import { MobileNav } from './components/layout/MobileNav';
+import { AppFooter } from './components/layout/AppFooter';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { AccessScreen } from './components/auth/AccessScreen';
 import { SessionTimeoutModal } from './components/auth/SessionTimeoutModal';
@@ -228,5 +229,5 @@ function AppContent() {
 export default function App() {
   const isPublicSelfRegistration = window.location.pathname === '/autocadastro';
   const isAccessActivation = window.location.pathname === '/ativar-acesso';
-  return <ToastProvider>{isPublicSelfRegistration ? <AutocadastroMembroPage /> : isAccessActivation ? <AtivacaoAcessoPage /> : <AppContent />}</ToastProvider>;
+  return <ToastProvider><div className="flex min-h-screen flex-col"><div className="flex-1">{isPublicSelfRegistration ? <AutocadastroMembroPage /> : isAccessActivation ? <AtivacaoAcessoPage /> : <AppContent />}</div><AppFooter /></div></ToastProvider>;
 }

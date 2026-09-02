@@ -21,7 +21,7 @@ const inviteIndexPath = cpf => `${root}/convite_membro_cpf_index/${cpf}`;
 const registrationPath = id => `${root}/autocadastros_membro/${id}`;
 const authorizationPath = pessoaId => `${root}/autorizacoes_acesso/${pessoaId}`;
 const inviteData = (uid, overrides = {}) => ({ nome: 'Pessoa Convidada', cpf: '52998224725', email: 'convite@example.test', status: 'ativo', criadoEm: new Date(), criadoPor: uid, expiraEm: new Date(Date.now() + 7 * 86400000), atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
-const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: null, email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
+const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: null, email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
 
 let environment;
 const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();

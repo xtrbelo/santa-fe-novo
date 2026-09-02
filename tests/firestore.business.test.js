@@ -448,19 +448,20 @@ describe('Fase 9C - autocadastro público de Membro', () => {
 
   test('envio normaliza dados, cria autocadastro, responde convite e preserva índice sem criar entidades futuras', async () => {
     const created = await createMemberInvite({ nome: 'Futura Membra', cpf: '52998224725', email: 'INICIAL@EXAMPLE.TEST', userId: USER_ID, origin: 'http://localhost' }, adminDb());
-    await submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: created.convite.nome, cpf: created.convite.cpf, email: ' CORRIGIDO@EXAMPLE.TEST ', contato: ' 96999999999 ', sexo: 'feminino', estadoCivil: 'solteiro', dataNascimento: '1990-01-20', endereco: { cep: '68.900-000', logradouro: ' Rua A ', cidade: ' Macapá ', uf: 'ap' } } }, publicDb());
+    await submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: created.convite.nome, cpf: created.convite.cpf, email: ' CORRIGIDO@EXAMPLE.TEST ', contato: ' 96999999999 ', sexo: 'feminino', estadoCivil: 'solteiro', dataNascimento: '1990-01-20', endereco: { cep: '68.900-000', logradouro: ' Rua A ', cidade: ' Macapá ', uf: 'ap' }, dadosCasa: { dataIngresso: '', batizadoCaesf: false, dataBatismoCaesf: '2021-01-01' }, role: 'admin', funcoesCasa: ['fraude'] } }, publicDb());
     const db = adminDb(); const registration = (await getDoc(doc(db, path('autocadastros_membro', created.convite.id)))).data();
     assert.equal(registration.email, 'corrigido@example.test'); assert.equal(registration.contato, '96999999999'); assert.equal(registration.endereco.cep, '68900000'); assert.equal(registration.endereco.uf, 'AP');
     assert.equal(registration.nome, created.convite.nome); assert.equal(registration.cpf, created.convite.cpf); assert.equal(registration.statusCadastro, 'aguardando_validacao'); assert.equal(registration.origemCadastro, 'autocadastro');
     assert.equal((await getDoc(doc(db, path('convites_membro', created.convite.id)))).data().status, 'respondido');
     assert.equal((await getDoc(doc(db, path('convite_membro_cpf_index', created.convite.cpf)))).data().inviteId, created.convite.id);
     for (const collectionName of ['pessoas', 'cpf_index', 'usuarios']) assert.equal((await getDocs(collection(db, `${root}/${collectionName}`))).size, collectionName === 'usuarios' ? 2 : 0);
-    for (const forbidden of ['token', 'tokenHash', 'url', 'role', 'pessoaId', 'usuarioId', 'funcoesCasa', 'dadosCasa']) assert.equal(Object.hasOwn(registration, forbidden), false);
+    assert.deepEqual(registration.dadosCasa, { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null });
+    for (const forbidden of ['token', 'tokenHash', 'url', 'role', 'pessoaId', 'usuarioId', 'funcoesCasa']) assert.equal(Object.hasOwn(registration, forbidden), false);
   });
 
   test('autocadastro respondido bloqueia novo convite, reemissão e segundo envio', async () => {
     const created = await createMemberInvite({ nome: 'Pendente', cpf: '39053344705', userId: USER_ID, origin: 'http://localhost' }, adminDb());
-    const data = { nome: created.convite.nome, cpf: created.convite.cpf };
+    const data = { nome: created.convite.nome, cpf: created.convite.cpf, dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: false } };
     await submitMemberSelfRegistration({ inviteId: created.convite.id, data }, publicDb());
     await assert.rejects(createMemberInvite({ nome: 'Outro', cpf: created.convite.cpf, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /AUTOCADASTRO_PENDENTE/);
     await assert.rejects(reissueMemberInvite({ inviteId: created.convite.id, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /AUTOCADASTRO_PENDENTE/);
@@ -479,18 +480,20 @@ describe('Fase 9C - autocadastro público de Membro', () => {
 
 describe('Fase 9D - análise de autocadastro de Membro', () => {
   const submit = async (db, userId = USER_ID, cpf = '52998224725') => {
+    await seedDocuments([['config_funcoes_membro', 'medium', { codigo: 'medium', nome: 'Médium', ativo: true }], ['config_funcoes_membro', 'cambone', { codigo: 'cambone', nome: 'Cambone', ativo: true }], ['config_funcoes_membro', 'sem-funcao', { codigo: 'sem_funcao', nome: 'Sem função' }]]);
     const created = await createMemberInvite({ nome: 'Membra Analisada', cpf, email: 'membra@example.test', userId, origin: 'http://localhost' }, db);
-    await submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: created.convite.nome, cpf, contato: '96999999999', email: 'membra@example.test', sexo: 'feminino', estadoCivil: 'solteiro', dataNascimento: '1990-01-20', endereco: { cep: '68900000', cidade: 'Macapá', uf: 'AP' } } }, publicDb());
+    await submitMemberSelfRegistration({ inviteId: created.convite.id, data: { nome: created.convite.nome, cpf, contato: '96999999999', email: 'membra@example.test', sexo: 'feminino', estadoCivil: 'solteiro', dataNascimento: '1990-01-20', endereco: { cep: '68900000', cidade: 'Macapá', uf: 'AP' }, dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: true, dataBatismoCaesf: '2021-01-01' } } }, publicDb());
     return created;
   };
 
   test('Admin aprova atomicamente, cria Membro e índices sem criar usuário', async () => {
     const created = await submit(adminDb());
     const usersBefore = (await getDocs(collection(adminDb(), `${root}/usuarios`))).size;
-    const result = await approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID }, adminDb());
+    await assert.rejects(approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID }, adminDb()), /FUNCAO_CASA_OBRIGATORIA/);
+    const result = await approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID, funcoesCasa: ['medium', 'cambone', 'sem_funcao'] }, adminDb());
     const pessoa = (await getDoc(doc(adminDb(), path('pessoas', result.pessoaId)))).data();
     const registration = (await getDoc(doc(adminDb(), path('autocadastros_membro', created.convite.id)))).data();
-    assert.equal(pessoa.cpf, created.convite.cpf); assert.equal(pessoa.origemCadastro, 'autocadastro'); assert.equal(pessoa.statusCadastro, 'aprovado'); assert.deepEqual(pessoa.funcoesCasa, []);
+    assert.equal(pessoa.cpf, created.convite.cpf); assert.equal(pessoa.origemCadastro, 'autocadastro'); assert.equal(pessoa.statusCadastro, 'aprovado'); assert.deepEqual(pessoa.funcoesCasa, ['medium', 'cambone', 'sem_funcao']); assert.deepEqual(pessoa.dadosCasa, { dataIngresso: '2020-01-01', batizadoCaesf: true, dataBatismoCaesf: '2021-01-01' });
     assert.equal((await getDoc(doc(adminDb(), path('cpf_index', created.convite.cpf)))).data().pessoaId, result.pessoaId);
     assert.equal(registration.statusCadastro, 'aprovado'); assert.equal(registration.pessoaId, result.pessoaId);
     assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', created.convite.cpf)))).exists(), false);
@@ -515,9 +518,21 @@ describe('Fase 9D - análise de autocadastro de Membro', () => {
     await assert.rejects(approveMemberSelfRegistration({ inviteId: created.convite.id, userId: 'gestor-business' }, gestorDb()), /AUTOCADASTRO_JA_ANALISADO/);
   });
 
+  test('autocadastro legado é aprovado com batismo informado e sem data de ingresso', async () => {
+    const created = await submit(adminDb(), USER_ID, '39053344705');
+    const snapshot = await getDoc(doc(adminDb(), path('autocadastros_membro', created.convite.id)));
+    const legacyRegistration = { ...snapshot.data() };
+    delete legacyRegistration.dadosCasa;
+    await seedDocuments([['autocadastros_membro', created.convite.id, legacyRegistration]]);
+    const result = await approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID, funcoesCasa: ['sem_funcao'], dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null } }, adminDb());
+    const pessoa = (await getDoc(doc(adminDb(), path('pessoas', result.pessoaId)))).data();
+    assert.deepEqual(pessoa.dadosCasa, { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null });
+    assert.deepEqual(pessoa.funcoesCasa, ['sem_funcao']);
+  });
+
   test('Gestor também aprova e Admin também rejeita', async () => {
     const gestorRegistration = await submit(gestorDb(), 'gestor-business', '39053344705');
-    const approved = await approveMemberSelfRegistration({ inviteId: gestorRegistration.convite.id, userId: 'gestor-business' }, gestorDb());
+    const approved = await approveMemberSelfRegistration({ inviteId: gestorRegistration.convite.id, userId: 'gestor-business', funcoesCasa: ['medium'] }, gestorDb());
     assert.equal((await getDoc(doc(gestorDb(), path('pessoas', approved.pessoaId)))).data().criadoPor, 'gestor-business');
     const adminRegistration = await submit(adminDb(), USER_ID, '11144477735');
     await rejectMemberSelfRegistration({ inviteId: adminRegistration.convite.id, userId: USER_ID, reason: 'Cadastro enviado indevidamente' }, adminDb());
@@ -526,12 +541,12 @@ describe('Fase 9D - análise de autocadastro de Membro', () => {
 
   test('concorrência permite uma única aprovação e conflito de CPF não deixa escrita parcial', async () => {
     const created = await submit(adminDb(), USER_ID, '16899535009');
-    const attempts = await Promise.allSettled([1, 2].map(() => approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID }, adminDb())));
+    const attempts = await Promise.allSettled([1, 2].map(() => approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID, funcoesCasa: ['medium'] }, adminDb())));
     assert.equal(attempts.filter(item => item.status === 'fulfilled').length, 1);
     assert.equal((await getDocs(collection(adminDb(), `${root}/pessoas`))).size, 1);
     const conflict = await submit(adminDb(), USER_ID, '11144477735');
     await seedDocuments([['cpf_index', conflict.convite.cpf, { pessoaId: 'concorrente', criadoEm: new Date() }]]);
-    await assert.rejects(approveMemberSelfRegistration({ inviteId: conflict.convite.id, userId: USER_ID }, adminDb()), /CPF_DUPLICADO/);
+    await assert.rejects(approveMemberSelfRegistration({ inviteId: conflict.convite.id, userId: USER_ID, funcoesCasa: ['medium'] }, adminDb()), /CPF_DUPLICADO/);
     assert.equal((await getDoc(doc(adminDb(), path('autocadastros_membro', conflict.convite.id)))).data().statusCadastro, 'aguardando_validacao');
     assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', conflict.convite.cpf)))).exists(), true);
   });
