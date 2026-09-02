@@ -8,6 +8,8 @@ import {
   cancelAgendamento,
   concluirAgenda,
   createAgendamento,
+  createConsulenteQuick,
+  createProgramacaoLote,
   setAgendamentoPrioridade,
   updateAtendimentoStatus,
   editarAgenda,
@@ -84,6 +86,42 @@ const book = (db, agenda, selectedPerson) => createAgendamento({ agenda, pessoa:
 
 before(async () => {
   environment = await initializeTestEnvironment({ projectId: PROJECT_ID, firestore: { rules: readFileSync('firestore.rules', 'utf8') } });
+});
+
+describe('Fase 10A - programação em lote', () => {
+  test('cria documentos independentes e bloqueia repetição da mesma programação', async () => {
+    const db = adminDb();
+    const params = { trabalho: { id: 'trabalho-10a', nome: 'Atendimento 10A' }, servicos: [service], horario: '19:00', publicosPermitidos: ['consulente'], vagasTotais: { [service.id]: 3 }, dates: ['2035-06-10', '2035-06-11'], userId: USER_ID };
+    const ids = await createProgramacaoLote(params, db);
+    assert.equal(ids.length, 2); assert.notEqual(ids[0], ids[1]);
+    const stored = await Promise.all(ids.map(id => getDoc(agendaRef(db, id))));
+    assert.equal(stored.every(snapshot => snapshot.exists()), true);
+    assert.equal(stored[0].data().vagasOcupadas[service.id], 0);
+    await assert.rejects(createProgramacaoLote(params, db), error => error.message === 'PROGRAMACAO_DUPLICADA:2035-06-10,2035-06-11');
+  });
+});
+
+describe('Fase 10A - cadastro rápido de consulente', () => {
+  test('Atendimento cria Consulente ativo com índices e nunca cria Membro ou usuário', async () => {
+    await seedDocuments([['usuarios', 'atendimento-10a', { uid: 'atendimento-10a', email: 'atendimento@local.test', role: 'atendimento', ativo: true }]]);
+    const db = accessDb('atendimento-10a', 'atendimento@local.test');
+    const created = await createConsulenteQuick({ data: { nome: 'Consulente Rápida', cpf: '52998224725', contato: '11999999999', vinculo: 'membro', funcoesCasa: ['medium'] }, userId: 'atendimento-10a' }, db);
+    const stored = (await getDoc(doc(db, path('pessoas', created.id)))).data();
+    assert.equal(stored.ativo, true); assert.equal(stored.vinculo, 'consulente'); assert.equal(stored.tipoPessoa, 'Consulente'); assert.deepEqual(stored.funcoesCasa, []);
+    assert.equal((await getDoc(doc(db, path('cpf_index', '52998224725')))).data().pessoaId, created.id);
+    assert.ok(stored.busca.termos.includes('consulente rapida'));
+    assert.equal((await getDocs(collection(adminDb(), `${root}/usuarios`))).size, 3);
+  });
+
+  test('CPF duplicado não cria outra Pessoa e usuário sem permissão não cadastra', async () => {
+    await seedDocuments([['usuarios', 'atendimento-10a', { uid: 'atendimento-10a', email: 'atendimento@local.test', role: 'atendimento', ativo: true }], ['usuarios', 'sem-permissao-10a', { uid: 'sem-permissao-10a', email: 'pendente@local.test', role: 'pendente', ativo: true }]]);
+    const db = accessDb('atendimento-10a', 'atendimento@local.test');
+    const params = { data: { nome: 'Única', cpf: '11144477735' }, userId: 'atendimento-10a' };
+    await createConsulenteQuick(params, db);
+    await assert.rejects(createConsulenteQuick(params, db), /CPF_DUPLICADO/);
+    assert.equal((await getDocs(collection(db, `${root}/pessoas`))).size, 1);
+    await assert.rejects(createConsulenteQuick({ data: { nome: 'Bloqueada', cpf: '39053344705' }, userId: 'sem-permissao-10a' }, accessDb('sem-permissao-10a', 'pendente@local.test')), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
+  });
 });
 
 describe('Fase 8A - autorização e vínculo de acesso', () => {

@@ -48,6 +48,7 @@ import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedU
 import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
 import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
 import { LIFECYCLE_AUDIT_TYPES, requireLifecycleReason } from '../utils/lifecycle.js';
+import { getAgendaSchedulingKey } from '../utils/agendaScheduling.js';
 
 const hasViteEnv = typeof import.meta.env === 'object';
 const viteEnv = hasViteEnv ? {
@@ -641,7 +642,8 @@ export const setUserAccessLifecycle = async ({ alvoUid, ativo, motivo, executado
   });
 };
 
-export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null }, firestore = db) => {
+export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null, requireFuture = false, requireActivePessoa = false }, firestore = db) => {
+  if (requireFuture && agenda.data?.toDate?.().getTime() < Date.now()) throw new Error('AGENDA_INDISPONIVEL');
   if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
   const permittedTypes = getAgendaPublicosPermitidos(agenda);
   if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(pessoa))) throw new Error('PUBLICO_NAO_PERMITIDO');
@@ -660,15 +662,18 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   }));
 
   const agendaRef = getDataDoc(firestore, 'agendas', agenda.id);
+  const pessoaRef = requireActivePessoa ? getDataDoc(firestore, 'pessoas', pessoa.id) : null;
   const appointmentRef = doc(getDataCollection(firestore, 'consulentes'));
   const activeRef = getDataDoc(firestore, 'agendamentos_ativos', `${agenda.id}_${pessoa.id}`);
   await runTransaction(firestore, async transaction => {
-    const [agendaSnapshot, activeSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(activeRef)]);
+    const [agendaSnapshot, activeSnapshot, pessoaSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(activeRef), pessoaRef ? transaction.get(pessoaRef) : null]);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
     if (['Concluída', 'Cancelada'].includes(agendaSnapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
     if (activeSnapshot.exists()) throw new Error('AGENDAMENTO_DUPLICADO');
+    if (requireActivePessoa && (!pessoaSnapshot?.exists() || pessoaSnapshot.data().ativo === false)) throw new Error('PESSOA_INATIVA');
 
     const agendaData = agendaSnapshot.data();
+    if (agendaData.ativo === false || (requireFuture && agendaData.data?.toDate?.().getTime() < Date.now())) throw new Error('AGENDA_INDISPONIVEL');
     const transactionPermittedTypes = getAgendaPublicosPermitidos(agendaData);
     if (transactionPermittedTypes.length && !transactionPermittedTypes.includes(getPessoaVinculo(pessoa))) throw new Error('PUBLICO_NAO_PERMITIDO');
     servicos.forEach(service => {
@@ -697,6 +702,48 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
     transaction.update(agendaRef, { vagasOcupadas: occupied, atualizadoEm: now, atualizadoPor: userId });
   });
   return appointmentRef.id;
+};
+
+export const createConsulenteQuick = ({ data, userId }, firestore = db) => createPessoa({
+  data: { ...data, vinculo: 'consulente', tipoPessoa: 'Consulente', funcoesCasa: [] }, userId
+}, firestore);
+
+export const getPessoaByCpf = async (cpf, firestore = db) => {
+  const normalizedCpf = normalizeSearchDigits(cpf);
+  if (!normalizedCpf || !firestore) return null;
+  const indexSnapshot = await getDoc(getDataDoc(firestore, 'cpf_index', normalizedCpf));
+  if (!indexSnapshot.exists()) return null;
+  return getPessoaById(indexSnapshot.data().pessoaId, firestore);
+};
+
+export const createProgramacaoLote = async ({ trabalho, servicos, horario, publicosPermitidos, vagasTotais, dates, userId }, firestore = db) => {
+  const uniqueDates = [...new Set((dates || []).filter(Boolean))].sort();
+  if (!trabalho?.id || !servicos?.length || !horario || !uniqueDates.length) throw new Error('PROGRAMACAO_INVALIDA');
+  if (uniqueDates.length > 400) throw new Error('LIMITE_PROGRAMACAO_EXCEDIDO');
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (uniqueDates.some(date => new Date(`${date}T12:00:00`) < today)) throw new Error('PROGRAMACAO_DATA_PASSADA');
+  const refs = uniqueDates.map(date => getDataDoc(firestore, 'agendas', getAgendaSchedulingKey({
+    tipoTrabalhoId: trabalho.id, date, horario, servicosIds: servicos.map(item => item.id), publicosPermitidos
+  })));
+  await runTransaction(firestore, async transaction => {
+    const snapshots = await Promise.all(refs.map(ref => transaction.get(ref)));
+    const conflicts = snapshots.flatMap((snapshot, index) => snapshot.exists() ? [uniqueDates[index]] : []);
+    if (conflicts.length) throw new Error(`PROGRAMACAO_DUPLICADA:${conflicts.join(',')}`);
+    const now = Timestamp.now();
+    const names = Object.fromEntries(servicos.map(item => [item.id, item.nome]));
+    const statuses = Object.fromEntries(servicos.map(item => [item.id, 'Ativo']));
+    const totals = Object.fromEntries(servicos.filter(servicoControlaVagas).map(item => [item.id, Number(vagasTotais?.[item.id] || 0)]));
+    refs.forEach((ref, index) => transaction.set(ref, {
+      tipoTrabalhoId: trabalho.id, tipoTrabalhoNome: trabalho.nome, tipo: trabalho.nome,
+      data: Timestamp.fromDate(new Date(`${uniqueDates[index]}T${horario}:00`)), horario,
+      publicosPermitidos, servicosIds: servicos.map(item => item.id), servicosNomes: names,
+      servicosStatus: statuses, vagasTotais: totals,
+      vagasOcupadas: Object.fromEntries(Object.keys(totals).map(id => [id, 0])),
+      programacaoChave: ref.id, status: 'Agendada', ativo: true,
+      criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId
+    }));
+  });
+  return refs.map(ref => ref.id);
 };
 
 const createAuditRef = firestore => doc(getDataCollection(firestore, 'auditoria'));

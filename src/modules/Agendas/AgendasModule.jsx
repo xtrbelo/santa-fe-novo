@@ -1,87 +1,41 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { addDoc, getAppCollection, onSnapshot, Timestamp } from '../../services/firebase';
-import { getPublicosPermitidosTrabalho, servicoControlaVagas, servicoPertenceAoTrabalho } from '../../utils/domain';
-import { AgendaAdminCard } from './AgendaAdminCard';
+import { CalendarDays, Plus } from 'lucide-react';
+import { createAgendamento, createConsulenteQuick, getAppCollection, onSnapshot } from '../../services/firebase';
+import { filterAppointments, getAvailableAgendas, getRemainingVacancies, selectQuickRegisteredPerson } from '../../utils/agendaScheduling';
+import { getNomeServicoAtendimento, servicoControlaVagas } from '../../utils/domain';
 import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
 import { Modal } from '../../components/ui/Modal';
+import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
+import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { useToast } from '../../components/ui/useToast';
-import { CalendarDays, Filter, Plus } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 
-const emptyDraft = { tipoTrabalhoId: '', data: '', horario: '12:00', servicosIds: [], publicosPermitidos: [], vagasTotais: {} };
-const publicOptions = [{ id: 'consulente', nome: 'Consulentes' }, { id: 'membro', nome: 'Membros' }];
+const filters = [{ id: 'proximos', label: 'Próximos' }, { id: 'hoje', label: 'Hoje' }, { id: 'realizados', label: 'Realizados/Concluídos' }, { id: 'cancelados', label: 'Cancelados' }, { id: 'todos', label: 'Todos' }];
 
 export const AgendasModule = ({ user, profile }) => {
-  const [agendas, setAgendas] = useState([]);
-  const [trabalhos, setTrabalhos] = useState([]);
-  const [servicos, setServicos] = useState([]);
-  const [modal, setModal] = useState(false);
-  const [step, setStep] = useState(1);
-  const [draft, setDraft] = useState(emptyDraft);
-  const [filtroTipo, setFiltroTipo] = useState('');
-  const [mostrarPassado, setMostrarPassado] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const toast = useToast();
-
-  useEffect(() => {
-    if (!user) return undefined;
-    const unsubs = [
-      onSnapshot(getAppCollection('agendas'), s => setAgendas(s.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(getAppCollection('config_eventos'), s => setTrabalhos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false))),
-      onSnapshot(getAppCollection('config_servicos'), s => setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false)))
-    ];
-    return () => unsubs.forEach(unsub => unsub());
-  }, [user]);
-
-  const selectedWork = trabalhos.find(item => item.id === draft.tipoTrabalhoId);
-  const availableServices = useMemo(() => servicos.filter(item => servicoPertenceAoTrabalho(item, draft.tipoTrabalhoId)), [servicos, draft.tipoTrabalhoId]);
-  const selectedServices = availableServices.filter(item => draft.servicosIds.includes(item.id));
-  const filtered = agendas.filter(agenda => {
-    if (!mostrarPassado) { const today = new Date(); today.setHours(0, 0, 0, 0); if (agenda.data?.toDate() < today) return false; }
-    return !filtroTipo || (agenda.tipoTrabalhoId || agenda.tipo) === filtroTipo || agenda.tipo === filtroTipo;
-  }).sort((a, b) => (a.data?.toMillis() || 0) - (b.data?.toMillis() || 0));
-
-  const openCreate = () => { setDraft({ ...emptyDraft, tipoTrabalhoId: trabalhos[0]?.id || '' }); setStep(1); setModal(true); };
-  const chooseWork = id => {
-    const work = trabalhos.find(item => item.id === id);
-    setDraft({ ...draft, tipoTrabalhoId: id, servicosIds: [], vagasTotais: {}, publicosPermitidos: getPublicosPermitidosTrabalho(work) });
-  };
-  const toggleService = service => setDraft(current => ({ ...current, servicosIds: current.servicosIds.includes(service.id) ? current.servicosIds.filter(id => id !== service.id) : [...current.servicosIds, service.id] }));
-  const togglePublic = id => setDraft(current => ({ ...current, publicosPermitidos: current.publicosPermitidos.includes(id) ? current.publicosPermitidos.filter(item => item !== id) : [...current.publicosPermitidos, id] }));
-  const create = async () => {
-    if (!selectedWork || !draft.data || !draft.horario || !draft.servicosIds.length) { toast.error('Revise os campos obrigatórios.'); return; }
-    setSaving(true);
-    try {
-      const now = Timestamp.now();
-      const names = Object.fromEntries(selectedServices.map(item => [item.id, item.nome]));
-      const statuses = Object.fromEntries(selectedServices.map(item => [item.id, 'Ativo']));
-      const totals = Object.fromEntries(selectedServices.filter(servicoControlaVagas).map(item => [item.id, Number(draft.vagasTotais[item.id] || 0)]));
-      await addDoc(getAppCollection('agendas'), {
-        tipoTrabalhoId: selectedWork.id, tipoTrabalhoNome: selectedWork.nome, tipo: selectedWork.nome,
-        data: Timestamp.fromDate(new Date(`${draft.data}T${draft.horario}:00`)), horario: draft.horario,
-        publicosPermitidos: draft.publicosPermitidos, servicosIds: draft.servicosIds,
-        servicosNomes: names, servicosStatus: statuses, vagasTotais: totals,
-        vagasOcupadas: Object.fromEntries(Object.keys(totals).map(id => [id, 0])),
-        status: 'Agendada', ativo: true, criadoEm: now, criadoPor: user.uid, atualizadoEm: now, atualizadoPor: user.uid
-      });
-      toast.success('Agenda criada com sucesso.'); setModal(false);
-    } catch (error) { console.error(error); toast.error('Não foi possível criar a agenda.'); }
-    finally { setSaving(false); }
-  };
-
+  const [agendas, setAgendas] = useState([]); const [appointments, setAppointments] = useState([]); const [services, setServices] = useState([]);
+  const [filter, setFilter] = useState('proximos'); const [open, setOpen] = useState(false); const [step, setStep] = useState(1);
+  const [service, setService] = useState(null); const [pessoa, setPessoa] = useState(null); const [agenda, setAgenda] = useState(null); const [saving, setSaving] = useState(false); const [quickRegisterOpen, setQuickRegisterOpen] = useState(false); const toast = useToast();
+  useEffect(() => { const unsubs = [onSnapshot(getAppCollection('agendas'), snap => setAgendas(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })))), onSnapshot(getAppCollection('consulentes'), snap => setAppointments(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })))), onSnapshot(getAppCollection('config_servicos'), snap => setServices(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(item => item.ativo !== false)))]; return () => unsubs.forEach(unsub => unsub()); }, []);
+  const agendasById = useMemo(() => Object.fromEntries(agendas.map(item => [item.id, item])), [agendas]);
+  const visible = useMemo(() => filterAppointments(appointments, agendasById, filter).sort((a, b) => (agendasById[a.agendaId]?.data?.toMillis?.() || 0) - (agendasById[b.agendaId]?.data?.toMillis?.() || 0)), [appointments, agendasById, filter]);
+  const serviceDates = service ? getAvailableAgendas({ agendas, service }) : [];
+  const personDates = service && pessoa ? getAvailableAgendas({ agendas, service, pessoa }) : [];
+  const canQuickRegister = hasPermission(profile, PERMISSIONS.CONSULENTES_MANAGE);
+  const quickRegistered = (savedPessoa, options = {}) => { const next = selectQuickRegisteredPerson({ service, pessoa, agenda }, savedPessoa); setService(next.service); setPessoa(next.pessoa); setAgenda(next.agenda); setQuickRegisterOpen(false); toast.success(options.existing ? 'Pessoa já cadastrada e selecionada.' : 'Consulente cadastrado e selecionado.'); };
+  const reset = () => { setStep(1); setService(null); setPessoa(null); setAgenda(null); }; const close = () => { setOpen(false); reset(); };
+  const confirm = async () => { setSaving(true); try { await createAgendamento({ agenda, pessoa, servicos: [service], userId: user.uid, status: 'Agendado', requireFuture: true, requireActivePessoa: true }); toast.success('Agendamento confirmado com sucesso.'); close(); } catch (error) { console.error(error); const code = error.message.split(':')[0]; const messages = { AGENDAMENTO_DUPLICADO: 'Esta pessoa já possui agendamento nesta data.', SEM_VAGA: 'A última vaga não está mais disponível.', AGENDA_INDISPONIVEL: 'Esta data não está mais disponível.', PUBLICO_NAO_PERMITIDO: 'O público desta pessoa não é permitido.', PESSOA_INATIVA: 'Esta pessoa não está mais ativa.' }; toast.error(messages[code] || 'Não foi possível confirmar o agendamento.'); } finally { setSaving(false); } };
   return <div className="space-y-6 pb-10">
-    <header className="flex justify-between items-end"><div><h2 className="text-3xl font-black uppercase italic">Agendas</h2><p className="text-sm text-gray-500">Execução dos tipos de trabalho da Casa</p></div>{hasPermission(profile, PERMISSIONS.AGENDA_MANAGE) && <Button variant="warning" onClick={openCreate} className="rounded-full w-12 h-12 p-0"><Plus/></Button>}</header>
-    <div className="space-y-3"><div className="flex items-center bg-white p-3 rounded-2xl"><Filter size={18} className="text-amber-500 mr-2"/><select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} className="w-full bg-transparent"><option value="">Todos os trabalhos</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select></div><label className="text-xs font-bold"><input type="checkbox" checked={mostrarPassado} onChange={e => setMostrarPassado(e.target.checked)}/> Mostrar histórico passado</label></div>
-    <div className="space-y-4">{filtered.length ? filtered.map(a => <AgendaAdminCard key={a.id} agenda={a} agendas={agendas} user={user} profile={profile} servicosCatalogo={servicos} trabalhos={trabalhos}/>) : <div className="text-center py-16 bg-white rounded-3xl"><CalendarDays className="mx-auto text-gray-300"/><p className="text-xs text-gray-400 mt-3">Nenhuma agenda encontrada</p></div>}</div>
-    <Modal isOpen={modal} onClose={() => setModal(false)} title={`Nova Agenda · Etapa ${step}/5`}>
-      <div className="space-y-5">
-        {step === 1 && <div><label className="text-xs font-black uppercase">Tipo de Trabalho</label><select value={draft.tipoTrabalhoId} onChange={e => chooseWork(e.target.value)} className="w-full bg-gray-50 p-3 rounded-xl mt-2"><option value="">Selecione</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select></div>}
-        {step === 2 && <div className="grid grid-cols-2 gap-3"><input type="date" value={draft.data} onChange={e => setDraft({ ...draft, data: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/><input type="time" value={draft.horario} onChange={e => setDraft({ ...draft, horario: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/></div>}
-        {step === 3 && <div className="space-y-2">{availableServices.map(s => <div key={s.id} className="bg-gray-50 p-3 rounded-xl"><label className="font-bold text-sm"><input type="checkbox" checked={draft.servicosIds.includes(s.id)} onChange={() => toggleService(s)}/> {s.nome}</label>{draft.servicosIds.includes(s.id) && servicoControlaVagas(s) && <input type="number" min="0" value={draft.vagasTotais[s.id] || ''} onChange={e => setDraft({ ...draft, vagasTotais: { ...draft.vagasTotais, [s.id]: Number(e.target.value) } })} placeholder="Quantidade de atendimentos" className="w-full bg-white p-2 rounded-lg mt-2"/>}</div>)}</div>}
-        {step === 4 && <div className="space-y-2"><p className="text-xs text-gray-500">Público padrão do trabalho; ajuste para esta data.</p>{publicOptions.map(p => <label key={p.id} className="block font-bold"><input type="checkbox" checked={draft.publicosPermitidos.includes(p.id)} onChange={() => togglePublic(p.id)}/> {p.nome}</label>)}</div>}
-        {step === 5 && <div className="bg-gray-50 p-4 rounded-xl text-sm space-y-2"><p><strong>Trabalho:</strong> {selectedWork?.nome}</p><p><strong>Data:</strong> {draft.data} às {draft.horario}</p><p><strong>Público:</strong> {draft.publicosPermitidos.join(', ') || 'sem restrição'}</p><p><strong>Serviços:</strong> {selectedServices.map(s => `${s.nome}${servicoControlaVagas(s) ? ` (${draft.vagasTotais[s.id] || 0} vagas)` : ''}`).join(', ')}</p></div>}
-        <div className="flex gap-2"><Button variant="secondary" onClick={() => step === 1 ? setModal(false) : setStep(step - 1)} className="flex-1">Voltar</Button>{step < 5 ? <Button variant="warning" onClick={() => { if (step === 1 && selectedWork && !draft.publicosPermitidos.length) setDraft({ ...draft, publicosPermitidos: getPublicosPermitidosTrabalho(selectedWork) }); setStep(step + 1); }} className="flex-1">Continuar</Button> : <Button variant="warning" onClick={create} disabled={saving} className="flex-1">{saving ? 'Criando...' : 'Criar Agenda'}</Button>}</div>
-      </div>
-    </Modal>
+    <header className="flex justify-between items-end gap-3"><div><h2 className="text-3xl font-black uppercase italic">Agendamentos</h2><p className="text-sm text-gray-500">Marcações de pessoas nos serviços da Casa</p></div><Button variant="warning" onClick={() => setOpen(true)}><Plus size={18}/> Novo Agendamento</Button></header>
+    <div className="flex flex-wrap gap-2">{filters.map(item => <button key={item.id} onClick={() => setFilter(item.id)} className={`px-3 py-2 rounded-xl text-xs font-black ${filter === item.id ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>{item.label}</button>)}</div>
+    <div className="space-y-3">{visible.map(item => { const itemAgenda = agendasById[item.agendaId]; return <Card key={item.id} className="flex justify-between gap-4"><div><strong>{item.nome || item.pessoaNome || 'Pessoa não identificada'}</strong><p className="text-xs text-gray-500">{(item.servicosIds || []).map(id => getNomeServicoAtendimento(item, id)).join(', ') || 'Serviço não informado'}</p><p className="text-xs font-bold text-indigo-700 mt-1">{itemAgenda?.data?.toDate?.().toLocaleDateString('pt-BR') || 'Data histórica indisponível'} · {itemAgenda?.horario || '--:--'} · {itemAgenda?.tipoTrabalhoNome || itemAgenda?.tipo || 'Trabalho não informado'}</p></div><span className="text-xs font-black">{item.status}</span></Card>; })}{!visible.length && <div className="text-center py-16 bg-white rounded-3xl"><CalendarDays className="mx-auto text-gray-300"/><p className="text-xs text-gray-400 mt-3">Nenhum agendamento neste filtro</p></div>}</div>
+    <Modal isOpen={open} onClose={close} title={`Novo Agendamento · Etapa ${step}/4`}><div className="space-y-4">
+      {step === 1 && <><p className="text-xs font-black uppercase">Serviço</p>{services.map(item => { const count = getAvailableAgendas({ agendas, service: item }).length; return <button key={item.id} onClick={() => { setService(item); setPessoa(null); setAgenda(null); }} className={`block w-full text-left p-3 rounded-xl border ${service?.id === item.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100'}`}><strong>{item.nome}</strong><span className="block text-xs text-gray-500">{count} data(s) disponível(is)</span></button>; })}{service && !serviceDates.length && <p className="text-sm text-amber-700">Nenhuma data disponível para este serviço no momento.</p>}</>}
+      {step === 2 && <><PessoaSearchSelector value={pessoa} onChange={selected => { setPessoa(selected?.ativo === false ? null : selected); setAgenda(null); }}/>{canQuickRegister && !pessoa && <><div className="flex items-center gap-3 text-xs text-gray-400"><span className="h-px bg-gray-200 flex-1"/>ou<span className="h-px bg-gray-200 flex-1"/></div><Button type="button" variant="secondary" className="w-full" onClick={() => setQuickRegisterOpen(true)}><Plus size={17}/> Cadastrar novo consulente</Button></>}{pessoa && !personDates.length && <p className="text-sm text-amber-700">Não existem datas disponíveis para este serviço e esta pessoa.</p>}</>}
+      {step === 3 && <>{personDates.map(item => { const remaining = getRemainingVacancies(item, service); return <button key={item.id} onClick={() => setAgenda(item)} className={`block w-full text-left p-3 rounded-xl border ${agenda?.id === item.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100'}`}><strong>{item.data.toDate().toLocaleDateString('pt-BR')} · {item.horario}</strong><span className="block text-xs text-gray-600">{item.tipoTrabalhoNome || item.tipo}{servicoControlaVagas(service) ? ` · ${remaining} vaga(s) restante(s)` : ''}</span></button>; })}</>}
+      {step === 4 && <div className="bg-gray-50 p-4 rounded-xl text-sm space-y-2"><p><strong>Pessoa:</strong> {pessoa?.nome}</p><p><strong>Serviço:</strong> {service?.nome}</p><p><strong>Data:</strong> {agenda?.data?.toDate?.().toLocaleDateString('pt-BR')}</p><p><strong>Horário:</strong> {agenda?.horario}</p><p><strong>Tipo de Trabalho:</strong> {agenda?.tipoTrabalhoNome || agenda?.tipo}</p></div>}
+      <div className="flex gap-2"><Button variant="secondary" className="flex-1" onClick={() => step === 1 ? close() : setStep(step - 1)}>Voltar</Button>{step < 4 ? <Button className="flex-1" disabled={(step === 1 && (!service || !serviceDates.length)) || (step === 2 && (!pessoa || !personDates.length)) || (step === 3 && !agenda)} onClick={() => setStep(step + 1)}>Continuar</Button> : <Button variant="warning" className="flex-1" disabled={saving} onClick={confirm}>{saving ? 'Confirmando...' : 'Confirmar'}</Button>}</div>
+    </div></Modal><PessoaFormModal isOpen={quickRegisterOpen} onClose={() => setQuickRegisterOpen(false)} onSaved={quickRegistered} user={user} allowedVinculos={['consulente']} createOperation={createConsulenteQuick}/>
   </div>;
 };

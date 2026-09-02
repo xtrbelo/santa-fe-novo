@@ -15,7 +15,8 @@ import { canAccessModule } from '../../constants/permissions';
 export const MobileNav = ({ activeTab, onSelectTab, profile }) => {
   const navItems = [
     { id: 'home', label: 'Início', icon: LayoutDashboard },
-    { id: 'agendas', label: 'Agendas', icon: CalendarDays },
+    { id: 'agendas', label: 'Agenda', icon: CalendarDays },
+    { id: 'programacao', label: 'Programar', icon: Settings },
     { id: 'fluxo', label: 'Fluxo', icon: BookOpenCheck },
     { id: 'pessoas', label: 'Pessoas', icon: Users },
     { id: 'convites', label: 'Convites', icon: Mail },

@@ -11,7 +11,7 @@
     "build": "vite build",
     "build:prod": "vite build --mode production",
     "lint": "eslint .",
-    "test:helpers": "node --test tests/pessoaSearch.test.js tests/pessoaForm.test.js tests/memberInvite.test.js tests/memberSelfRegistration.test.js tests/memberSelfRegistrationReview.test.js tests/accessAuthorization.test.js tests/accessActivation.test.js tests/myRegistration.test.js tests/lifecycle.test.js tests/permissions.test.js tests/auth.test.js tests/sessionTimeout.test.js",
+    "test:helpers": "node --test tests/agendaScheduling.test.js tests/pessoaSearch.test.js tests/pessoaForm.test.js tests/memberInvite.test.js tests/memberSelfRegistration.test.js tests/memberSelfRegistrationReview.test.js tests/accessAuthorization.test.js tests/accessActivation.test.js tests/myRegistration.test.js tests/lifecycle.test.js tests/permissions.test.js tests/auth.test.js tests/sessionTimeout.test.js",
     "test:auth": "firebase emulators:exec --config firebase.auth.test.json --only auth,firestore --project santa-fe-auth-test \"node --test tests/auth.emulator.test.js\"",
     "test:rules": "firebase emulators:exec --config firebase.test.json --only firestore --project santa-fe-rules-test \"node --test tests/firestore.rules.test.js\"",
     "test:business": "firebase emulators:exec --config firebase.test.json --only firestore --project santa-fe-business-test \"node --test tests/firestore.business.test.js\"",
