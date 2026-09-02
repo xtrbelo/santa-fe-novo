@@ -25,8 +25,16 @@ Nunca usar LEGACY para novos deploys.
 - Resposta final curta: arquivos, comportamento, testes, lint/build/diff/status e riscos.
 
 ### Estado consolidado
-- Fases 9A–9H concluídas em PROD.
-- Fase 9I homologada em HML, aguardando fechamento.
+- Fases 9A–9I concluídas.
+- Fase 10A concluída, homologada e publicada em PROD.
+- PROD Fase 10A: commit `8515916d953d91a99177c001754d2e0787f50559`, tag `production-phase10a`.
+- Programação = disponibilidade da Casa.
+- Agendamentos = marcação de Pessoa.
+- Fluxo do Dia = execução.
+- Novo agendamento: Serviço → Pessoa → Data disponível → Confirmar.
+- Programação suporta datas específicas em lote e recorrência semanal.
+- Cada data permanece como documento independente na collection `agendas`.
+- Controle transacional de vagas preservado.
 - Modelo: Pessoa → Membro → Usuário opcional.
 - Firebase Auth != autorização.
 - HML: `santa-fe-v2-hml`.
