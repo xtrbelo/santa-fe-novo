@@ -28,6 +28,9 @@ Nunca usar LEGACY para novos deploys.
 - Fases 9A–9I concluídas.
 - Fase 10A concluída, homologada e publicada em PROD.
 - PROD Fase 10A: commit `8515916d953d91a99177c001754d2e0787f50559`, tag `production-phase10a`.
+- Hotfix de identidade visual/logo concluído e publicado em PROD: commit `a7faca3`, merge na `main` `3599517`.
+- Logo oficial: `public/logo_santa_fe.png`.
+- URL PROD: `https://santa-fe-v2-prod.web.app`.
 - Programação = disponibilidade da Casa.
 - Agendamentos = marcação de Pessoa.
 - Fluxo do Dia = execução.
