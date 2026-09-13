@@ -2,6 +2,8 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { ToastContext } from './useToast';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
+const MAX_VISIBLE_TOASTS = 4;
+
 export const ToastProvider = ({ children }) => {
   const [toasts, setToasts] = useState([]);
 
@@ -10,8 +12,13 @@ export const ToastProvider = ({ children }) => {
   }, []);
 
   const showToast = useCallback((message, type = 'info', duration = 4000) => {
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) return;
     const id = Date.now() + Math.random().toString(36).substr(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
+    setToasts((prev) => {
+      if (prev.some(toast => toast.message === normalizedMessage && toast.type === type)) return prev;
+      return [...prev, { id, message: normalizedMessage, type }].slice(-MAX_VISIBLE_TOASTS);
+    });
 
     if (duration > 0) {
       setTimeout(() => {
@@ -33,7 +40,7 @@ export const ToastProvider = ({ children }) => {
   return (
     <ToastContext.Provider value={contextValue}>
       {children}
-      <div className="fixed top-5 right-5 z-[200] flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-3">
+      <div className="fixed inset-x-3 top-3 z-[200] flex max-w-sm flex-col gap-2.5 pointer-events-none sm:left-auto sm:right-5 sm:top-5 sm:w-full" aria-live="polite" aria-relevant="additions text">
         {toasts.map((toast) => {
           const isSuccess = toast.type === 'success';
           const isError = toast.type === 'error';
@@ -41,6 +48,7 @@ export const ToastProvider = ({ children }) => {
           return (
             <div
               key={toast.id}
+              role={isError ? 'alert' : 'status'}
               className={`pointer-events-auto flex items-center justify-between gap-3 p-4 rounded-2xl shadow-xl border text-sm font-semibold transition-all transform animate-in slide-in-from-top-4 duration-300 ${
                 isSuccess 
                   ? 'bg-emerald-900/90 text-emerald-100 border-emerald-700/60 backdrop-blur-md'
@@ -53,10 +61,12 @@ export const ToastProvider = ({ children }) => {
                 {isSuccess && <CheckCircle2 className="text-emerald-400 shrink-0" size={20} />}
                 {isError && <AlertCircle className="text-rose-400 shrink-0" size={20} />}
                 {!isSuccess && !isError && <Info className="text-blue-400 shrink-0" size={20} />}
-                <p className="leading-snug break-words">{toast.message}</p>
+                <p className="min-w-0 leading-snug [overflow-wrap:anywhere]">{toast.message}</p>
               </div>
               <button
+                type="button"
                 onClick={() => removeToast(toast.id)}
+                aria-label="Fechar notificação"
                 className="p-1 rounded-lg hover:bg-white/10 text-white/60 hover:text-white transition-colors shrink-0"
               >
                 <X size={16} />

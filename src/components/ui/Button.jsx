@@ -1,13 +1,16 @@
-import React from 'react';
+import React, { forwardRef } from 'react';
+import { LoaderCircle } from 'lucide-react';
 
-export const Button = ({
+export const Button = forwardRef(function Button({
   children,
   onClick,
   variant = "primary",
   className = "",
   disabled = false,
+  busy = false,
+  busyText = "Processando...",
   type = "button"
-}) => {
+}, ref) {
   const variants = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-md shadow-blue-500/20 active:scale-[0.98]",
     secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-[0.98]",
@@ -20,12 +23,14 @@ export const Button = ({
 
   return (
     <button
+      ref={ref}
       type={type}
-      disabled={disabled}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
       onClick={onClick}
-      className={`px-4 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed outline-none cursor-pointer ${variants[variant] || variants.primary} ${className}`}
+      className={`min-w-0 px-4 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-center text-sm whitespace-normal [overflow-wrap:anywhere] disabled:opacity-50 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 cursor-pointer ${variants[variant] || variants.primary} ${className}`}
     >
-      {children}
+      {busy ? <><LoaderCircle className="shrink-0 animate-spin" size={17}/><span>{busyText}</span></> : children}
     </button>
   );
-};
+});

@@ -100,6 +100,7 @@ service cloud.firestore {
     function validUserAccessLifecycle(appId, uid) {
       let audit = getAfter(auditPath(appId, request.resource.data.auditoriaLifecycleId)).data;
       return canManageLifecycle(appId) && request.auth.uid != uid
+        && resource.data.role != 'admin'
         && resource.data.role in ['admin', 'gestor', 'atendimento']
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.role == resource.data.role
@@ -250,6 +251,11 @@ service cloud.firestore {
         && audit.origemAgendaId == resource.data.agendaId
         && audit.origemAgendamentoId == id
         && audit.destinoAgendaId != resource.data.agendaId
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(audit.destinoAgendaId)).data.get('ativo', true) != false
+        && (!exists(personPath(appId, resource.data.pessoaBaseId))
+          || get(personPath(appId, resource.data.pessoaBaseId)).data.get('ativo', true) != false)
+        && (!exists(activeLockPath(appId, resource.data.agendaId, resource.data.pessoaBaseId))
+          || get(activeLockPath(appId, resource.data.agendaId, resource.data.pessoaBaseId)).data.agendamentoId == id)
         && audit.executadoPor == request.auth.uid
         && audit.motivo is string && audit.motivo.size() > 0
         && audit.servicosIds is list && audit.servicosIds.size() > 0 && audit.servicosIds.size() <= 3
@@ -306,7 +312,7 @@ service cloud.firestore {
             && validUserPersonLink(appId, uid, request.resource.data.pessoaBaseId)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pessoaBaseId', 'atualizadoEm', 'atualizadoPor']))
           || validUserAccessLifecycle(appId, uid)
-          || (request.auth.uid != uid && resource.data.keys().hasAny(['pessoaBaseId'])
+          || (request.auth.uid != uid && resource.data.role != 'admin' && request.resource.data.role != 'admin' && resource.data.keys().hasAny(['pessoaBaseId'])
             && request.resource.data.pessoaBaseId == resource.data.pessoaBaseId
             && request.resource.data.role in ['admin', 'gestor', 'atendimento']
             && request.resource.data.ativo == resource.data.ativo
@@ -374,6 +380,16 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/auditoria/{id} {
       allow read: if canManageUsers(appId);
+      allow create: if isAdmin(appId)
+        && request.resource.data.keys().hasOnly(['tipo', 'agendaId', 'vagasAntes', 'vagasDepois', 'executadoPor', 'criadoEm'])
+        && request.resource.data.tipo == 'VAGAS_RECONCILIADAS'
+        && request.resource.data.agendaId is string
+        && request.resource.data.vagasAntes is map
+        && request.resource.data.vagasDepois is map
+        && request.resource.data.executadoPor == request.auth.uid
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('vagasOcupadas', {}) == request.resource.data.vagasAntes
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.vagasOcupadas == request.resource.data.vagasDepois
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.atualizadoPor == request.auth.uid;
       allow create: if request.resource.data.executadoPor == request.auth.uid
         && validMyRegistrationAudit(appId);
       allow create: if validLifecycleAudit(appId, id);
@@ -388,6 +404,7 @@ service cloud.firestore {
       allow create: if request.resource.data.executadoPor == request.auth.uid
         && ((isInternal(appId) && ((currentUser(appId).role == 'admin' && request.resource.data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO', 'USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO', 'USUARIO_ACESSO_PREAUTORIZADO', 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA'])
           || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
+          || (currentUser(appId).role == 'admin' && request.resource.data.tipo == 'CPF_INDEX_RECONSTRUIDO')
           || (currentUser(appId).role == 'admin' && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO')
           || (currentUser(appId).role in ['admin', 'gestor']
             && request.resource.data.tipo == 'AUTOCADASTRO_MEMBRO_APROVADO'
@@ -650,7 +667,8 @@ service cloud.firestore {
         && (isAdmin(appId) || isGestor(appId)
           || (isAtendimento(appId) && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['vagasOcupadas', 'atualizadoEm', 'atualizadoPor'])));
-      allow delete: if isAdmin(appId);
+      allow delete: if isAdmin(appId)
+        && !exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/agenda_historico_index/$(id));
     }
 
     match /artifacts/{appId}/public/data/consulentes/{id} {
@@ -664,6 +682,7 @@ service cloud.firestore {
         && validRelocationUpdate(appId, id);
       allow create: if isInternal(appId)
         && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(request.resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
+        && existsAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/agenda_historico_index/$(request.resource.data.agendaId))
         && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendamentos_ativos/$(request.resource.data.agendaId + '_' + request.resource.data.pessoaBaseId)).data.agendamentoId == id;
       allow update: if request.resource.data.agendaId == resource.data.agendaId
         && ((isInternal(appId)
@@ -707,6 +726,19 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if isInternal(appId)
         && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(resource.data.agendamentoId)).data.status in ['Cancelado', 'Reagendado'];
+    }
+
+    match /artifacts/{appId}/public/data/agenda_historico_index/{agendaId} {
+      allow get: if isInternal(appId);
+      allow list: if false;
+      allow create: if isInternal(appId)
+        && request.resource.data.keys().hasOnly(['agendaId', 'primeiroAgendamentoId', 'criadoEm', 'criadoPor'])
+        && request.resource.data.agendaId == agendaId
+        && request.resource.data.primeiroAgendamentoId is string
+        && request.resource.data.criadoEm is timestamp
+        && request.resource.data.criadoPor == request.auth.uid
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/consulentes/$(request.resource.data.primeiroAgendamentoId)).data.agendaId == agendaId;
+      allow update, delete: if false;
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{id} {

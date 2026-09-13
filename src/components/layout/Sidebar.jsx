@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ROLE_LABELS } from '../../constants/roles';
 import { canAccessModule } from '../../constants/permissions';
+import { APP_VERSION_LABEL } from '../../constants/appVersion';
 
 export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
   const navItems = [
@@ -39,17 +40,22 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mt-0.5">
             Gestão Interna
           </span>
+          <span className="mt-1 block text-[9px] font-bold text-indigo-600">
+            {APP_VERSION_LABEL}
+          </span>
         </div>
       </div>
 
-      <nav className="flex-grow space-y-2.5">
+      <nav aria-label="Navegação principal" className="flex-grow space-y-2.5">
         {navItems.filter(item => canAccessModule(profile, item.id)).map((item) => {
           const isActive = activeTab === item.id;
           return (
             <button
+              type="button"
               key={item.id}
               onClick={() => onSelectTab(item.id)}
-              className={`flex items-center gap-4 w-full px-5 py-3.5 rounded-2xl font-black text-sm transition-all cursor-pointer ${
+              aria-current={isActive ? 'page' : undefined}
+              className={`flex items-center gap-4 w-full px-5 py-3.5 rounded-2xl font-black text-sm transition-all cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 ${
                 isActive
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 scale-102'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 outline-none'
@@ -67,8 +73,9 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
         <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{ROLE_LABELS[profile?.role] || profile?.role}</p>
       </div>
       <button
+        type="button"
         onClick={onSignOut}
-        className="flex items-center gap-4 text-gray-400 hover:text-rose-600 font-black uppercase text-[11px] tracking-widest p-4 transition-all cursor-pointer"
+        className="flex items-center gap-4 text-gray-400 hover:text-rose-600 font-black uppercase text-[11px] tracking-widest p-4 transition-all cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2"
       >
         <LogOut size={18} />
         <span>Sair do Sistema</span>

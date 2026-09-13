@@ -16,6 +16,8 @@ const errorMessages = {
   SERVICO_NAO_DISPONIVEL: 'A agenda de destino não oferece todos os serviços selecionados.',
   SERVICO_CANCELADO: 'Um dos serviços está cancelado na agenda de destino.',
   SERVICO_JA_REALOCADO: 'Um dos serviços selecionados já foi realocado.',
+  PESSOA_INATIVA: 'A pessoa está inativa e não pode receber um novo agendamento.',
+  LOCK_ORIGEM_DIVERGENTE: 'O atendimento de origem está inconsistente. Atualize a tela e procure um administrador.',
   PERMISSAO_NEGADA: 'Somente administradores e gestores podem realocar atendimentos.'
 };
 
@@ -58,7 +60,7 @@ export const RealocacaoModal = ({ atendimento, origemAgenda, agendas, servicosCa
   const selected = mode === 'completa' ? activeIds : selectedIds;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const options = (agendas || []).filter(agenda => {
-    if (agenda.id === origemAgenda?.id || ['Concluída', 'Cancelada'].includes(agenda.status) || agenda.data?.toDate?.() < today) return false;
+    if (agenda.id === origemAgenda?.id || agenda.ativo === false || ['Concluída', 'Cancelada'].includes(agenda.status) || agenda.data?.toDate?.() < today) return false;
     if (selected.some(id => !agendaAceitaServico(agenda, id))) return false;
     const publics = getAgendaPublicosPermitidos(agenda);
     return !publics.length || publics.includes(getPessoaVinculo(person));

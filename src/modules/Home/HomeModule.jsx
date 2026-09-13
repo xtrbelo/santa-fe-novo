@@ -1,20 +1,37 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../../components/ui/Card';
-import { getAppCollection, onSnapshot } from '../../services/firebase';
+import { getAppCollection, getCountFromServer, query, where } from '../../services/firebase';
 import { canAccessModule, hasPermission, MODULES, PERMISSIONS } from '../../constants/permissions';
 import { ROLES } from '../../constants/roles';
-import { CalendarDays, BookOpenCheck, Users, Sparkles, UserRoundCog } from 'lucide-react';
+import { CalendarDays, BookOpenCheck, Users, Sparkles, UserRoundCog, UserRoundX, ShieldAlert } from 'lucide-react';
 
-export const HomeModule = ({ user, profile, onSelectTab, onOpenPendingUsers }) => {
+export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers }) => {
   const firstName = user?.displayName?.split(' ')[0] || 'Utilizador';
-  const [pendingCount, setPendingCount] = useState(0);
+  const [pendingCount, setPendingCount] = useState(null);
+  const [revokedCount, setRevokedCount] = useState(null);
   const canViewUsers = hasPermission(profile, PERMISSIONS.USERS_VIEW);
 
   useEffect(() => {
-    if (!canViewUsers) return undefined;
-    return onSnapshot(getAppCollection('usuarios'), snapshot => {
-      setPendingCount(snapshot.docs.filter(item => item.data().role === ROLES.PENDENTE && item.data().ativo !== false).length);
-    });
+    if (!canViewUsers) { setPendingCount(null); return undefined; }
+    let active = true; let refreshing = false;
+    const refreshPendingCount = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const users = getAppCollection('usuarios');
+        const [total, inactive, revoked] = await Promise.all([
+          getCountFromServer(query(users, where('role', '==', ROLES.PENDENTE))),
+          getCountFromServer(query(users, where('role', '==', ROLES.PENDENTE), where('ativo', '==', false))),
+          getCountFromServer(query(users, where('ativo', '==', false))),
+        ]);
+        if (active) { setPendingCount(Math.max(0, total.data().count - inactive.data().count)); setRevokedCount(revoked.data().count); }
+      } catch (error) { console.error(error); if (active) { setPendingCount(null); setRevokedCount(null); } }
+      finally { refreshing = false; }
+    };
+    void refreshPendingCount();
+    const timer = window.setInterval(refreshPendingCount, 60000);
+    window.addEventListener('focus', refreshPendingCount);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', refreshPendingCount); };
   }, [canViewUsers]);
 
   return (
@@ -32,7 +49,9 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenPendingUsers }) =
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={onOpenPendingUsers} className="!bg-gradient-to-br from-indigo-600 to-blue-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundCog size={28} /></div><p className="font-black text-2xl uppercase italic">Usuários pendentes</p><p className="text-indigo-100 text-[11px] font-bold uppercase mt-1">{pendingCount} aguardando liberação</p></Card>}
+        {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={() => onOpenUsers('pendentes')} className="!bg-gradient-to-br from-indigo-600 to-blue-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundCog size={28} /></div><p className="font-black text-2xl uppercase italic">Usuários pendentes</p><p className="text-indigo-100 text-[11px] font-bold uppercase mt-1">{pendingCount === null ? 'Atualizando contagem...' : `${pendingCount} aguardando liberação`}</p></Card>}
+        {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={() => onOpenUsers('suspensos')} className="!bg-gradient-to-br from-amber-500 to-orange-600 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><ShieldAlert size={28} /></div><p className="font-black text-2xl uppercase italic">Acessos suspensos</p><p className="text-amber-100 text-[11px] font-bold uppercase mt-1">Abrir membros inativos vinculados</p></Card>}
+        {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={() => onOpenUsers('inativos')} className="!bg-gradient-to-br from-rose-600 to-red-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundX size={28} /></div><p className="font-black text-2xl uppercase italic">Acessos revogados</p><p className="text-rose-100 text-[11px] font-bold uppercase mt-1">{revokedCount === null ? 'Atualizando contagem...' : `${revokedCount} contas sem acesso`}</p></Card>}
         {canAccessModule(profile, MODULES.AGENDAS) && <Card
           onClick={() => onSelectTab(MODULES.AGENDAS)}
           className="!bg-gradient-to-br from-amber-500 to-amber-600 text-white !p-6 shadow-xl shadow-amber-500/20 group !border-none hover:-translate-y-1 transition-all"

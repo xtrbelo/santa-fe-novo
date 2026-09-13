@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   getAppCollection, 
   getAppDoc, 
+  getDoc,
   onSnapshot, 
   Timestamp,
   runTransaction,
@@ -21,8 +22,10 @@ import {
 import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
 import { buildPessoaPayload, createEmptyMemberDetails, getEffectiveMemberFunctions, getMemberFunctionLabels, getPessoaStatusCadastro, localTextIncludes, validatePessoaPayload } from '../../utils/pessoaForm';
 import { normalizeSearchText } from '../../utils/pessoaSearch';
+import { getFriendlyErrorMessage } from '../../utils/firebaseErrorMessages';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { DataLoadState } from '../../components/ui/DataLoadState';
 import { Modal } from '../../components/ui/Modal';
 import { PessoaHistoricoModal } from './PessoaHistoricoModal';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
@@ -55,10 +58,14 @@ export const PessoasModule = ({ user, profile }) => {
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
+  const [linkedAccessStatus, setLinkedAccessStatus] = useState('idle');
   const [lifecycleReason, setLifecycleReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyPerson, setHistoryPerson] = useState(null);
   const [selectedPerson, setSelectedPerson] = useState(null);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   // Estados do formulário
   const [eVinculo, setEVinculo] = useState('consulente');
@@ -77,22 +84,28 @@ export const PessoasModule = ({ user, profile }) => {
   const toast = useToast();
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) { setLoadingData(false); return undefined; }
+    setLoadingData(true); setLoadError(false);
+    const pending = new Set(['people', 'functions']);
+    const loaded = key => { pending.delete(key); if (!pending.size) setLoadingData(false); };
+    const failed = error => { console.error(error); setLoadError(true); setLoadingData(false); };
     const unsubP = onSnapshot(getAppCollection('pessoas'), (s) => {
       setPessoas(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""))
       );
-    });
+      loaded('people');
+    }, failed);
     const unsubF = onSnapshot(getAppCollection('config_funcoes_membro'), (s) => {
       setFuncoesMembro(s.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+      loaded('functions');
+    }, failed);
     return () => {
       unsubP();
       unsubF();
     };
-  }, [user]);
+  }, [user, reloadVersion]);
 
   const resetForm = () => {
     setEditing(null);
@@ -173,7 +186,7 @@ export const PessoasModule = ({ user, profile }) => {
         }
       } catch (err) {
         console.error(err);
-        toast.error('Não foi possível verificar a unicidade do CPF.');
+        toast.error(getFriendlyErrorMessage(err, { fallback: 'Não foi possível verificar a unicidade do CPF.' }));
         return;
       }
     }
@@ -217,7 +230,7 @@ export const PessoasModule = ({ user, profile }) => {
       resetForm();
     } catch (err) {
       console.error(err);
-      toast.error(err.message === 'CPF_DUPLICADO' ? 'Já existe uma pessoa cadastrada com este CPF.' : 'Erro ao salvar os dados.');
+      toast.error(getFriendlyErrorMessage(err, { fallback: 'Não foi possível salvar os dados.', businessMessages: { CPF_DUPLICADO: 'Já existe uma pessoa cadastrada com este CPF.' } }));
     } finally {
       setIsSubmitting(false);
     }
@@ -236,12 +249,31 @@ export const PessoasModule = ({ user, profile }) => {
     } catch (error) {
       console.error(error);
       const messages = { AUTO_INATIVACAO_PROIBIDA: 'Você não pode inativar sua própria Pessoa vinculada.', MOTIVO_OBRIGATORIO: 'Informe o motivo da inativação.' };
-      toast.error(messages[error.message] || 'Erro ao alterar a situação do registro.');
+      toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível alterar a situação do registro.', businessMessages: messages }));
     } finally { setIsSubmitting(false); }
+  };
+
+  const openLifecycle = pessoa => {
+    setItemToDelete(pessoa);
+    setLifecycleReason('');
+    if (getPessoaVinculo(pessoa) !== 'membro') {
+      setLinkedAccessStatus('none');
+      return;
+    }
+    setLinkedAccessStatus('loading');
+    getDoc(getAppDoc('usuario_pessoa_index', pessoa.id))
+      .then(async snapshot => {
+        if (!snapshot.exists() || !snapshot.data().uid) { setLinkedAccessStatus('none'); return; }
+        const userSnapshot = await getDoc(getAppDoc('usuarios', snapshot.data().uid));
+        setLinkedAccessStatus(userSnapshot.exists() && userSnapshot.data().ativo !== false ? 'linked-active' : 'linked-revoked');
+      })
+      .catch(error => { console.error(error); setLinkedAccessStatus('error'); });
   };
 
   const cleanSearch = normalizeSearchText(buscaTexto);
   const effectiveMemberFunctions = getEffectiveMemberFunctions(funcoesMembro);
+  const activePeopleCount = pessoas.filter(p => p.ativo !== false).length;
+  const inactivePeopleCount = pessoas.filter(p => p.ativo === false).length;
   const filtradas = pessoas.filter(p => {
     const mType = abaAtiva === 'todos' || getPessoaVinculo(p) === abaAtiva;
     const mSituation = situacao === 'todos' || (situacao === 'ativos' ? p.ativo !== false : p.ativo === false);
@@ -252,6 +284,8 @@ export const PessoasModule = ({ user, profile }) => {
     return mType && mSituation && mSearch;
   });
   const updateMemberDetails = (field, value) => field === 'funcoesCasa' ? setEFuncoes(value) : setEMemberDetails(current => ({ ...current, [field]: value }));
+
+  if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="as pessoas" onRetry={() => setReloadVersion(value => value + 1)} />;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
@@ -271,6 +305,11 @@ export const PessoasModule = ({ user, profile }) => {
           <UserPlus size={22} />
         </Button>
       </header>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button type="button" onClick={() => setSituacao('ativos')} className={`rounded-2xl border p-4 text-left transition ${situacao === 'ativos' ? 'border-purple-500 bg-purple-50' : 'border-gray-100 bg-white'}`}><span className="block text-2xl font-black text-purple-700">{activePeopleCount}</span><span className="text-xs font-bold uppercase text-gray-500">Registros ativos</span></button>
+        <button type="button" onClick={() => setSituacao('inativos')} className={`rounded-2xl border p-4 text-left transition ${situacao === 'inativos' ? 'border-rose-500 bg-rose-50' : 'border-gray-100 bg-white'}`}><span className="block text-2xl font-black text-rose-700">{inactivePeopleCount}</span><span className="text-xs font-bold uppercase text-gray-500">Histórico de inativos</span></button>
+      </div>
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center bg-white px-4 py-1.5 rounded-2xl border border-gray-100 shadow-sm">
@@ -346,6 +385,7 @@ export const PessoasModule = ({ user, profile }) => {
                       </span>
                     )}
                   </div>
+                  {p.ativo === false && <div className="mt-3 rounded-xl bg-rose-50 p-3 text-xs text-rose-800"><strong>Inativado em:</strong> {p.inativadoEm?.toDate?.().toLocaleString('pt-BR') || 'data não registrada'}{p.motivoInativacao && <p className="mt-1"><strong>Motivo:</strong> {p.motivoInativacao}</p>}</div>}
                 </div>
               </div>
 
@@ -360,7 +400,7 @@ export const PessoasModule = ({ user, profile }) => {
                 </Button>}
                 {canManageLifecycle && <Button
                   variant={p.ativo === false ? 'success' : 'danger'}
-                  onClick={() => setItemToDelete(p)} 
+                  onClick={() => openLifecycle(p)}
                   className="px-4 py-2 h-10 rounded-xl"
                 >
                   {p.ativo === false ? 'Reativar membro' : <><Trash2 size={16} /> Inativar membro</>}
@@ -509,14 +549,20 @@ export const PessoasModule = ({ user, profile }) => {
         onClose={() => setSelectedPerson(null)}
         onHistory={() => { setHistoryPerson(selectedPerson); setSelectedPerson(null); }}
         onEdit={() => { const pessoa = selectedPerson; setSelectedPerson(null); openEdit(pessoa); }}
-        onToggleActive={() => { setItemToDelete(selectedPerson); setSelectedPerson(null); }}
+        onToggleActive={() => { openLifecycle(selectedPerson); setSelectedPerson(null); }}
       />
 
-      <Modal isOpen={!!itemToDelete} onClose={() => { setItemToDelete(null); setLifecycleReason(''); }} title={itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'} maxWidth="max-w-md">
+      <Modal isOpen={!!itemToDelete} onClose={() => { setItemToDelete(null); setLifecycleReason(''); setLinkedAccessStatus('idle'); }} title={itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'} maxWidth="max-w-md">
         <div className="space-y-4">
           <p className="text-sm text-gray-600">Confirme a alteração de situação de <strong>{itemToDelete?.nome}</strong>.</p>
+          {linkedAccessStatus === 'loading' && <p className="rounded-xl bg-gray-50 p-3 text-xs font-bold text-gray-600">Verificando se existe uma conta vinculada...</p>}
+          {itemToDelete?.ativo !== false && linkedAccessStatus === 'linked-active' && <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">Este Membro possui uma conta vinculada. Ao confirmar, o acesso ao sistema será suspenso imediatamente.</p>}
+          {itemToDelete?.ativo === false && linkedAccessStatus === 'linked-active' && <p className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">A conta vinculada está ativa. Ao reativar o Membro, o acesso ao sistema será restabelecido imediatamente.</p>}
+          {itemToDelete?.ativo === false && linkedAccessStatus === 'linked-revoked' && <p className="rounded-xl bg-amber-50 p-3 text-sm font-bold text-amber-800">A conta vinculada está revogada. O Membro será reativado, mas o acesso deverá ser reativado separadamente em Usuários.</p>}
+          {itemToDelete?.ativo !== false && linkedAccessStatus === 'linked-revoked' && <p className="rounded-xl bg-gray-50 p-3 text-sm font-bold text-gray-600">A conta vinculada já está revogada e continuará sem acesso.</p>}
+          {linkedAccessStatus === 'error' && <p className="rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">Não foi possível verificar a conta vinculada. Feche esta janela e tente novamente.</p>}
           {itemToDelete?.ativo !== false && <label className="block text-xs font-black uppercase text-gray-500">Motivo *<textarea value={lifecycleReason} onChange={event => setLifecycleReason(event.target.value)} maxLength={500} rows={4} className="mt-2 w-full rounded-xl bg-gray-50 p-3 text-sm normal-case font-medium outline-none focus:ring-2 focus:ring-purple-300"/></label>}
-          <div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => { setItemToDelete(null); setLifecycleReason(''); }}>Cancelar</Button><Button variant={itemToDelete?.ativo === false ? 'success' : 'danger'} onClick={handleLifecycle} disabled={isSubmitting}>{isSubmitting ? 'Salvando...' : itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'}</Button></div>
+          <div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => { setItemToDelete(null); setLifecycleReason(''); setLinkedAccessStatus('idle'); }}>Cancelar</Button><Button variant={itemToDelete?.ativo === false ? 'success' : 'danger'} onClick={handleLifecycle} disabled={isSubmitting || linkedAccessStatus === 'loading' || linkedAccessStatus === 'error'}>{isSubmitting ? 'Salvando...' : itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'}</Button></div>
         </div>
       </Modal>
       <PessoaHistoricoModal pessoa={historyPerson} profile={profile} onClose={() => setHistoryPerson(null)} />
