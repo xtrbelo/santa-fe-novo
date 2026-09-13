@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, getAppCollection, getAppDoc, onSnapshot, rebuildPessoaSearchIndex, Timestamp, updateDoc } from '../../services/firebase';
+import { addDoc, getAppCollection, getAppDoc, inspectCpfIndexes, inspectVacancyCounters, onSnapshot, rebuildCpfIndex, rebuildPessoaSearchIndex, reconcileAgendaVacancies, Timestamp, updateDoc } from '../../services/firebase';
 import { getPublicosPermitidosTrabalho, servicoControlaVagas } from '../../utils/domain';
 import { getEffectiveMemberFunctions } from '../../utils/pessoaForm';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { DataLoadState } from '../../components/ui/DataLoadState';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
@@ -22,17 +23,30 @@ export const ConfiguracoesModule = ({ user, profile }) => {
   const [itemToDelete, setItemToDelete] = useState(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildReport, setRebuildReport] = useState(null);
+  const [vacancyReport, setVacancyReport] = useState(null);
+  const [checkingVacancies, setCheckingVacancies] = useState(false);
+  const [reconcilingVacancies, setReconcilingVacancies] = useState(false);
+  const [cpfReport, setCpfReport] = useState(null);
+  const [checkingCpf, setCheckingCpf] = useState(false);
+  const [rebuildingCpf, setRebuildingCpf] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
   const toast = useToast();
 
   useEffect(() => {
-    if (!user) return undefined;
+    if (!user) { setLoadingData(false); return undefined; }
+    setLoadingData(true); setLoadError(false);
+    const pending = new Set(['functions', 'works', 'services']);
+    const loaded = key => { pending.delete(key); if (!pending.size) setLoadingData(false); };
+    const failed = error => { console.error(error); setLoadError(true); setLoadingData(false); };
     const unsubs = [
-      onSnapshot(getAppCollection('config_funcoes_membro'), snap => setFuncoes(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(getAppCollection('config_eventos'), snap => setTrabalhos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false))),
-      onSnapshot(getAppCollection('config_servicos'), snap => setServicos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false)))
+      onSnapshot(getAppCollection('config_funcoes_membro'), snap => { setFuncoes(snap.docs.map(d => ({ id: d.id, ...d.data() }))); loaded('functions'); }, failed),
+      onSnapshot(getAppCollection('config_eventos'), snap => { setTrabalhos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false)); loaded('works'); }, failed),
+      onSnapshot(getAppCollection('config_servicos'), snap => { setServicos(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.ativo !== false)); loaded('services'); }, failed)
     ];
     return () => unsubs.forEach(unsub => unsub());
-  }, [user]);
+  }, [user, reloadVersion]);
 
   const metadata = () => ({ ativo: true, criadoEm: Timestamp.now(), criadoPor: user.uid, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
   const toggle = (list, id) => list.includes(id) ? list.filter(item => item !== id) : [...list, id];
@@ -53,8 +67,13 @@ export const ConfiguracoesModule = ({ user, profile }) => {
   };
   const deactivate = async () => {
     if (!itemToDelete) return;
-    await updateDoc(getAppDoc(itemToDelete.collection, itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
-    toast.success('Configuração desativada.'); setItemToDelete(null);
+    try {
+      await updateDoc(getAppDoc(itemToDelete.collection, itemToDelete.id), { ativo: false, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid });
+      toast.success('Configuração desativada.'); setItemToDelete(null);
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível desativar a configuração.');
+    }
   };
 
   const rebuildIndex = async () => {
@@ -83,7 +102,62 @@ export const ConfiguracoesModule = ({ user, profile }) => {
     }
   };
 
+  const inspectAllVacancies = async () => {
+    let cursor = null; const report = { analyzed: 0, divergences: [], skippedClosed: 0 };
+    do {
+      const page = await inspectVacancyCounters({ pageSize: 25, cursor });
+      report.analyzed += page.analyzed; report.divergences.push(...page.divergences); report.skippedClosed += page.skippedClosed; cursor = page.nextCursor;
+    } while (cursor);
+    return report;
+  };
+  const checkVacancies = async () => {
+    setCheckingVacancies(true);
+    try { const report = await inspectAllVacancies(); setVacancyReport(report); toast.success(report.divergences.length ? `${report.divergences.length} agenda(s) com divergência.` : 'Contadores de vagas conferidos. Nenhuma divergência encontrada.'); }
+    catch (error) { console.error(error); toast.error('Não foi possível verificar os contadores de vagas.'); }
+    finally { setCheckingVacancies(false); }
+  };
+  const reconcileVacancies = async () => {
+    if (!vacancyReport?.divergences.length || !window.confirm(`Corrigir os contadores de ${vacancyReport.divergences.length} agenda(s)?\n\nCada correção será recalculada e auditada.`)) return;
+    setReconcilingVacancies(true); let corrected = 0; let errors = 0;
+    for (const item of vacancyReport.divergences) {
+      try { const result = await reconcileAgendaVacancies({ agendaId: item.agendaId, userId: user.uid }); if (result.updated) corrected += 1; }
+      catch (error) { console.error(error); errors += 1; }
+    }
+    try { const refreshed = await inspectAllVacancies(); setVacancyReport({ ...refreshed, corrected, errors }); }
+    catch (error) { console.error(error); setVacancyReport(current => ({ ...current, corrected, errors })); }
+    toast[errors ? 'error' : 'success'](errors ? `${corrected} agenda(s) corrigida(s) e ${errors} não puderam ser atualizada(s). Verifique novamente.` : `${corrected} agenda(s) corrigida(s) com auditoria.`);
+    setReconcilingVacancies(false);
+  };
+
+  const inspectAllCpfIndexes = async () => {
+    let cursor = null; const report = { analyzed: 0, correct: 0, missing: [], conflicts: [], invalid: 0, withoutCpf: 0 };
+    do {
+      const page = await inspectCpfIndexes({ pageSize: 100, cursor });
+      report.analyzed += page.analyzed; report.correct += page.correct; report.missing.push(...page.missing); report.conflicts.push(...page.conflicts); report.invalid += page.invalid; report.withoutCpf += page.withoutCpf; cursor = page.nextCursor;
+    } while (cursor);
+    return report;
+  };
+  const checkCpfIndexes = async () => {
+    setCheckingCpf(true);
+    try { const report = await inspectAllCpfIndexes(); setCpfReport(report); toast.success(report.missing.length ? `${report.missing.length} índice(s) de CPF pendente(s).` : 'Índices de CPF conferidos.'); }
+    catch (error) { console.error(error); toast.error('Não foi possível verificar os índices de CPF.'); }
+    finally { setCheckingCpf(false); }
+  };
+  const repairCpfIndexes = async () => {
+    if (!cpfReport?.missing.length || !window.confirm(`Criar ${cpfReport.missing.length} índice(s) de CPF ausente(s)?\n\nConflitos e CPFs inválidos não serão alterados.`)) return;
+    setRebuildingCpf(true); let updated = 0; let errors = 0;
+    for (const item of cpfReport.missing) {
+      try { const result = await rebuildCpfIndex({ pessoaId: item.pessoaId, userId: user.uid }); if (result.updated) updated += 1; }
+      catch (error) { console.error(error); errors += 1; }
+    }
+    try { const refreshed = await inspectAllCpfIndexes(); setCpfReport({ ...refreshed, updated, errors }); }
+    catch (error) { console.error(error); setCpfReport(current => ({ ...current, updated, errors })); }
+    toast[errors ? 'error' : 'success'](errors ? `${updated} índice(s) criado(s) e ${errors} não puderam ser atualizados.` : `${updated} índice(s) de CPF criado(s) com auditoria.`);
+    setRebuildingCpf(false);
+  };
+
   const effectiveFunctions = getEffectiveMemberFunctions(funcoes);
+  if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="as configurações" onRetry={() => setReloadVersion(value => value + 1)} />;
   return <div className="space-y-6 pb-10">
     <header><h2 className="text-3xl font-black uppercase italic">Configurações</h2><p className="text-sm text-gray-500">Modelo operacional da Casa</p></header>
     <Card className="space-y-4"><h3 className="font-black uppercase text-purple-700 flex gap-2"><Users size={18}/> 1. Vínculos e Funções da Casa</h3>
@@ -114,6 +188,8 @@ export const ConfiguracoesModule = ({ user, profile }) => {
         <span className="bg-emerald-50 p-2 rounded-lg">Já corretas<br/><strong>{rebuildReport.correct}</strong></span>
         <span className="bg-red-50 p-2 rounded-lg">Erros<br/><strong>{rebuildReport.errors}</strong></span>
       </div>}
+      <div className="border-t border-gray-100 pt-4 space-y-3"><p className="text-sm text-gray-600">Confere se as vagas ocupadas correspondem aos atendimentos ativos. A verificação não altera dados.</p><Button variant="secondary" onClick={checkVacancies} disabled={checkingVacancies || reconcilingVacancies} className="w-full">{checkingVacancies ? 'Verificando vagas...' : 'Verificar contadores de vagas'}</Button>{vacancyReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs"><p><strong>{vacancyReport.analyzed}</strong> agenda(s) analisada(s) · <strong>{vacancyReport.divergences.length}</strong> divergência(s){vacancyReport.skippedClosed ? ` · ${vacancyReport.skippedClosed} encerrada(s) preservada(s)` : ''}</p>{vacancyReport.corrected !== undefined && <p className="font-bold text-emerald-700">Última correção: {vacancyReport.corrected} corrigida(s) · {vacancyReport.errors} erro(s).</p>}{vacancyReport.divergences.slice(0, 10).map(item => <p key={item.agendaId} className="rounded-lg bg-white p-2"><strong>{item.tipo}</strong> · {item.data?.toDate?.().toLocaleDateString('pt-BR') || 'data indisponível'}<br/>Registrado: {Object.values(item.current).reduce((sum, value) => sum + Number(value || 0), 0)} · Encontrado: {Object.values(item.expected).reduce((sum, value) => sum + Number(value || 0), 0)}</p>)}{vacancyReport.divergences.length > 10 && <p>Mais {vacancyReport.divergences.length - 10} divergência(s) não exibida(s).</p>}{vacancyReport.divergences.length > 0 && <Button variant="warning" onClick={reconcileVacancies} disabled={reconcilingVacancies} className="w-full">{reconcilingVacancies ? 'Corrigindo vagas...' : 'Corrigir divergências'}</Button>}</div>}</div>
+      <div className="border-t border-gray-100 pt-4 space-y-3"><p className="text-sm text-gray-600">Localiza Pessoas antigas com CPF válido e sem índice. A verificação não altera dados.</p><Button variant="secondary" onClick={checkCpfIndexes} disabled={checkingCpf || rebuildingCpf} className="w-full">{checkingCpf ? 'Verificando CPFs...' : 'Verificar índices de CPF'}</Button>{cpfReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs"><p><strong>{cpfReport.analyzed}</strong> pessoa(s) analisada(s) · <strong>{cpfReport.missing.length}</strong> ausente(s) · <strong>{cpfReport.conflicts.length}</strong> conflito(s) · <strong>{cpfReport.invalid}</strong> CPF(s) inválido(s) · <strong>{cpfReport.withoutCpf}</strong> sem CPF</p>{cpfReport.updated !== undefined && <p className="font-bold text-emerald-700">Última correção: {cpfReport.updated} criado(s) · {cpfReport.errors} erro(s).</p>}{cpfReport.conflicts.length > 0 && <p className="font-bold text-rose-700">Conflitos preservados para análise manual; nenhum índice existente será sobrescrito.</p>}{cpfReport.missing.length > 0 && <Button variant="warning" onClick={repairCpfIndexes} disabled={rebuildingCpf} className="w-full">{rebuildingCpf ? 'Criando índices...' : 'Criar índices ausentes'}</Button>}</div>}</div>
     </Card>}
     <ConfirmDialog isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={deactivate} title="Desativar configuração" message="Registros existentes serão preservados." confirmText="Desativar"/>
   </div>;

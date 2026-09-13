@@ -1,46 +1,66 @@
 import React, { useState, useEffect } from 'react';
 import { 
   getAppCollection, 
-  onSnapshot 
+  onSnapshot,
+  query,
+  Timestamp,
+  where,
 } from '../../services/firebase';
 import { AtendimentoDiaCard } from './AtendimentoDiaCard';
 import { AlertCircle } from 'lucide-react';
+import { Button } from '../../components/ui/Button';
 
 export const FluxoModule = ({ user, profile }) => {
   const [agendasHoje, setAgendasHoje] = useState([]);
   const [servicos, setServicos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
     if (!user) return;
-
-    const isToday = (ts) => {
-      if (!ts) return false;
-      const d = ts.toDate();
-      const now = new Date();
-      return (
-        d.getDate() === now.getDate() &&
-        d.getMonth() === now.getMonth() &&
-        d.getFullYear() === now.getFullYear()
-      );
+    setLoading(true);
+    setLoadError('');
+    let agendasReady = false;
+    let servicesReady = false;
+    const markReady = () => { if (agendasReady && servicesReady) setLoading(false); };
+    const handleLoadError = error => {
+      console.error(error);
+      setLoadError('Não foi possível acompanhar o fluxo em tempo real.');
+      setLoading(false);
     };
 
-    const unsubA = onSnapshot(getAppCollection('agendas'), (s) => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const startOfTomorrow = new Date(startOfToday);
+    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+
+    const todayQuery = query(
+      getAppCollection('agendas'),
+      where('data', '>=', Timestamp.fromDate(startOfToday)),
+      where('data', '<', Timestamp.fromDate(startOfTomorrow))
+    );
+    const unsubA = onSnapshot(todayQuery, (s) => {
       setAgendasHoje(
         s.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(a => isToday(a.data) && !['Concluída', 'Cancelada'].includes(a.status))
+          .filter(a => !['Concluída', 'Cancelada'].includes(a.status))
       );
-    });
+      agendasReady = true;
+      markReady();
+    }, handleLoadError);
 
     const unsubS = onSnapshot(getAppCollection('config_servicos'), (s) => {
       setServicos(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(item => item.ativo !== false));
-    });
+      servicesReady = true;
+      markReady();
+    }, handleLoadError);
 
     return () => {
       unsubA();
       unsubS();
     };
-  }, [user]);
+  }, [user, reloadVersion]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
@@ -54,7 +74,15 @@ export const FluxoModule = ({ user, profile }) => {
       </header>
 
       <div className="space-y-6">
-        {agendasHoje.length === 0 ? (
+        {loadError ? (
+          <div role="alert" className="text-center py-16 bg-white rounded-3xl border border-rose-100">
+            <AlertCircle className="mx-auto text-rose-500 mb-3" size={42} />
+            <p className="text-rose-700 font-black text-sm">{loadError}</p>
+            <Button variant="secondary" className="mx-auto mt-4" onClick={() => setReloadVersion(value => value + 1)}>Tentar novamente</Button>
+          </div>
+        ) : loading ? (
+          <div className="text-center py-16 bg-white rounded-3xl text-sm font-bold text-gray-400" role="status">Carregando fluxo do dia...</div>
+        ) : agendasHoje.length === 0 ? (
           <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200">
             <AlertCircle className="mx-auto text-amber-400 mb-3" size={42} />
             <p className="text-gray-500 font-black uppercase text-sm tracking-wider">

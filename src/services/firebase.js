@@ -1,7 +1,4 @@
-import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, 
-  connectAuthEmulator,
   GoogleAuthProvider, 
   isSignInWithEmailLink,
   sendEmailVerification,
@@ -15,8 +12,6 @@ import {
   updatePassword,
 } from 'firebase/auth';
 import { 
-  getFirestore, 
-  connectFirestoreEmulator,
   collection, 
   doc, 
   addDoc, 
@@ -27,6 +22,7 @@ import {
   getDoc,
   setDoc,
   getDocs,
+  getCountFromServer,
   runTransaction,
   writeBatch,
   query,
@@ -37,6 +33,7 @@ import {
   documentId,
   deleteField
 } from 'firebase/firestore';
+import { app, appId, auth, db, firebaseConfig, getAppCollection, getAppDoc, isFirebaseConfigured } from './firebaseCore.js';
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
 import { buildPessoaPayload, getEffectiveMemberFunctions, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
@@ -47,86 +44,9 @@ import { validateCPF } from '../utils/formatters.js';
 import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedUser, validateAccessAuthorization } from '../utils/accessAuthorization.js';
 import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
 import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
+import { inspectAgendaOccupancy, vacancyMapsEqual } from '../utils/vacancyReconciliation.js';
 import { LIFECYCLE_AUDIT_TYPES, requireLifecycleReason } from '../utils/lifecycle.js';
 import { getAgendaSchedulingKey } from '../utils/agendaScheduling.js';
-
-const hasViteEnv = typeof import.meta.env === 'object';
-const viteEnv = hasViteEnv ? {
-  mode: import.meta.env.MODE,
-  dev: import.meta.env.DEV,
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
-  useFirebaseEmulators: import.meta.env.VITE_USE_FIREBASE_EMULATORS,
-  useFirestoreEmulator: import.meta.env.VITE_USE_FIRESTORE_EMULATOR,
-} : {};
-
-export const firebaseConfig = {
-  apiKey: viteEnv.apiKey,
-  authDomain: viteEnv.authDomain,
-  projectId: viteEnv.projectId,
-  storageBucket: viteEnv.storageBucket,
-  messagingSenderId: viteEnv.messagingSenderId,
-  appId: viteEnv.appId,
-  measurementId: viteEnv.measurementId,
-};
-
-const requiredFirebaseConfig = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
-const expectedProjectIdByMode = { hml: 'santa-fe-v2-hml', production: 'santa-fe-v2-prod' };
-
-if (hasViteEnv) {
-  const missing = requiredFirebaseConfig.filter(key => !firebaseConfig[key]);
-  if (missing.length) throw new Error(`FIREBASE_CONFIG_INCOMPLETA:${missing.join(',')}`);
-  const expectedProjectId = expectedProjectIdByMode[viteEnv.mode];
-  if (expectedProjectId && firebaseConfig.projectId !== expectedProjectId) {
-    throw new Error(`FIREBASE_PROJECT_ID_INVALIDO:${viteEnv.mode}`);
-  }
-}
-
-export const isFirebaseConfigured = requiredFirebaseConfig.every(key => !!firebaseConfig[key]);
-
-export let app = null;
-export let auth = null;
-export let db = null;
-
-if (isFirebaseConfigured) {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  const useAllFirebaseEmulators = viteEnv.dev === true && viteEnv.useFirebaseEmulators === 'true';
-  const useFirestoreEmulator = viteEnv.dev === true
-    && (useAllFirebaseEmulators || viteEnv.useFirestoreEmulator === 'true');
-  if (useAllFirebaseEmulators && !globalThis.__santaFeAuthEmulatorConnected) {
-    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-    globalThis.__santaFeAuthEmulatorConnected = true;
-  }
-  if (useFirestoreEmulator && !globalThis.__santaFeFirestoreEmulatorConnected) {
-    connectFirestoreEmulator(db, '127.0.0.1', 8080);
-    globalThis.__santaFeFirestoreEmulatorConnected = true;
-  }
-}
-
-export const appId = firebaseConfig.projectId || 'santa-fe-node-test';
-
-/**
- * Retorna a referência da coleção padronizada
- */
-export const getAppCollection = (collName) => {
-  if (!db) throw new Error("Firestore não inicializado");
-  return collection(db, 'artifacts', appId, 'public', 'data', collName);
-};
-
-/**
- * Retorna a referência de um documento específico
- */
-export const getAppDoc = (collName, docId) => {
-  if (!db) throw new Error("Firestore não inicializado");
-  return doc(db, 'artifacts', appId, 'public', 'data', collName, docId);
-};
 
 const getDataCollection = (firestore, collName) => collection(firestore, 'artifacts', appId, 'public', 'data', collName);
 const getDataDoc = (firestore, collName, docId) => doc(firestore, 'artifacts', appId, 'public', 'data', collName, docId);
@@ -414,6 +334,53 @@ export const rebuildPessoaSearchIndex = async ({ pageSize = 200, cursor = null }
   };
 };
 
+export const inspectCpfIndexes = async ({ pageSize = 100, cursor = null } = {}, firestore = db) => {
+  const effectivePageSize = Math.min(Math.max(1, pageSize), 200);
+  const constraints = [orderBy(documentId()), limit(effectivePageSize)];
+  if (cursor) constraints.splice(1, 0, startAfter(cursor));
+  const snapshot = await getDocs(query(getDataCollection(firestore, 'pessoas'), ...constraints));
+  const inspected = await Promise.all(snapshot.docs.map(async item => {
+    const pessoa = item.data();
+    const cpf = normalizeSearchDigits(pessoa.cpf);
+    if (!cpf) return { status: 'sem_cpf' };
+    if (!validateCPF(cpf)) return { status: 'cpf_invalido', pessoaId: item.id, nome: pessoa.nome || 'Pessoa sem nome' };
+    const indexSnapshot = await getDoc(getDataDoc(firestore, 'cpf_index', cpf));
+    if (!indexSnapshot.exists()) return { status: 'ausente', pessoaId: item.id, nome: pessoa.nome || 'Pessoa sem nome', cpf };
+    if (indexSnapshot.data().pessoaId !== item.id) return { status: 'conflito', pessoaId: item.id, nome: pessoa.nome || 'Pessoa sem nome', cpf };
+    return { status: 'correto' };
+  }));
+  return {
+    analyzed: inspected.length,
+    correct: inspected.filter(item => item.status === 'correto').length,
+    missing: inspected.filter(item => item.status === 'ausente'),
+    conflicts: inspected.filter(item => item.status === 'conflito'),
+    invalid: inspected.filter(item => item.status === 'cpf_invalido').length,
+    withoutCpf: inspected.filter(item => item.status === 'sem_cpf').length,
+    nextCursor: snapshot.size === effectivePageSize ? snapshot.docs.at(-1).id : null,
+  };
+};
+
+export const rebuildCpfIndex = async ({ pessoaId, userId }, firestore = db) => {
+  const pessoaRef = getDataDoc(firestore, 'pessoas', pessoaId);
+  const executorRef = getDataDoc(firestore, 'usuarios', userId);
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  return runTransaction(firestore, async transaction => {
+    const [pessoaSnapshot, executorSnapshot] = await Promise.all([transaction.get(pessoaRef), transaction.get(executorRef)]);
+    if (!executorSnapshot.exists() || executorSnapshot.data().role !== 'admin' || executorSnapshot.data().ativo === false) throw new Error('ADMIN_OBRIGATORIO');
+    if (!pessoaSnapshot.exists()) throw new Error('PESSOA_NAO_ENCONTRADA');
+    const cpf = normalizeSearchDigits(pessoaSnapshot.data().cpf);
+    if (!cpf || !validateCPF(cpf)) throw new Error('CPF_INVALIDO');
+    const indexRef = getDataDoc(firestore, 'cpf_index', cpf);
+    const indexSnapshot = await transaction.get(indexRef);
+    if (indexSnapshot.exists() && indexSnapshot.data().pessoaId !== pessoaId) throw new Error('CPF_INDEX_CONFLITO');
+    if (indexSnapshot.exists()) return { updated: false };
+    const now = Timestamp.now();
+    transaction.set(indexRef, { pessoaId, criadoEm: now });
+    transaction.set(auditRef, { tipo: 'CPF_INDEX_RECONSTRUIDO', pessoaId, executadoPor: userId, criadoEm: now });
+    return { updated: true };
+  });
+};
+
 const ACCESS_ROLES = ['admin', 'gestor', 'atendimento'];
 const isActiveMember = pessoa => pessoa?.ativo !== false && getPessoaVinculo(pessoa) === 'membro';
 
@@ -663,17 +630,13 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   const activeAppointments = existingSnapshot.docs.map(item => item.data()).filter(item => !['Cancelado', 'Reagendado'].includes(item.status));
   if (activeAppointments.some(item => item.pessoaBaseId === pessoa.id)) throw new Error('AGENDAMENTO_DUPLICADO');
 
-  const realOccupancy = {};
-  activeAppointments.forEach(item => getServicosAtivosAtendimento(item).forEach(serviceId => {
-    realOccupancy[serviceId] = (realOccupancy[serviceId] || 0) + 1;
-  }));
-
   const agendaRef = getDataDoc(firestore, 'agendas', agenda.id);
   const pessoaRef = requireActivePessoa ? getDataDoc(firestore, 'pessoas', pessoa.id) : null;
   const appointmentRef = doc(getDataCollection(firestore, 'consulentes'));
   const activeRef = getDataDoc(firestore, 'agendamentos_ativos', `${agenda.id}_${pessoa.id}`);
+  const historyRef = getDataDoc(firestore, 'agenda_historico_index', agenda.id);
   await runTransaction(firestore, async transaction => {
-    const [agendaSnapshot, activeSnapshot, pessoaSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(activeRef), pessoaRef ? transaction.get(pessoaRef) : null]);
+    const [agendaSnapshot, activeSnapshot, pessoaSnapshot, historySnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(activeRef), pessoaRef ? transaction.get(pessoaRef) : null, transaction.get(historyRef)]);
     if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
     if (['Concluída', 'Cancelada'].includes(agendaSnapshot.data().status)) throw new Error('AGENDA_INDISPONIVEL');
     if (activeSnapshot.exists()) throw new Error('AGENDAMENTO_DUPLICADO');
@@ -690,7 +653,7 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
     const occupied = { ...(agendaData.vagasOcupadas || {}) };
     servicos.filter(servicoControlaVagas).forEach(service => {
       const total = Number(agendaData.vagasTotais?.[service.id] || 0);
-      const current = Math.max(Number(occupied[service.id] || 0), Number(realOccupancy[service.id] || 0));
+      const current = Number(occupied[service.id] || 0);
       if (current >= total) throw new Error(`SEM_VAGA:${service.nome}`);
       occupied[service.id] = current + 1;
     });
@@ -706,6 +669,7 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
       agendaId: agenda.id, pessoaBaseId: pessoa.id, agendamentoId: appointmentRef.id,
       criadoEm: now, criadoPor: userId
     });
+    if (!historySnapshot.exists()) transaction.set(historyRef, { agendaId: agenda.id, primeiroAgendamentoId: appointmentRef.id, criadoEm: now, criadoPor: userId });
     transaction.update(agendaRef, { vagasOcupadas: occupied, atualizadoEm: now, atualizadoPor: userId });
   });
   return appointmentRef.id;
@@ -839,7 +803,7 @@ export const realocarAtendimento = async ({
     const destinationAgenda = destinationAgendaSnapshot.data();
     if (origin.agendaId !== origemAgendaId) throw new Error('DESTINO_INVALIDO');
     if (origin.status !== 'Agendado') throw new Error('STATUS_NAO_REALOCAVEL');
-    if (['Concluída', 'Cancelada'].includes(destinationAgenda.status) || isPastAgenda(destinationAgenda)) throw new Error('AGENDA_DESTINO_INDISPONIVEL');
+    if (destinationAgenda.ativo === false || ['Concluída', 'Cancelada'].includes(destinationAgenda.status) || isPastAgenda(destinationAgenda)) throw new Error('AGENDA_DESTINO_INDISPONIVEL');
 
     const activeIds = getServicosAtivosAtendimento(origin);
     selectedIds.forEach(serviceId => {
@@ -851,11 +815,14 @@ export const realocarAtendimento = async ({
     const personRef = getDataDoc(firestore, 'pessoas', origin.pessoaBaseId);
     const originLockRef = getDataDoc(firestore, 'agendamentos_ativos', `${origemAgendaId}_${origin.pessoaBaseId}`);
     const destinationLockRef = getDataDoc(firestore, 'agendamentos_ativos', `${destinoAgendaId}_${origin.pessoaBaseId}`);
-    const [personSnapshot, originLockSnapshot, destinationLockSnapshot] = await Promise.all([
-      transaction.get(personRef), transaction.get(originLockRef), transaction.get(destinationLockRef)
+    const destinationHistoryRef = getDataDoc(firestore, 'agenda_historico_index', destinoAgendaId);
+    const [personSnapshot, originLockSnapshot, destinationLockSnapshot, destinationHistorySnapshot] = await Promise.all([
+      transaction.get(personRef), transaction.get(originLockRef), transaction.get(destinationLockRef), transaction.get(destinationHistoryRef)
     ]);
     if (destinationLockSnapshot.exists()) throw new Error('DESTINO_POSSUI_ATENDIMENTO');
+    if (originLockSnapshot.exists() && originLockSnapshot.data().agendamentoId !== origemAgendamentoId) throw new Error('LOCK_ORIGEM_DIVERGENTE');
     const person = personSnapshot.exists() ? personSnapshot.data() : origin;
+    if (personSnapshot.exists() && person.ativo === false) throw new Error('PESSOA_INATIVA');
     const destinationPersonName = getNomePessoaAtendimento(person, origin);
     if (!destinationPersonName) throw new Error('PESSOA_SEM_NOME');
     const permittedTypes = getAgendaPublicosPermitidos(destinationAgenda);
@@ -919,6 +886,7 @@ export const realocarAtendimento = async ({
       agendaId: destinoAgendaId, pessoaBaseId: origin.pessoaBaseId,
       agendamentoId: destinationAppointmentRef.id, criadoEm: now, criadoPor: userId
     });
+    if (!destinationHistorySnapshot.exists()) transaction.set(destinationHistoryRef, { agendaId: destinoAgendaId, primeiroAgendamentoId: destinationAppointmentRef.id, criadoEm: now, criadoPor: userId });
     if (complete && originLockSnapshot.exists() && originLockSnapshot.data().agendamentoId === origemAgendamentoId) {
       transaction.delete(originLockRef);
     }
@@ -997,6 +965,46 @@ const getAgendaAppointments = async (firestore, agendaId) => {
   return snapshot.docs.map(item => ({ id: item.id, ...item.data() }));
 };
 
+export const inspectVacancyCounters = async ({ pageSize = 25, cursor = null } = {}, firestore = db) => {
+  const effectivePageSize = Math.min(Math.max(1, pageSize), 50);
+  const constraints = [orderBy(documentId()), limit(effectivePageSize)];
+  if (cursor) constraints.splice(1, 0, startAfter(cursor));
+  const snapshot = await getDocs(query(getDataCollection(firestore, 'agendas'), ...constraints));
+  const inspected = await Promise.all(snapshot.docs.map(async item => {
+    const agenda = { id: item.id, ...item.data() };
+    const appointments = await getAgendaAppointments(firestore, item.id);
+    return { agendaId: item.id, data: agenda.data || null, tipo: agenda.tipoTrabalhoNome || agenda.tipo || 'Trabalho não informado', status: agenda.status || 'Aberta', ...inspectAgendaOccupancy(agenda, appointments) };
+  }));
+  return {
+    analyzed: inspected.length,
+    divergences: inspected.filter(item => item.divergent && !['Concluída', 'Cancelada'].includes(item.status)),
+    skippedClosed: inspected.filter(item => item.divergent && ['Concluída', 'Cancelada'].includes(item.status)).length,
+    nextCursor: snapshot.size === effectivePageSize ? snapshot.docs.at(-1).id : null,
+  };
+};
+
+export const reconcileAgendaVacancies = async ({ agendaId, userId }, firestore = db) => {
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const [agendaSnapshot, appointments] = await Promise.all([getDoc(agendaRef), getAgendaAppointments(firestore, agendaId)]);
+  if (!agendaSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+  const agenda = agendaSnapshot.data();
+  if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_ENCERRADA');
+  const inspection = inspectAgendaOccupancy(agenda, appointments);
+  if (!inspection.divergent) return { updated: false, before: inspection.current, after: inspection.expected };
+  const auditRef = doc(getDataCollection(firestore, 'auditoria'));
+  await runTransaction(firestore, async transaction => {
+    const currentSnapshot = await transaction.get(agendaRef);
+    if (!currentSnapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    const current = currentSnapshot.data();
+    if (['Concluída', 'Cancelada'].includes(current.status)) throw new Error('AGENDA_ENCERRADA');
+    if (!vacancyMapsEqual(current.vagasOcupadas || {}, inspection.current)) throw new Error('AGENDA_ALTERADA_REPETIR');
+    const now = Timestamp.now();
+    transaction.update(agendaRef, { vagasOcupadas: inspection.expected, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(auditRef, { tipo: 'VAGAS_RECONCILIADAS', agendaId, vagasAntes: inspection.current, vagasDepois: inspection.expected, executadoPor: userId, criadoEm: now });
+  });
+  return { updated: true, before: inspection.current, after: inspection.expected };
+};
+
 export const editarAgenda = async ({ agendaId, changes, userId }, firestore = db) => {
   const appointments = await getAgendaAppointments(firestore, agendaId);
   const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
@@ -1063,9 +1071,11 @@ export const excluirAgendaVazia = async ({ agendaId, userId }, firestore = db) =
   const appointments = await getAgendaAppointments(firestore, agendaId);
   if (appointments.length) throw new Error('AGENDA_POSSUI_HISTORICO');
   const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const historyRef = getDataDoc(firestore, 'agenda_historico_index', agendaId);
   await runTransaction(firestore, async transaction => {
-    const snapshot = await transaction.get(agendaRef);
+    const [snapshot, historySnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(historyRef)]);
     if (!snapshot.exists()) throw new Error('AGENDA_NAO_ENCONTRADA');
+    if (historySnapshot.exists()) throw new Error('AGENDA_POSSUI_HISTORICO');
     const now = Timestamp.now();
     transaction.delete(agendaRef);
     transaction.set(createAuditRef(firestore), { tipo: 'AGENDA_EXCLUIDA', agendaId, executadoPor: userId, criadoEm: now });
@@ -1073,6 +1083,14 @@ export const excluirAgendaVazia = async ({ agendaId, userId }, firestore = db) =
 };
 
 export {
+  app,
+  appId,
+  auth,
+  db,
+  firebaseConfig,
+  getAppCollection,
+  getAppDoc,
+  isFirebaseConfigured,
   GoogleAuthProvider,
   isSignInWithEmailLink,
   sendEmailVerification,
@@ -1094,11 +1112,13 @@ export {
   getDoc,
   setDoc,
   getDocs,
+  getCountFromServer,
   runTransaction,
   writeBatch,
   query,
   where,
   limit,
   orderBy,
+  startAfter,
   deleteField
 };

@@ -61,6 +61,9 @@ test('acesso direto a módulo restrito usa a mesma matriz da navegação', () =>
   assert.equal(getModuleFromPathname('/usuarios'), MODULES.USERS);
   assert.equal(getModulePath(MODULES.USERS), '/usuarios');
   assert.equal(getModuleFromPathname('/'), MODULES.DASHBOARD);
+  assert.equal(getModuleFromPathname('/endereco-invalido'), MODULES.DASHBOARD);
+  assert.equal(getModulePath('modulo-invalido'), '/');
+  assert.match(appSource, /history\.replaceState/);
   assert.match(appSource, /popstate/);
 });
 

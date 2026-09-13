@@ -37,6 +37,19 @@ export const MODULES = Object.freeze({
   MY_REGISTRATION: 'meu-cadastro',
 });
 
+export const MODULE_LABELS = Object.freeze({
+  [MODULES.DASHBOARD]: 'Painel',
+  [MODULES.AGENDAS]: 'Agendamentos',
+  [MODULES.PROGRAMACAO]: 'Programação',
+  [MODULES.ATTENDANCE]: 'Fluxo do Dia',
+  [MODULES.PEOPLE]: 'Pessoas',
+  [MODULES.MEMBER_INVITES]: 'Convites',
+  [MODULES.MEMBER_REGISTRATIONS]: 'Autocadastros',
+  [MODULES.USERS]: 'Usuários',
+  [MODULES.CONFIG]: 'Configurações',
+  [MODULES.MY_REGISTRATION]: 'Meu Cadastro',
+});
+
 export const MODULE_PERMISSIONS = Object.freeze({
   [MODULES.DASHBOARD]: PERMISSIONS.DASHBOARD_VIEW,
   [MODULES.AGENDAS]: PERMISSIONS.AGENDA_VIEW,
@@ -98,7 +111,7 @@ export const getAllowedModules = profile => Object.keys(MODULE_PERMISSIONS)
 
 export const getModuleFromPathname = pathname => {
   const segment = String(pathname || '').split('/').filter(Boolean)[0];
-  return segment || MODULES.DASHBOARD;
+  return Object.values(MODULES).includes(segment) ? segment : MODULES.DASHBOARD;
 };
 
-export const getModulePath = moduleId => moduleId === MODULES.DASHBOARD ? '/' : `/${moduleId}`;
+export const getModulePath = moduleId => moduleId !== MODULES.DASHBOARD && Object.values(MODULES).includes(moduleId) ? `/${moduleId}` : '/';

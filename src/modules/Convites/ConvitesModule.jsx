@@ -4,6 +4,7 @@ import { ConvidarMembroModal } from '../../components/pessoas/ConvidarMembroModa
 import { GerenciarConviteModal } from '../../components/pessoas/GerenciarConviteModal';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
+import { DataLoadState } from '../../components/ui/DataLoadState';
 import { useToast } from '../../components/ui/useToast';
 import { getAppCollection, onSnapshot } from '../../services/firebase';
 import { maskCPF } from '../../utils/formatters';
@@ -20,15 +21,25 @@ export function ConvitesModule({ user, profile }) {
   const [selectedInvite, setSelectedInvite] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [userNames, setUserNames] = useState({});
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
   const toast = useToast();
-  useEffect(() => onSnapshot(getAppCollection('convites_membro'), snapshot => setInvites(snapshot.docs.map(item => ({ id: item.id, ...item.data() })).sort((a, b) => (b.criadoEm?.toMillis?.() || 0) - (a.criadoEm?.toMillis?.() || 0)))), []);
   useEffect(() => {
+    setLoadingData(true); setLoadError(false);
+    const pending = new Set(['invites', 'names']);
+    const loaded = key => { pending.delete(key); if (!pending.size) setLoadingData(false); };
+    const failed = error => { console.error(error); setLoadError(true); setLoadingData(false); };
+    const invitationsUnsub = onSnapshot(getAppCollection('convites_membro'), snapshot => { setInvites(snapshot.docs.map(item => ({ id: item.id, ...item.data() })).sort((a, b) => (b.criadoEm?.toMillis?.() || 0) - (a.criadoEm?.toMillis?.() || 0))); loaded('invites'); }, failed);
     const ownName = String(profile?.nome || '').trim();
-    if (profile?.role !== 'admin') { setUserNames(ownName ? { [user.uid]: ownName } : {}); return undefined; }
-    return onSnapshot(getAppCollection('usuarios'), snapshot => setUserNames(Object.fromEntries(snapshot.docs.map(item => [item.id, String(item.data().nome || '').trim()]).filter(([, nome]) => nome))));
-  }, [profile?.nome, profile?.role, user.uid]);
+    let usersUnsub = () => {};
+    if (profile?.role !== 'admin') { setUserNames(ownName ? { [user.uid]: ownName } : {}); loaded('names'); }
+    else usersUnsub = onSnapshot(getAppCollection('usuarios'), snapshot => { setUserNames(Object.fromEntries(snapshot.docs.map(item => [item.id, String(item.data().nome || '').trim()]).filter(([, nome]) => nome))); loaded('names'); }, failed);
+    return () => { invitationsUnsub(); usersUnsub(); };
+  }, [profile?.nome, profile?.role, reloadVersion, user.uid]);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(timer); }, []);
   const filtered = useMemo(() => invites.filter(invite => filter === 'todos' || getMemberInviteEffectiveStatus(invite, now) === filter), [filter, invites, now]);
+  if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="os convites" onRetry={() => setReloadVersion(value => value + 1)} />;
   return <div className="space-y-6 pb-10">
     <header className="flex items-end justify-between gap-4"><div><h2 className="text-2xl font-black uppercase italic tracking-tighter text-gray-900 sm:text-3xl">Convites de Membros</h2><p className="mt-1 text-sm font-medium text-gray-500">Convites individuais para futuro autocadastro</p></div><Button variant="purple" onClick={() => setIsNewOpen(true)}><Plus size={18} /> Novo convite</Button></header>
     <div className="flex flex-wrap gap-2">{[['ativo', 'Ativos'], ['respondido', 'Respondidos'], ['expirado', 'Expirados'], ['revogado', 'Revogados'], ['todos', 'Todos']].map(([value, label]) => <button key={value} onClick={() => setFilter(value)} className={`rounded-full px-4 py-2 text-xs font-black uppercase ${filter === value ? 'bg-purple-600 text-white' : 'bg-white text-gray-500'}`}>{label}</button>)}</div>

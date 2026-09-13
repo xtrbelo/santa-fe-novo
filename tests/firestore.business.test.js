@@ -18,6 +18,10 @@ import {
   excluirAgendaVazia,
   corrigirStatusAtendimento,
   realocarAtendimento,
+  inspectVacancyCounters,
+  reconcileAgendaVacancies,
+  inspectCpfIndexes,
+  rebuildCpfIndex,
   rebuildPessoaSearchIndex,
   searchPessoas,
   withPessoaSearchIndex,
@@ -741,16 +745,35 @@ describe('transações do fluxo operacional', () => {
     await book(db, unrestricted, person('medium', 'Médium'));
   });
 
-  test('considera ocupação real legada maior que o contador salvo', async () => {
+  test('usa o contador reconciliado como fonte única de ocupação', async () => {
     const db = adminDb();
-    const agenda = await seedAgenda('agenda-legada', { vagasTotais: { [service.id]: 2 }, vagasOcupadas: { [service.id]: 0 } });
+    const agenda = await seedAgenda('agenda-contador-unico', { vagasTotais: { [service.id]: 2 }, vagasOcupadas: { [service.id]: 2 } });
     await seedDocuments([
-      ['consulentes', 'legado-1', { agendaId: agenda.id, pessoaBaseId: 'legado-1', status: 'Agendado', servicosIds: [service.id] }],
-      ['consulentes', 'legado-2', { agendaId: agenda.id, pessoaBaseId: 'legado-2', status: 'Presente', servicosIds: [service.id] }]
+      ['consulentes', 'existente-1', { agendaId: agenda.id, pessoaBaseId: 'existente-1', status: 'Agendado', servicosIds: [service.id] }],
+      ['consulentes', 'existente-2', { agendaId: agenda.id, pessoaBaseId: 'existente-2', status: 'Presente', servicosIds: [service.id] }]
     ]);
     await assert.rejects(book(db, agenda, person('3')), /SEM_VAGA/);
-    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 0);
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 2);
     assert.equal((await getDoc(appointmentRef(db, agenda.id, '3'))).exists(), false);
+  });
+  test('inspeciona e cria índice de CPF ausente sem sobrescrever conflitos', async () => {
+    const db = adminDb();
+    await seedDocuments([
+      ['pessoas', 'cpf-sem-indice', { nome: 'Sem índice', cpf: '529.982.247-25', ativo: true }],
+      ['pessoas', 'cpf-conflito', { nome: 'Conflito', cpf: '11144477735', ativo: true }],
+      ['cpf_index', '11144477735', { pessoaId: 'outra-pessoa' }]
+    ]);
+    let report = await inspectCpfIndexes({ pageSize: 100 }, db);
+    assert.equal(report.missing.some(item => item.pessoaId === 'cpf-sem-indice'), true);
+    assert.equal(report.conflicts.some(item => item.pessoaId === 'cpf-conflito'), true);
+    assert.equal((await rebuildCpfIndex({ pessoaId: 'cpf-sem-indice', userId: USER_ID }, db)).updated, true);
+    assert.equal((await getDoc(doc(db, path('cpf_index', '52998224725')))).data().pessoaId, 'cpf-sem-indice');
+    assert.equal((await rebuildCpfIndex({ pessoaId: 'cpf-sem-indice', userId: USER_ID }, db)).updated, false);
+    await assert.rejects(rebuildCpfIndex({ pessoaId: 'cpf-conflito', userId: USER_ID }, db), /CPF_INDEX_CONFLITO/);
+    report = await inspectCpfIndexes({ pageSize: 100 }, db);
+    assert.equal(report.missing.some(item => item.pessoaId === 'cpf-sem-indice'), false);
+    const audits = await getDocs(collection(db, `${root}/auditoria`));
+    assert.equal(audits.docs.some(item => item.data().tipo === 'CPF_INDEX_RECONSTRUIDO' && item.data().pessoaId === 'cpf-sem-indice'), true);
   });
 
   test('concorrência concede exatamente uma última vaga', async () => {
@@ -807,7 +830,7 @@ describe('transações do fluxo operacional', () => {
 
   test('ignora cancelado e considera Faltou na reconciliação de vagas', async () => {
     const db = adminDb();
-    const agenda = await seedAgenda('agenda-status-vaga', { vagasTotais: { [service.id]: 2 }, vagasOcupadas: { [service.id]: 0 } });
+    const agenda = await seedAgenda('agenda-status-vaga', { vagasTotais: { [service.id]: 2 }, vagasOcupadas: { [service.id]: 1 } });
     await seedDocuments([
       ['consulentes', 'agendado-1', { agendaId: agenda.id, pessoaBaseId: 'agendado-1', status: 'Agendado', servicosIds: [service.id] }],
       ['consulentes', 'cancelado-1', { agendaId: agenda.id, pessoaBaseId: 'cancelado-1', status: 'Cancelado', servicosIds: [service.id] }]
@@ -815,10 +838,41 @@ describe('transações do fluxo operacional', () => {
     await book(db, agenda, person('nova'));
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 2);
 
-    const faltouAgenda = await seedAgenda('agenda-faltou', { vagasTotais: { [service.id]: 1 }, vagasOcupadas: { [service.id]: 0 } });
+    const faltouAgenda = await seedAgenda('agenda-faltou', { vagasTotais: { [service.id]: 1 }, vagasOcupadas: { [service.id]: 1 } });
     await seedDocuments([['consulentes', 'faltou-1', { agendaId: faltouAgenda.id, pessoaBaseId: 'faltou-1', status: 'Faltou', servicosIds: [service.id] }]]);
     await assert.rejects(book(db, faltouAgenda, person('outra')), /SEM_VAGA/);
-    assert.equal((await getDoc(agendaRef(db, faltouAgenda.id))).data().vagasOcupadas[service.id], 0);
+    assert.equal((await getDoc(agendaRef(db, faltouAgenda.id))).data().vagasOcupadas[service.id], 1);
+  });
+
+  test('verifica e reconcilia vagas com relatório e auditoria', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-reconciliacao', { vagasTotais: { [service.id]: 5, [serviceB.id]: 3 }, vagasOcupadas: { [service.id]: 9, [serviceB.id]: 0 } });
+    await seedDocuments([
+      ['consulentes', 'reconciliar-agendado', { agendaId: agenda.id, status: 'Agendado', servicosIds: [service.id, serviceB.id] }],
+      ['consulentes', 'reconciliar-presente-realocado', { agendaId: agenda.id, status: 'Presente', servicosIds: [service.id], servicosRealocados: { [service.id]: { destinoAgendaId: 'outra' } } }],
+      ['consulentes', 'reconciliar-faltou', { agendaId: agenda.id, status: 'Faltou', servicosIds: [serviceB.id] }],
+      ['consulentes', 'reconciliar-cancelado', { agendaId: agenda.id, status: 'Cancelado', servicosIds: [service.id] }],
+    ]);
+    const inspection = await inspectVacancyCounters({ pageSize: 25 }, db);
+    assert.equal(inspection.divergences.length, 1);
+    assert.deepEqual(inspection.divergences[0].expected, { [service.id]: 1, [serviceB.id]: 2 });
+    const result = await reconcileAgendaVacancies({ agendaId: agenda.id, userId: USER_ID }, db);
+    assert.equal(result.updated, true);
+    assert.deepEqual((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas, { [service.id]: 1, [serviceB.id]: 2 });
+    const audits = await getDocs(collection(db, `${root}/auditoria`));
+    assert.equal(audits.docs.some(item => item.data().tipo === 'VAGAS_RECONCILIADAS' && item.data().agendaId === agenda.id), true);
+    assert.equal((await reconcileAgendaVacancies({ agendaId: agenda.id, userId: USER_ID }, db)).updated, false);
+  });
+
+  test('somente Admin reconcilia vagas e agendas encerradas são preservadas', async () => {
+    const agenda = await seedAgenda('agenda-reconciliacao-gestor', { vagasTotais: { [service.id]: 2 }, vagasOcupadas: { [service.id]: 0 } });
+    await seedDocuments([['consulentes', 'reconciliar-gestor', { agendaId: agenda.id, status: 'Agendado', servicosIds: [service.id] }]]);
+    await assert.rejects(reconcileAgendaVacancies({ agendaId: agenda.id, userId: 'gestor-business' }, gestorDb()), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
+    assert.equal((await getDoc(agendaRef(adminDb(), agenda.id))).data().vagasOcupadas[service.id], 0);
+    await updateDoc(agendaRef(adminDb(), agenda.id), { status: 'Concluída' });
+    const inspection = await inspectVacancyCounters({ pageSize: 25 }, adminDb());
+    assert.equal(inspection.divergences.length, 0);
+    assert.equal(inspection.skippedClosed, 1);
   });
 
   test('adapta pessoas, públicos e serviços legados sem migração', () => {
@@ -955,8 +1009,12 @@ describe('transações do fluxo operacional', () => {
     assert.equal((await getDoc(agendaRef(db, empty.id))).exists(), false);
     const withHistory = await seedAgenda('agenda-historico');
     await book(db, withHistory, person('1'));
+    assert.equal((await getDoc(doc(db, path('agenda_historico_index', withHistory.id)))).data().agendaId, withHistory.id);
     await assert.rejects(excluirAgendaVazia({ agendaId: withHistory.id, userId: USER_ID }, db), /AGENDA_POSSUI_HISTORICO/);
     assert.equal((await getDoc(agendaRef(db, withHistory.id))).exists(), true);
+    const legacy = await seedAgenda('agenda-historico-legado');
+    await seedDocuments([['consulentes', 'historico-legado', { agendaId: legacy.id, pessoaBaseId: 'pessoa-legada', status: 'Cancelado' }]]);
+    await assert.rejects(excluirAgendaVazia({ agendaId: legacy.id, userId: USER_ID }, db), /AGENDA_POSSUI_HISTORICO/);
   });
 
   test('realoca atendimento completo preservando origem, vagas, locks e auditoria', async () => {
@@ -1059,6 +1117,35 @@ describe('transações do fluxo operacional', () => {
     assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
     assert.equal((await getDoc(activeRef(db, origin.id, 'falhas'))).data().agendamentoId, appointmentId);
     assert.equal((await getDocs(collection(db, `${root}/auditoria`))).docs.filter(item => ['ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO'].includes(item.data().tipo)).length, 0);
+  });
+
+  test('recusa agenda de destino desativada sem alterar a origem', async () => {
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 19);
+    const origin = await seedAgenda('origem-destino-inativo', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const destination = await seedAgenda('destino-inativo', { data: future, ativo: false, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const appointmentId = await book(db, origin, person('destino-inativo'));
+    await assert.rejects(realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Destino inativo', userId: USER_ID, role: 'admin' }, db), /AGENDA_DESTINO_INDISPONIVEL/);
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
+  });
+
+  test('recusa pessoa inativa sem criar novo atendimento', async () => {
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 20);
+    const origin = await seedAgenda('origem-pessoa-inativa', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const destination = await seedAgenda('destino-pessoa-inativa', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    await seedDocuments([['pessoas', 'pessoa-inativa', { nome: 'Pessoa inativa', tipoPessoa: 'Consulente', ativo: false }]]);
+    const appointmentId = await book(db, origin, person('pessoa-inativa'));
+    await assert.rejects(realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Pessoa inativa', userId: USER_ID, role: 'admin' }, db), /PESSOA_INATIVA/);
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 1);
+  });
+
+  test('recusa lock de origem apontando para outro atendimento', async () => {
+    const db = adminDb(); const future = new Date(); future.setDate(future.getDate() + 21);
+    const origin = await seedAgenda('origem-lock-divergente', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const destination = await seedAgenda('destino-lock-divergente', { data: future, servicosIds: [service.id], servicosStatus: { [service.id]: 'Ativo' } });
+    const appointmentId = await book(db, origin, person('lock-divergente'));
+    await seedDocuments([['agendamentos_ativos', `${origin.id}_lock-divergente`, { agendaId: origin.id, pessoaBaseId: 'lock-divergente', agendamentoId: 'outro-atendimento' }]]);
+    await assert.rejects(realocarAtendimento({ origemAgendaId: origin.id, origemAgendamentoId: appointmentId, destinoAgendaId: destination.id, servicosIds: [service.id], motivo: 'Lock divergente', userId: USER_ID, role: 'admin' }, db), /LOCK_ORIGEM_DIVERGENTE/);
+    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
   });
 
   test('concorrência permite somente uma realocação do mesmo atendimento', async () => {

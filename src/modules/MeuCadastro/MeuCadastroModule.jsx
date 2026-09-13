@@ -7,8 +7,10 @@ import { formatDateBr, formatDetailValue, getDetailLabel } from '../../utils/pes
 import { maskCPF, maskPhone } from '../../utils/formatters';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { DataLoadState } from '../../components/ui/DataLoadState';
 import { useToast } from '../../components/ui/useToast';
 import { Edit, UserRound } from 'lucide-react';
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 
 const inputClass = 'mt-1 w-full rounded-xl bg-gray-50 p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300';
 const Item = ({ label, value }) => <div><dt className="text-[10px] font-black uppercase tracking-wider text-gray-400">{label}</dt><dd className="mt-1 text-sm font-bold text-gray-800">{formatDetailValue(value)}</dd></div>;
@@ -21,25 +23,28 @@ export function MeuCadastroModule({ user, profile }) {
   const [functions, setFunctions] = useState([]);
   const [form, setForm] = useState(toForm());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
+  const hasUnsavedChanges = editing && JSON.stringify(form) !== JSON.stringify(toForm(pessoa));
+  const confirmDiscard = useUnsavedChanges(hasUnsavedChanges);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    setLoading(true); setLoadError(false);
     try {
       const [registration, configuredFunctions] = await Promise.all([
         getMyRegistration({ uid: user.uid }),
         getDocs(getAppCollection('config_funcoes_membro')).then(snapshot => snapshot.docs.map(item => ({ id: item.id, ...item.data() }))),
       ]);
       setPessoa(registration); setFunctions(getEffectiveMemberFunctions(configuredFunctions)); setForm(toForm(registration));
-    } catch (error) { console.error(error); toast.error('Não foi possível carregar seu cadastro.'); }
+    } catch (error) { console.error(error); setLoadError(true); }
     finally { setLoading(false); }
-  }, [user.uid, toast]);
+  }, [user.uid]);
 
   useEffect(() => { void load(); }, [load]);
   const updateAddress = (field, value) => setForm(current => ({ ...current, endereco: { ...current.endereco, [field]: value } }));
-  const cancel = () => { setForm(toForm(pessoa)); setEditing(false); };
+  const cancel = () => { if (confirmDiscard()) { setForm(toForm(pessoa)); setEditing(false); } };
   const save = async event => {
     event.preventDefault(); setSaving(true);
     try {
@@ -52,7 +57,7 @@ export function MeuCadastroModule({ user, profile }) {
     } finally { setSaving(false); }
   };
 
-  if (loading) return <Card><p className="text-sm font-bold text-gray-500">Carregando seu cadastro...</p></Card>;
+  if (loading || loadError) return <DataLoadState loading={loading} error={loadError} subject="seu cadastro" onRetry={() => void load()} />;
   if (!profile?.pessoaBaseId || !pessoa) return <Card className="text-center py-10"><UserRound className="mx-auto mb-3 text-amber-500" size={36}/><p className="font-bold text-gray-700">Seu usuário ainda não está vinculado a um cadastro de membro.<br/>Procure um administrador.</p></Card>;
   const endereco = pessoa.endereco || {};
   const functionLabels = getMemberFunctionLabels(getPessoaFuncoesCasa(pessoa), functions).join(', ');
@@ -64,6 +69,6 @@ export function MeuCadastroModule({ user, profile }) {
       <Section title="Endereço"><Item label="CEP" value={endereco.cep}/><Item label="Logradouro" value={endereco.logradouro}/><Item label="Número" value={endereco.numero}/><Item label="Complemento" value={endereco.complemento}/><Item label="Bairro" value={endereco.bairro}/><Item label="Cidade" value={endereco.cidade}/><Item label="UF" value={endereco.uf}/></Section>
       <Section title="Vínculo com a Casa"><Item label="Vínculo" value={getPessoaVinculo(pessoa) === 'membro' ? 'Membro' : pessoa.tipoPessoa || 'Consulente'}/><Item label="Funções da Casa" value={functionLabels}/></Section>
       <Section title="Acesso ao sistema"><Item label="Perfil" value={ROLE_LABELS[profile.role] || profile.role}/><Item label="Situação" value={profile.ativo === false ? 'Inativo' : 'Ativo'}/></Section>
-    </> : <form onSubmit={save} className="space-y-5"><Card className="space-y-4"><h3 className="text-xs font-black uppercase text-indigo-700">Dados editáveis</h3><label className="block text-xs font-black uppercase text-gray-500">Telefone / contato<input value={form.contato} onChange={event => setForm(current => ({ ...current, contato: maskPhone(event.target.value) }))} maxLength={15} className={inputClass}/></label><label className="block text-xs font-black uppercase text-gray-500">Estado civil<select value={form.estadoCivil} onChange={event => setForm(current => ({ ...current, estadoCivil: event.target.value }))} className={inputClass}>{ESTADOS_CIVIS.map(value => <option key={value} value={value}>{getDetailLabel(value)}</option>)}</select></label></Card><Card><h3 className="mb-4 text-xs font-black uppercase text-indigo-700">Endereço</h3><div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{[['cep', 'CEP'], ['logradouro', 'Logradouro'], ['numero', 'Número'], ['complemento', 'Complemento'], ['bairro', 'Bairro'], ['cidade', 'Cidade'], ['uf', 'UF']].map(([field, label]) => <label key={field} className="text-xs font-black uppercase text-gray-500">{label}<input value={form.endereco[field]} onChange={event => updateAddress(field, field === 'uf' ? event.target.value.toUpperCase() : event.target.value)} maxLength={field === 'uf' ? 2 : field === 'cep' ? 10 : 150} className={inputClass}/></label>)}</div></Card><div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={cancel} disabled={saving}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Salvar alterações'}</Button></div></form>}
+    </> : <form onSubmit={save} className="space-y-5"><Card className="space-y-4"><h3 className="text-xs font-black uppercase text-indigo-700">Dados editáveis</h3><label className="block text-xs font-black uppercase text-gray-500">Telefone / contato<input value={form.contato} onChange={event => setForm(current => ({ ...current, contato: maskPhone(event.target.value) }))} maxLength={15} className={inputClass}/></label><label className="block text-xs font-black uppercase text-gray-500">Estado civil<select value={form.estadoCivil} onChange={event => setForm(current => ({ ...current, estadoCivil: event.target.value }))} className={inputClass}>{ESTADOS_CIVIS.map(value => <option key={value} value={value}>{getDetailLabel(value)}</option>)}</select></label></Card><Card><h3 className="mb-4 text-xs font-black uppercase text-indigo-700">Endereço</h3><div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{[['cep', 'CEP'], ['logradouro', 'Logradouro'], ['numero', 'Número'], ['complemento', 'Complemento'], ['bairro', 'Bairro'], ['cidade', 'Cidade'], ['uf', 'UF']].map(([field, label]) => <label key={field} className="text-xs font-black uppercase text-gray-500">{label}<input value={form.endereco[field]} onChange={event => updateAddress(field, field === 'uf' ? event.target.value.toUpperCase() : event.target.value)} maxLength={field === 'uf' ? 2 : field === 'cep' ? 10 : 150} className={inputClass}/></label>)}</div></Card><div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={cancel} disabled={saving}>Cancelar</Button><Button type="submit" busy={saving} busyText="Salvando...">Salvar alterações</Button></div></form>}
   </div>;
 }

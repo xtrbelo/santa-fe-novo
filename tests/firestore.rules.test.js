@@ -365,6 +365,7 @@ describe('D. admin', () => {
     const batch = writeBatch(db);
     batch.set(ref(db, `${root}/consulentes/nova`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-nova', status: 'Agendado' });
     batch.set(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-nova`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-nova', agendamentoId: 'nova', criadoEm: new Date(), criadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/agenda_historico_index/agenda-1`), { agendaId: 'agenda-1', primeiroAgendamentoId: 'nova', criadoEm: new Date(), criadoPor: 'admin-a' });
     await assertSucceeds(batch.commit());
     await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
     await assertFails(deleteDoc(ref(db, paths.appointments)));
@@ -393,7 +394,7 @@ describe('D. admin', () => {
     test(`Admin A não altera o próprio role para ${role}`, async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('admin-a')), { role, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
   }
   test('Admin A não desativa a própria conta', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('admin-a')), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
-  test('Admin A altera Admin B', async () => assertSucceeds(updateDoc(ref(authDb('admin-a'), paths.user('admin-b')), { role: 'gestor', atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
+  test('contas Administradoras somente são alteradas pela função de servidor', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('admin-b')), { role: 'gestor', atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
 });
 
 describe('E. gestor', () => {
@@ -592,9 +593,12 @@ describe('J. modelo operacional da Casa', () => {
     await environment.withSecurityRulesDisabled(async context => {
       await setDoc(ref(context.firestore(), `${root}/agendas/vazia-admin`), { tipo: 'Vazia', status: 'Agendada' });
       await setDoc(ref(context.firestore(), `${root}/agendas/vazia-gestor`), { tipo: 'Vazia', status: 'Agendada' });
+      await setDoc(ref(context.firestore(), `${root}/agendas/com-historico`), { tipo: 'Histórico', status: 'Agendada' });
+      await setDoc(ref(context.firestore(), `${root}/agenda_historico_index/com-historico`), { agendaId: 'com-historico', primeiroAgendamentoId: 'antigo' });
     });
     await assertFails(deleteDoc(ref(authDb('gestor'), `${root}/agendas/vazia-gestor`)));
     await assertSucceeds(deleteDoc(ref(authDb('admin-a'), `${root}/agendas/vazia-admin`)));
+    await assertFails(deleteDoc(ref(authDb('admin-a'), `${root}/agendas/com-historico`)));
   });
   test('eventos operacionais novos são imutáveis', async () => {
     const db = authDb('gestor');
@@ -638,6 +642,7 @@ describe('L. lock de agendamento ativo', () => {
     const batch = writeBatch(db);
     batch.set(ref(db, `${root}/consulentes/novo-lock`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Agendado' });
     batch.set(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', agendamentoId: 'novo-lock', criadoEm: new Date(), criadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/agenda_historico_index/agenda-1`), { agendaId: 'agenda-1', primeiroAgendamentoId: 'novo-lock', criadoEm: new Date(), criadoPor: 'admin-a' });
     await assertSucceeds(batch.commit());
   });
   test('recusa atendimento sem lock, lock falso e update arbitrário', async () => {
@@ -692,6 +697,7 @@ function relocationBatch(uid, options = {}) {
     origemRealocacao: { realocacaoId: relocationId, agendaId: 'agenda-1', agendamentoId: options.wrongOrigin ? 'outro' : 'consulta-1', tipo: 'completa', realocadoEm: now, realocadoPor: uid, motivo: 'Realocação segura' }
   });
   if (!options.omitDestination) batch.set(ref(db, `${root}/agendamentos_ativos/agenda-2_pessoa-1`), { agendaId: 'agenda-2', pessoaBaseId: 'pessoa-1', agendamentoId: 'destino-1', criadoEm: now, criadoPor: uid });
+  if (!options.omitDestination) batch.set(ref(db, `${root}/agenda_historico_index/agenda-2`), { agendaId: 'agenda-2', primeiroAgendamentoId: 'destino-1', criadoEm: now, criadoPor: uid });
   if (!options.keepOriginLock) batch.delete(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-1`));
   if (!options.omitAudit) batch.set(ref(db, `${root}/auditoria/${relocationId}`), {
     tipo: 'ATENDIMENTO_REAGENDADO', realocacaoId: relocationId, origemAgendaId: 'agenda-1', origemAgendamentoId: options.wrongAuditOrigin ? 'outro' : 'consulta-1',
@@ -730,6 +736,19 @@ describe('M. integridade transacional da realocação', () => {
     await environment.withSecurityRulesDisabled(async context => setDoc(ref(context.firestore(), `${root}/auditoria/reutilizado`), { tipo: 'SERVICO_REALOCADO' }));
     await assertFails(relocationBatch('admin-a', { relocationId: 'reutilizado' }).commit());
     await assertFails(deleteDoc(ref(authDb('admin-a'), `${root}/agendamentos_ativos/agenda-1_pessoa-1`)));
+  });
+  test('bloqueia destino desativado, pessoa inativa e lock de origem divergente', async () => {
+    await seedRelocationOrigin();
+    await environment.withSecurityRulesDisabled(async context => updateDoc(ref(context.firestore(), `${root}/agendas/agenda-2`), { ativo: false }));
+    await assertFails(relocationBatch('admin-a').commit());
+
+    await environment.clearFirestore(); await seed(); await seedRelocationOrigin();
+    await environment.withSecurityRulesDisabled(async context => updateDoc(ref(context.firestore(), paths.people), { ativo: false }));
+    await assertFails(relocationBatch('admin-a').commit());
+
+    await environment.clearFirestore(); await seed(); await seedRelocationOrigin();
+    await environment.withSecurityRulesDisabled(async context => updateDoc(ref(context.firestore(), `${root}/agendamentos_ativos/agenda-1_pessoa-1`), { agendamentoId: 'outro-atendimento' }));
+    await assertFails(relocationBatch('admin-a').commit());
   });
 });
 

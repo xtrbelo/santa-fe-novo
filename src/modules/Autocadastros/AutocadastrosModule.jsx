@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ClipboardCheck, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
+import { DataLoadState } from '../../components/ui/DataLoadState';
 import { Modal } from '../../components/ui/Modal';
 import { useToast } from '../../components/ui/useToast';
 import { approveMemberSelfRegistration, getAppCollection, onSnapshot, rejectMemberSelfRegistration } from '../../services/firebase';
@@ -39,12 +40,19 @@ export function AutocadastrosModule({ user }) {
   const [houseData, setHouseData] = useState(emptyHouseData);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
   const toast = useToast();
   useEffect(() => {
-    const unsubscribeRegistrations = onSnapshot(getAppCollection('autocadastros_membro'), snapshot => setItems(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))), error => { console.error(error); toast.error('Não foi possível carregar os autocadastros.'); });
-    const unsubscribeFunctions = onSnapshot(getAppCollection('config_funcoes_membro'), snapshot => setFunctions(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))), error => { console.error(error); toast.error('Não foi possível carregar as funções da Casa.'); });
+    setLoadingData(true); setLoadError(false);
+    const pending = new Set(['registrations', 'functions']);
+    const loaded = key => { pending.delete(key); if (!pending.size) setLoadingData(false); };
+    const failed = error => { console.error(error); setLoadError(true); setLoadingData(false); };
+    const unsubscribeRegistrations = onSnapshot(getAppCollection('autocadastros_membro'), snapshot => { setItems(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))); loaded('registrations'); }, failed);
+    const unsubscribeFunctions = onSnapshot(getAppCollection('config_funcoes_membro'), snapshot => { setFunctions(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))); loaded('functions'); }, failed);
     return () => { unsubscribeRegistrations(); unsubscribeFunctions(); };
-  }, [toast]);
+  }, [reloadVersion]);
   const effectiveFunctions = useMemo(() => getEffectiveMemberFunctions(functions), [functions]);
   const filtered = useMemo(() => items.filter(item => filter === 'todos' || item.statusCadastro === filter).sort((a, b) => (a.enviadoEm?.toMillis?.() || 0) - (b.enviadoEm?.toMillis?.() || 0)), [filter, items]);
   const open = item => { setSelected(item); setReason(''); setSelectedFunctions([]); setHouseData({ ...emptyHouseData, ...(item.dadosCasa || {}) }); };
@@ -64,6 +72,7 @@ export function AutocadastrosModule({ user }) {
       toast.success(action === 'approve' ? 'Cadastro aprovado e membro criado com sucesso.' : 'Cadastro rejeitado.'); setSelected(null); setReason('');
     } catch (error) { console.error(error); toast.error(errorMessage(error)); } finally { setBusy(false); }
   };
+  if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="os autocadastros" onRetry={() => setReloadVersion(value => value + 1)} />;
   return <div className="space-y-6 pb-10">
     <header><h2 className="text-2xl font-black uppercase italic tracking-tighter text-gray-900 sm:text-3xl">Autocadastros</h2><p className="mt-1 text-sm font-medium text-gray-500">Análise administrativa dos cadastros enviados por convite</p></header>
     <div className="flex flex-wrap gap-2">{filters.map(([value, label]) => <button key={value} onClick={() => setFilter(value)} className={`rounded-full px-4 py-2 text-xs font-black uppercase ${filter === value ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500'}`}>{label}</button>)}</div>
