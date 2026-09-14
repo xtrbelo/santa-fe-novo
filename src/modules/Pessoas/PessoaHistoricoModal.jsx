@@ -2,8 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { getAppCollection, getAppDoc, getDoc, onSnapshot, query, where } from '../../services/firebase';
 import { getStatusColor } from '../../utils/formatters';
 import { Modal } from '../../components/ui/Modal';
-import { CalendarClock } from 'lucide-react';
+import { CalendarClock, Mail, RotateCcw } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
+import { Button } from '../../components/ui/Button';
+import { useToast } from '../../components/ui/useToast';
+import { resendEmailCommunicationOnServer } from '../../services/firebaseFunctions';
 
 const toMillis = value => value?.toMillis?.() || value?.toDate?.().getTime?.() || 0;
 const formatTime = value => value?.toDate?.().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) || null;
@@ -11,8 +14,11 @@ const formatTime = value => value?.toDate?.().toLocaleTimeString('pt-BR', { hour
 export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
   const [items, setItems] = useState([]);
   const [lifecycleEvents, setLifecycleEvents] = useState([]);
+  const [communications, setCommunications] = useState([]);
+  const [resending, setResending] = useState(null);
   const [loading, setLoading] = useState(false);
   const canViewAudit = hasPermission(profile, PERMISSIONS.AUDIT_VIEW);
+  const toast = useToast();
 
   useEffect(() => {
     if (!pessoa) return undefined;
@@ -45,9 +51,24 @@ export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
     });
   }, [pessoa, canViewAudit]);
 
+  useEffect(() => {
+    if (!pessoa || !canViewAudit) { setCommunications([]); return undefined; }
+    return onSnapshot(query(getAppCollection('comunicacoes_email'), where('pessoaBaseId', '==', pessoa.id)), snapshot => setCommunications(snapshot.docs.map(item => ({ id: item.id, ...item.data() })).sort((a, b) => toMillis(b.criadoEm) - toMillis(a.criadoEm))));
+  }, [pessoa, canViewAudit]);
+
+  const resend = async item => {
+    setResending(item.id);
+    try { await resendEmailCommunicationOnServer(item.id); toast.success('E-mail reenviado.'); }
+    catch (error) { console.error(error); toast.error('Não foi possível reenviar este e-mail.'); }
+    finally { setResending(null); }
+  };
+
+  const communicationLabels = { cadastro_aprovado: 'Cadastro aprovado', ativacao_acesso: 'Ativação de acesso', validacao_email: 'Validação de e-mail', recuperacao_senha: 'Recuperação de senha' };
+
   return <Modal isOpen={!!pessoa} onClose={onClose} title={`Histórico de ${pessoa?.nome || ''}`}>
     <div className="space-y-3 max-h-[65vh] overflow-y-auto">
       {lifecycleEvents.length > 0 && <section className="space-y-2"><h4 className="text-xs font-black uppercase text-purple-700">Ciclo de vida</h4>{lifecycleEvents.map(event => <div key={event.id} className="rounded-2xl border border-purple-100 bg-purple-50/50 p-4"><p className="font-black text-sm text-gray-900">{event.tipo === 'MEMBRO_INATIVADO' ? 'Membro inativado' : 'Membro reativado'}</p><p className="mt-1 text-xs text-gray-500">{event.criadoEm?.toDate?.().toLocaleString('pt-BR') || 'Data indisponível'} · {event.responsavel}</p>{event.motivo && <p className="mt-2 text-sm text-gray-700"><strong>Motivo:</strong> {event.motivo}</p>}</div>)}</section>}
+      {communications.length > 0 && <section className="space-y-2"><h4 className="text-xs font-black uppercase text-purple-700">Comunicações por e-mail</h4>{communications.map(item => <div key={item.id} className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4"><div className="flex items-start justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-black text-gray-900"><Mail size={15}/>{communicationLabels[item.tipo] || 'Comunicação'}</p><p className="mt-1 text-xs text-gray-500">{item.destinatario} · {item.criadoEm?.toDate?.().toLocaleString('pt-BR') || 'Data indisponível'}</p></div><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${item.status === 'enviado' ? 'bg-emerald-100 text-emerald-800' : item.status === 'erro' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>{item.status}</span></div>{item.status === 'erro' && <Button variant="secondary" disabled={resending === item.id} onClick={() => resend(item)} className="mt-3"><RotateCcw size={15}/>{resending === item.id ? 'Reenviando...' : 'Reenviar'}</Button>}</div>)}</section>}
       {loading && <p className="text-center text-sm text-gray-400 py-8">Carregando histórico...</p>}
       {!loading && items.length === 0 && <p className="text-center text-sm text-gray-400 py-8">Nenhum atendimento registrado.</p>}
       {items.map(item => <div key={item.id} className="border border-gray-100 rounded-2xl p-4 bg-gray-50/60">

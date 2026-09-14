@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../../components/ui/Card';
-import { getAppCollection, getCountFromServer, query, where } from '../../services/firebase';
+import { getAppCollection, getCountFromServer, onSnapshot, query, where } from '../../services/firebase';
 import { canAccessModule, hasPermission, MODULES, PERMISSIONS } from '../../constants/permissions';
 import { ROLES } from '../../constants/roles';
-import { CalendarDays, BookOpenCheck, Users, Sparkles, UserRoundCog, UserRoundX, ShieldAlert } from 'lucide-react';
+import { CalendarDays, BookOpenCheck, ClipboardCheck, Users, Sparkles, UserRoundCog, UserRoundX, ShieldAlert } from 'lucide-react';
 
-export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers }) => {
+export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers, onOpenPendingRegistrations }) => {
   const firstName = user?.displayName?.split(' ')[0] || 'Utilizador';
   const [pendingCount, setPendingCount] = useState(null);
   const [revokedCount, setRevokedCount] = useState(null);
+  const [registrationCounts, setRegistrationCounts] = useState({ membro: 0, consulente: 0 });
   const canViewUsers = hasPermission(profile, PERMISSIONS.USERS_VIEW);
 
   useEffect(() => {
@@ -34,6 +35,16 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers }) => {
     return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', refreshPendingCount); };
   }, [canViewUsers]);
 
+  useEffect(() => {
+    if (!hasPermission(profile, PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW)) return undefined;
+    let inviteMembers = 0; let linkMembers = 0; let linkConsultees = 0;
+    const sync = () => setRegistrationCounts({ membro: inviteMembers + linkMembers, consulente: linkConsultees });
+    const pending = where('statusCadastro', '==', 'aguardando_validacao');
+    const unsubInvites = onSnapshot(query(getAppCollection('autocadastros_membro'), pending), snapshot => { inviteMembers = snapshot.size; sync(); });
+    const unsubLinks = onSnapshot(query(getAppCollection('solicitacoes_cadastro'), pending), snapshot => { linkMembers = snapshot.docs.filter(item => item.data().tipoCadastro !== 'consulente').length; linkConsultees = snapshot.docs.filter(item => item.data().tipoCadastro === 'consulente').length; sync(); });
+    return () => { unsubInvites(); unsubLinks(); };
+  }, [profile]);
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <header className="px-1">
@@ -49,6 +60,7 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers }) => {
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        {hasPermission(profile, PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW) && <Card onClick={onOpenPendingRegistrations} className="!bg-gradient-to-br from-cyan-600 to-teal-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><ClipboardCheck size={28} /></div><p className="font-black text-2xl uppercase italic">Solicitações pendentes</p><p className="mt-1 text-[11px] font-bold uppercase text-cyan-100">{registrationCounts.membro + registrationCounts.consulente} no total · {registrationCounts.membro} Membros · {registrationCounts.consulente} Consulentes</p></Card>}
         {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={() => onOpenUsers('pendentes')} className="!bg-gradient-to-br from-indigo-600 to-blue-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundCog size={28} /></div><p className="font-black text-2xl uppercase italic">Usuários pendentes</p><p className="text-indigo-100 text-[11px] font-bold uppercase mt-1">{pendingCount === null ? 'Atualizando contagem...' : `${pendingCount} aguardando liberação`}</p></Card>}
         {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={() => onOpenUsers('suspensos')} className="!bg-gradient-to-br from-amber-500 to-orange-600 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><ShieldAlert size={28} /></div><p className="font-black text-2xl uppercase italic">Acessos suspensos</p><p className="text-amber-100 text-[11px] font-bold uppercase mt-1">Abrir membros inativos vinculados</p></Card>}
         {hasPermission(profile, PERMISSIONS.USERS_VIEW) && <Card onClick={() => onOpenUsers('inativos')} className="!bg-gradient-to-br from-rose-600 to-red-700 text-white !p-6 shadow-xl !border-none hover:-translate-y-1 transition-all"><div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-6"><UserRoundX size={28} /></div><p className="font-black text-2xl uppercase italic">Acessos revogados</p><p className="text-rose-100 text-[11px] font-bold uppercase mt-1">{revokedCount === null ? 'Atualizando contagem...' : `${revokedCount} contas sem acesso`}</p></Card>}
@@ -90,7 +102,7 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers }) => {
             <Users size={28} />
           </div>
           <p className="font-black text-2xl uppercase italic tracking-tighter leading-tight">
-            Pessoas
+            Pessoas e Cadastros
           </p>
           <p className="text-purple-100 text-[11px] font-bold uppercase tracking-widest mt-1">
             Base de Dados & Cadastros

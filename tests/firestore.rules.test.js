@@ -21,7 +21,7 @@ const inviteIndexPath = cpf => `${root}/convite_membro_cpf_index/${cpf}`;
 const registrationPath = id => `${root}/autocadastros_membro/${id}`;
 const authorizationPath = pessoaId => `${root}/autorizacoes_acesso/${pessoaId}`;
 const inviteData = (uid, overrides = {}) => ({ nome: 'Pessoa Convidada', cpf: '52998224725', email: 'convite@example.test', status: 'ativo', criadoEm: new Date(), criadoPor: uid, expiraEm: new Date(Date.now() + 7 * 86400000), atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
-const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: null, email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
+const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: '96999991111', email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
 
 let environment;
 const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();
@@ -870,5 +870,128 @@ describe('O. Fase 9H - lifecycle e revogação', () => {
     await assertSucceeds(userLifecycleBatch('legado-9h', false, 'legacy-off', 'Revogação', null).commit());
     await assertSucceeds(userLifecycleBatch('legado-9h', true, 'legacy-on', null, null).commit());
     await assertFails(setDoc(ref(authDb('admin-a'), `${root}/auditoria/falsa-9h`), { tipo: 'MEMBRO_INATIVADO', pessoaBaseId: 'membro-gestor', motivo: 'Falso', executadoPor: 'admin-a', criadoEm: new Date() }));
+  });
+});
+
+describe('P. links reutilizáveis de cadastro', () => {
+  const linkId = 'd'.repeat(64);
+  const linkPath = `${root}/links_autocadastro/${linkId}`;
+  const linkData = (uid, overrides = {}) => ({ tipoCadastro: 'membro', nome: 'Cadastro de Membros', status: 'ativo', expiraEm: null, limiteUsos: null, totalUsos: 0, criadoEm: new Date(), criadoPor: uid, atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
+
+  test('Admin e Gestor criam links de Membro ou Consulente', async () => {
+    await assertSucceeds(setDoc(ref(authDb('admin-a'), linkPath), linkData('admin-a')));
+    await assertSucceeds(setDoc(ref(authDb('gestor'), `${root}/links_autocadastro/${'e'.repeat(64)}`), linkData('gestor', { tipoCadastro: 'consulente', nome: 'Cadastro simplificado' })));
+  });
+
+  test('Atendimento não administra links e campos arbitrários são recusados', async () => {
+    await assertFails(setDoc(ref(authDb('atendimento'), linkPath), linkData('atendimento')));
+    await assertFails(setDoc(ref(authDb('admin-a'), linkPath), linkData('admin-a', { campoPrivado: true })));
+  });
+
+  test('visitante acessa somente link efetivamente disponível sem poder listar', async () => {
+    await assertSucceeds(setDoc(ref(authDb('admin-a'), linkPath), linkData('admin-a')));
+    await assertSucceeds(getDoc(ref(anonymousDb(), linkPath)));
+    await assertFails(getDocs(collection(anonymousDb(), `${root}/links_autocadastro`)));
+    await assertSucceeds(updateDoc(ref(authDb('admin-a'), linkPath), { status: 'inativo', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(getDoc(ref(anonymousDb(), linkPath)));
+  });
+
+  test('preserva tipo, limites, contagem e autoria ao desativar', async () => {
+    await assertSucceeds(setDoc(ref(authDb('gestor'), linkPath), linkData('gestor', { tipoCadastro: 'consulente', limiteUsos: 10 })));
+    await assertFails(updateDoc(ref(authDb('gestor'), linkPath), { totalUsos: 1, atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+    await assertSucceeds(updateDoc(ref(authDb('gestor'), linkPath), { status: 'inativo', atualizadoEm: new Date(), atualizadoPor: 'gestor' }));
+  });
+
+  test('Admin edita identificação e limites sem alterar URL, tipo ou histórico', async () => {
+    await environment.withSecurityRulesDisabled(context => setDoc(ref(context.firestore(), linkPath), linkData('admin-a', { totalUsos: 3, limiteUsos: 10 })));
+    await assertSucceeds(updateDoc(ref(authDb('admin-a'), linkPath), { nome: 'Novo nome', expiraEm: new Date(Date.now() + 86400000), limiteUsos: 5, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(updateDoc(ref(authDb('admin-a'), linkPath), { limiteUsos: 2, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(updateDoc(ref(authDb('admin-a'), linkPath), { tipoCadastro: 'consulente', atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
+    await assertFails(updateDoc(ref(authDb('atendimento'), linkPath), { nome: 'Sem permissão', atualizadoEm: new Date(), atualizadoPor: 'atendimento' }));
+  });
+
+  test('histórico de link aceita o responsável real e permanece imutável', async () => {
+    const historyPath = `${root}/links_autocadastro_historico/historico-link`;
+    const history = { linkId, tipo: 'LINK_EDITADO', descricao: 'Alterado: validade, limite de usos.', executadoPor: 'gestor', responsavelNome: 'Gestor', criadoEm: new Date() };
+    await assertSucceeds(setDoc(ref(authDb('gestor'), historyPath), history));
+    await assertFails(setDoc(ref(authDb('atendimento'), `${root}/links_autocadastro_historico/indevido`), { ...history, executadoPor: 'atendimento' }));
+    await assertFails(updateDoc(ref(authDb('gestor'), historyPath), { descricao: 'Alterada depois.' }));
+    await assertFails(deleteDoc(ref(authDb('admin-a'), historyPath)));
+  });
+});
+
+describe('Q. envio público por link reutilizável', () => {
+  const linkId = 'f'.repeat(64);
+  const linkPath = `${root}/links_autocadastro/${linkId}`;
+  const requestId = 'r'.repeat(20);
+  const requestPath = `${root}/solicitacoes_cadastro/${requestId}`;
+  const requestData = overrides => ({ linkId, tipoCadastro: 'consulente', nome: 'Consulente Público', cpf: '52998224725', contato: '96999991111', email: null, dataNascimento: null, sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'link_reutilizavel', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
+
+  const seedLink = async () => setDoc(ref(authDb('admin-a'), linkPath), { tipoCadastro: 'consulente', nome: 'Cadastro de Consulentes', status: 'ativo', expiraEm: null, limiteUsos: 2, totalUsos: 0, criadoEm: new Date(), criadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+
+  test('envio cria solicitação e incrementa exatamente um uso no mesmo lote', async () => {
+    await assertSucceeds(seedLink());
+    const db = anonymousDb(); const batch = writeBatch(db);
+    batch.set(ref(db, requestPath), requestData());
+    batch.update(ref(db, linkPath), { totalUsos: 1, ultimaSolicitacaoId: requestId, atualizadoEm: serverTimestamp() });
+    await assertSucceeds(batch.commit());
+    await assertSucceeds(getDoc(ref(authDb('gestor'), requestPath)));
+  });
+
+  test('nega solicitação isolada, tipo divergente e manipulação da contagem', async () => {
+    await assertSucceeds(seedLink());
+    await assertFails(setDoc(ref(anonymousDb(), requestPath), requestData()));
+    const missingCpf = anonymousDb(); const missingCpfBatch = writeBatch(missingCpf);
+    missingCpfBatch.set(ref(missingCpf, requestPath), requestData({ cpf: null }));
+    missingCpfBatch.update(ref(missingCpf, linkPath), { totalUsos: 1, ultimaSolicitacaoId: requestId, atualizadoEm: serverTimestamp() });
+    await assertFails(missingCpfBatch.commit());
+    const db = anonymousDb(); const batch = writeBatch(db);
+    batch.set(ref(db, requestPath), requestData({ tipoCadastro: 'membro', cpf: '52998224725' }));
+    batch.update(ref(db, linkPath), { totalUsos: 2, ultimaSolicitacaoId: requestId, atualizadoEm: serverTimestamp() });
+    await assertFails(batch.commit());
+  });
+
+  test('visitante não lista solicitações e Atendimento não as lê', async () => {
+    await assertFails(getDocs(collection(anonymousDb(), `${root}/solicitacoes_cadastro`)));
+    await assertFails(getDocs(collection(authDb('atendimento'), `${root}/solicitacoes_cadastro`)));
+  });
+});
+
+describe('R. análise de solicitação por link', () => {
+  const requestId = 's'.repeat(20);
+  const requestPath = `${root}/solicitacoes_cadastro/${requestId}`;
+  const pending = { linkId: 'f'.repeat(64), tipoCadastro: 'consulente', nome: 'Consulente Público', cpf: '52998224725', contato: '96999991111', email: null, dataNascimento: null, sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'link_reutilizavel', enviadoEm: new Date(), atualizadoEm: new Date() };
+  const seedPending = () => environment.withSecurityRulesDisabled(context => setDoc(ref(context.firestore(), requestPath), pending));
+
+  test('Admin aprova Consulente com CPF, Pessoa e índice no mesmo lote', async () => {
+    await seedPending(); const db = authDb('admin-a'); const batch = writeBatch(db); const pessoaId = 'consulente-link';
+    batch.set(ref(db, `${root}/pessoas/${pessoaId}`), { nome: pending.nome, contato: pending.contato, cpf: pending.cpf, vinculo: 'consulente', tipoPessoa: 'Consulente', funcoesCasa: [], origemCadastro: 'link_reutilizavel', statusCadastro: 'aprovado', ativo: true, criadoEm: new Date(), criadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+    batch.set(ref(db, `${root}/cpf_index/${pending.cpf}`), { pessoaId, criadoEm: new Date() });
+    batch.update(ref(db, requestPath), { statusCadastro: 'aprovado', pessoaId, analisadoEm: new Date(), analisadoPor: 'admin-a', atualizadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+  });
+
+  test('Gestor aprova Membro recebido por link sem acionar o fluxo de convite antigo', async () => {
+    const memberRequestId = 'm'.repeat(20); const memberCpf = '11144477735';
+    const memberRequestPath = `${root}/solicitacoes_cadastro/${memberRequestId}`;
+    await environment.withSecurityRulesDisabled(context => setDoc(ref(context.firestore(), memberRequestPath), { ...pending, tipoCadastro: 'membro', cpf: memberCpf, nome: 'Membro Público', dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null } }));
+    const db = authDb('gestor'); const batch = writeBatch(db); const pessoaId = 'membro-link';
+    batch.set(ref(db, `${root}/pessoas/${pessoaId}`), canonicalMember({ nome: 'Membro Público', cpf: memberCpf, funcoesCasa: ['sem-funcao'], origemCadastro: 'link_reutilizavel', statusCadastro: 'aprovado', criadoPor: 'gestor', atualizadoPor: 'gestor' }));
+    batch.set(ref(db, `${root}/cpf_index/${memberCpf}`), { pessoaId, criadoEm: new Date() });
+    batch.update(ref(db, memberRequestPath), { statusCadastro: 'aprovado', pessoaId, analisadoEm: new Date(), analisadoPor: 'gestor', atualizadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+  });
+
+  test('Gestor rejeita com motivo e Atendimento não decide', async () => {
+    await seedPending(); const db = authDb('gestor'); const batch = writeBatch(db);
+    batch.update(ref(db, requestPath), { statusCadastro: 'rejeitado', motivoRejeicao: 'Dados inconsistentes', analisadoEm: new Date(), analisadoPor: 'gestor', atualizadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+    await seedPending();
+    await assertFails(updateDoc(ref(authDb('atendimento'), requestPath), { statusCadastro: 'rejeitado', motivoRejeicao: 'Fraude', analisadoEm: new Date(), analisadoPor: 'atendimento', atualizadoEm: new Date() }));
+  });
+
+  test('não aprova sem Pessoa vinculada', async () => {
+    await seedPending();
+    await assertFails(updateDoc(ref(authDb('admin-a'), requestPath), { statusCadastro: 'aprovado', pessoaId: 'inexistente', analisadoEm: new Date(), analisadoPor: 'admin-a', atualizadoEm: new Date() }));
   });
 });

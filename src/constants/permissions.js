@@ -42,7 +42,7 @@ export const MODULE_LABELS = Object.freeze({
   [MODULES.AGENDAS]: 'Agendamentos',
   [MODULES.PROGRAMACAO]: 'Programação',
   [MODULES.ATTENDANCE]: 'Fluxo do Dia',
-  [MODULES.PEOPLE]: 'Pessoas',
+  [MODULES.PEOPLE]: 'Pessoas e Cadastros',
   [MODULES.MEMBER_INVITES]: 'Convites',
   [MODULES.MEMBER_REGISTRATIONS]: 'Autocadastros',
   [MODULES.USERS]: 'Usuários',
@@ -111,6 +111,7 @@ export const getAllowedModules = profile => Object.keys(MODULE_PERMISSIONS)
 
 export const getModuleFromPathname = pathname => {
   const segment = String(pathname || '').split('/').filter(Boolean)[0];
+  if ([MODULES.MEMBER_INVITES, MODULES.MEMBER_REGISTRATIONS].includes(segment)) return MODULES.PEOPLE;
   return Object.values(MODULES).includes(segment) ? segment : MODULES.DASHBOARD;
 };
 

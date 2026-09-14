@@ -1,5 +1,6 @@
 import React, { lazy, Suspense, useEffect, useState } from 'react';
-import { auth, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured } from './services/firebaseAuth';
+import { auth, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured } from './services/firebaseAuth';
+import { sendEmailVerificationOnServer, sendPasswordResetOnServer } from './services/firebaseFunctions';
 import { ROLES } from './constants/roles';
 import { canAccessModule, getModuleFromPathname, getModulePath, hasPermission, MODULE_LABELS, MODULES, PERMISSIONS } from './constants/permissions';
 import { ToastProvider } from './components/ui/Toast';
@@ -24,9 +25,7 @@ const HomeModule = lazyNamed(() => import('./modules/Home/HomeModule'), 'HomeMod
 const AgendasModule = lazyNamed(() => import('./modules/Agendas/AgendasModule'), 'AgendasModule');
 const ProgramacaoModule = lazyNamed(() => import('./modules/Programacao/ProgramacaoModule'), 'ProgramacaoModule');
 const FluxoModule = lazyNamed(() => import('./modules/Fluxo/FluxoModule'), 'FluxoModule');
-const PessoasModule = lazyNamed(() => import('./modules/Pessoas/PessoasModule'), 'PessoasModule');
-const ConvitesModule = lazyNamed(() => import('./modules/Convites/ConvitesModule'), 'ConvitesModule');
-const AutocadastrosModule = lazyNamed(() => import('./modules/Autocadastros/AutocadastrosModule'), 'AutocadastrosModule');
+const PessoasCadastrosModule = lazyNamed(() => import('./modules/Pessoas/PessoasCadastrosModule'), 'PessoasCadastrosModule');
 const ConfiguracoesModule = lazyNamed(() => import('./modules/Configuracoes/ConfiguracoesModule'), 'ConfiguracoesModule');
 const UsuariosModule = lazyNamed(() => import('./modules/Usuarios/UsuariosModule'), 'UsuariosModule');
 const AutocadastroMembroPage = lazyNamed(() => import('./modules/Autocadastro/AutocadastroMembroPage'), 'AutocadastroMembroPage');
@@ -164,10 +163,11 @@ function AppContent() {
 
   useEffect(() => {
     const syncHistoryNavigation = () => {
+      const legacySection = window.location.pathname === '/convites' ? 'links' : window.location.pathname === '/autocadastros' ? 'solicitacoes' : null;
       const nextTab = getModuleFromPathname(window.location.pathname);
-      const canonicalPath = getModulePath(nextTab);
+      const canonicalPath = legacySection ? `${getModulePath(nextTab)}?secao=${legacySection}` : getModulePath(nextTab);
       setTab(nextTab);
-      if (window.location.pathname !== canonicalPath) window.history.replaceState({}, '', canonicalPath);
+      if (`${window.location.pathname}${window.location.search}` !== canonicalPath) window.history.replaceState({}, '', canonicalPath);
     };
     const handleHistoryNavigation = () => {
       const navigationEvent = new Event(UNSAVED_NAVIGATION_EVENT, { cancelable: true });
@@ -200,7 +200,7 @@ function AppContent() {
     const normalizedEmail = normalizeAuthEmail(email);
     if (!normalizedEmail) { toast.info('Informe seu e-mail no campo acima.'); return; }
     setIsLoggingIn(true);
-    try { await sendPasswordResetEmail(auth, normalizedEmail); }
+    try { await sendPasswordResetOnServer(normalizedEmail); }
     catch (error) { if (error?.code === 'auth/invalid-email') toast.error(getAuthErrorMessage(error)); else if (error?.code === 'auth/network-request-failed') toast.error(getAuthErrorMessage(error)); }
     finally {
       toast.info('Se houver uma conta compatível com este e-mail, você receberá as instruções para redefinir sua senha.');
@@ -209,7 +209,7 @@ function AppContent() {
   };
   const resendVerification = async () => {
     if (!user || Date.now() < verificationCooldownUntil) return;
-    try { await sendEmailVerification(user); setVerificationCooldownUntil(Date.now() + 60000); toast.success('E-mail de confirmação reenviado. Aguarde alguns instantes.'); }
+    try { await sendEmailVerificationOnServer(); setVerificationCooldownUntil(Date.now() + 60000); toast.success('E-mail de confirmação reenviado. Aguarde alguns instantes.'); }
     catch (error) { console.error(error); toast.error(getAuthErrorMessage(error)); }
   };
   const refreshVerification = async () => {
@@ -265,18 +265,22 @@ function AppContent() {
     window.history.pushState({}, '', getModulePath(nextTab));
   };
   const openUsersByFilter = filter => { if (hasPermission(profile, PERMISSIONS.USERS_MANAGE)) { setUsersFilter(filter); selectTab(MODULES.USERS); } };
+  const openPendingRegistrations = () => {
+    const navigationEvent = new Event(UNSAVED_NAVIGATION_EVENT, { cancelable: true });
+    if (!window.dispatchEvent(navigationEvent)) return;
+    setTab(MODULES.PEOPLE);
+    window.history.pushState({}, '', `${getModulePath(MODULES.PEOPLE)}?secao=solicitacoes`);
+  };
   const renderContent = () => {
     if (!canAccessModule(profile, tab)) return <PermissionDenied />;
     if (tab === MODULES.AGENDAS) return <AgendasModule user={user} profile={profile} />;
     if (tab === MODULES.PROGRAMACAO) return <ProgramacaoModule user={user} profile={profile} />;
     if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} />;
-    if (tab === MODULES.PEOPLE) return <PessoasModule user={user} profile={profile} />;
-    if (tab === MODULES.MEMBER_INVITES) return <ConvitesModule user={user} profile={profile} />;
-    if (tab === MODULES.MEMBER_REGISTRATIONS) return <AutocadastrosModule user={user} profile={profile} />;
+    if (tab === MODULES.PEOPLE) return <PessoasCadastrosModule user={user} profile={profile} />;
     if (tab === MODULES.USERS) return <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} />;
     if (tab === MODULES.MY_REGISTRATION) return <MeuCadastroModule user={user} profile={profile} />;
     if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} />;
-    return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenUsers={openUsersByFilter} />;
+    return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenUsers={openUsersByFilter} onOpenPendingRegistrations={openPendingRegistrations} />;
   };
   return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col">
     <a href="#main-content" className="fixed left-3 top-3 z-[250] -translate-y-24 rounded-xl bg-indigo-700 px-4 py-3 text-sm font-bold text-white shadow-xl transition-transform focus:translate-y-0">Ir para o conteúdo principal</a>

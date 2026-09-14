@@ -44,7 +44,7 @@ import {
   History
 } from 'lucide-react';
 
-export const PessoasModule = ({ user, profile }) => {
+export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusConsumed }) => {
   const canManagePeople = hasPermission(profile, PERMISSIONS.PEOPLE_MANAGE);
   const canManageConsulentes = hasPermission(profile, PERMISSIONS.CONSULENTES_MANAGE);
   const canManageLifecycle = hasPermission(profile, PERMISSIONS.LIFECYCLE_MANAGE);
@@ -106,6 +106,18 @@ export const PessoasModule = ({ user, profile }) => {
       unsubF();
     };
   }, [user, reloadVersion]);
+
+  useEffect(() => {
+    if (!focusPersonId || loadingData) return;
+    const pessoa = pessoas.find(item => item.id === focusPersonId);
+    if (pessoa) {
+      setAbaAtiva('todos');
+      setSituacao('todos');
+      setBuscaTexto('');
+      setSelectedPerson(pessoa);
+    }
+    onFocusConsumed?.();
+  }, [focusPersonId, loadingData, onFocusConsumed, pessoas]);
 
   const resetForm = () => {
     setEditing(null);

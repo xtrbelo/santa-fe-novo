@@ -25,10 +25,10 @@ test('normaliza autocadastro sem campos institucionais ou de acesso', () => {
   assert.equal(validateMemberSelfRegistrationPayload(payload), null);
 });
 
-test('valida email, data, CEP e UF opcionais quando preenchidos', () => {
-  const base = buildMemberSelfRegistrationPayload({ id: 'a'.repeat(64), nome: 'Nome', cpf: '52998224725' }, { dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: false } });
-  assert.equal(validateMemberSelfRegistrationPayload({ ...base, contato: 'telefone inválido' }), 'AUTOCADASTRO_CONTATO_INVALIDO');
-  assert.equal(validateMemberSelfRegistrationPayload({ ...base, email: 'invalido' }), 'AUTOCADASTRO_EMAIL_INVALIDO');
+test('exige contato e email válidos no autocadastro de Membro', () => {
+  const base = buildMemberSelfRegistrationPayload({ id: 'a'.repeat(64), nome: 'Nome', cpf: '52998224725' }, { contato: '96999991111', email: 'nome@example.test', dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: false } });
+  assert.equal(validateMemberSelfRegistrationPayload({ ...base, contato: null }), 'AUTOCADASTRO_CONTATO_OBRIGATORIO');
+  assert.equal(validateMemberSelfRegistrationPayload({ ...base, email: null }), 'AUTOCADASTRO_EMAIL_OBRIGATORIO');
   assert.equal(validateMemberSelfRegistrationPayload({ ...base, dataNascimento: '30/08/2000' }), 'AUTOCADASTRO_DATA_INVALIDA');
   assert.equal(validateMemberSelfRegistrationPayload({ ...base, endereco: { ...base.endereco, cep: '123' } }), 'AUTOCADASTRO_CEP_INVALIDO');
   assert.equal(validateMemberSelfRegistrationPayload({ ...base, endereco: { ...base.endereco, uf: 'A' } }), 'AUTOCADASTRO_UF_INVALIDA');

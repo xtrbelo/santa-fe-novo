@@ -37,7 +37,7 @@ test('Membro legado recebe valores seguros para renderização', () => {
   assert.equal(details.sexo, 'nao_informado'); assert.equal(details.estadoCivil, 'nao_informado'); assert.equal(details.endereco.cep, null); assert.equal(details.dadosCasa.dataIngresso, null); assert.equal(details.statusCadastro, 'aprovado'); assert.equal(details.origemCadastro, 'administrativo'); assert.equal(getPessoaStatusCadastro({ tipoPessoa: 'Membro' }), 'aprovado');
 });
 test('valida os estados cadastrais previstos', () => {
-  assert.equal(isValidStatusCadastro('aprovado'), true); assert.equal(isValidStatusCadastro('aguardando_validacao'), true); assert.equal(isValidStatusCadastro('desconhecido'), false); assert.equal(isValidOrigemCadastro('administrativo'), true); assert.equal(isValidOrigemCadastro('autocadastro'), true); assert.equal(isValidOrigemCadastro('desconhecida'), false);
+  assert.equal(isValidStatusCadastro('aprovado'), true); assert.equal(isValidStatusCadastro('aguardando_validacao'), true); assert.equal(isValidStatusCadastro('desconhecido'), false); assert.equal(isValidOrigemCadastro('administrativo'), true); assert.equal(isValidOrigemCadastro('autocadastro'), true); assert.equal(isValidOrigemCadastro('link_reutilizavel'), true); assert.equal(isValidOrigemCadastro('desconhecida'), false);
 });
 test('preserva status e origem existentes ao reconstruir payload de edição', () => {
   const current = { vinculo: 'membro', nome: 'Em validação', cpf: '123', statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro' };
