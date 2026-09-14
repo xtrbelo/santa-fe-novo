@@ -4,8 +4,6 @@ import {
   CalendarDays, 
   BookOpenCheck, 
   Users, 
-  Mail,
-  ClipboardCheck,
   UsersRound,
   Settings,
   ContactRound
@@ -20,8 +18,6 @@ export const MobileNav = ({ activeTab, onSelectTab, profile }) => {
     { id: 'programacao', label: 'Programar', icon: Settings },
     { id: 'fluxo', label: 'Fluxo', icon: BookOpenCheck },
     { id: 'pessoas', label: 'Pessoas', icon: Users },
-    { id: 'convites', label: 'Convites', icon: Mail },
-    { id: 'autocadastros', label: 'Cadastros', icon: ClipboardCheck },
     { id: 'usuarios', label: 'Usuários', icon: UsersRound },
     { id: 'config', label: 'Ajustes', icon: Settings },
     { id: 'meu-cadastro', label: 'Cadastro', icon: ContactRound },

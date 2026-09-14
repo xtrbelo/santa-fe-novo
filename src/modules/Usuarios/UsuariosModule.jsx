@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { autorizarUsuario, cancelAccessAuthorization, createAccessAuthorization, getAppCollection, onSnapshot, resendAccessActivationEmail, sendAccessActivationEmail, sendUserPasswordReset, vincularUsuarioPessoa } from '../../services/firebase';
-import { updateUserAccessOnServer } from '../../services/firebaseFunctions';
+import { autorizarUsuario, cancelAccessAuthorization, createAccessAuthorization, getAppCollection, onSnapshot, vincularUsuarioPessoa } from '../../services/firebase';
+import { sendAccessActivationOnServer, sendPasswordResetOnServer, updateUserAccessOnServer } from '../../services/firebaseFunctions';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
 import { getPessoaFuncoesCasa } from '../../utils/domain';
 import { getEffectiveMemberFunctions, getMemberFunctionLabels, localTextIncludes, normalizeEmail } from '../../utils/pessoaForm';
@@ -128,7 +128,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
       const authorization = await createAccessAuthorization({ pessoaBaseId: newAccessPessoa.id, role: newAccessRole, executadoPor: user.uid });
       setNewAccessOpen(false);
       try {
-        await sendAccessActivationEmail({ email: authorization.email, origin: window.location.origin });
+        await sendAccessActivationOnServer(authorization.pessoaBaseId);
         toast.success('Autorização criada e e-mail de ativação enviado.');
       } catch (emailError) {
         console.error(emailError);
@@ -143,7 +143,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
   const resendActivation = async authorization => {
     setSaving(true);
     try {
-      await resendAccessActivationEmail({ pessoaBaseId: authorization.pessoaBaseId, origin: window.location.origin });
+      await sendAccessActivationOnServer(authorization.pessoaBaseId);
       toast.success('E-mail de ativação reenviado.');
     } catch (error) { console.error(error); toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível reenviar o e-mail de ativação.' })); }
     finally { setSaving(false); }
@@ -151,7 +151,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
   const resetUserPassword = async usuario => {
     setSaving(true);
     try {
-      await sendUserPasswordReset({ email: usuario.email });
+      await sendPasswordResetOnServer(usuario.email);
       toast.success('E-mail de redefinição de senha enviado.');
     } catch (error) { console.error(error); toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível solicitar a redefinição de senha.' })); }
     finally { setSaving(false); }

@@ -54,8 +54,8 @@ export const buildMemberSelfRegistrationPayload = (invite, data = {}) => ({
 export const validateMemberSelfRegistrationPayload = data => {
   if (!data?.inviteId || !/^[a-f0-9]{64}$/.test(data.inviteId)) return 'AUTOCADASTRO_INVALIDO';
   if (!data.nome || !data.cpf) return 'AUTOCADASTRO_INVALIDO';
-  if (data.contato && !/^[0-9]{1,11}$/.test(data.contato)) return 'AUTOCADASTRO_CONTATO_INVALIDO';
-  if (data.email && !isValidEmail(data.email)) return 'AUTOCADASTRO_EMAIL_INVALIDO';
+  if (!/^[0-9]{10,11}$/.test(data.contato || '')) return 'AUTOCADASTRO_CONTATO_OBRIGATORIO';
+  if (!isValidEmail(data.email || '')) return 'AUTOCADASTRO_EMAIL_OBRIGATORIO';
   if (!SEXOS.includes(data.sexo) || !ESTADOS_CIVIS.includes(data.estadoCivil)) return 'AUTOCADASTRO_INVALIDO';
   if (data.dataNascimento && !/^\d{4}-\d{2}-\d{2}$/.test(data.dataNascimento)) return 'AUTOCADASTRO_DATA_INVALIDA';
   if (data.endereco.cep && data.endereco.cep.length !== 8) return 'AUTOCADASTRO_CEP_INVALIDO';

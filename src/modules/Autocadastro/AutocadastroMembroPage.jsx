@@ -5,6 +5,7 @@ import { getMemberInviteByToken, submitMemberSelfRegistration } from '../../serv
 import { ESTADOS_CIVIS, SEXOS } from '../../utils/pessoaForm';
 import { maskCPF } from '../../utils/formatters';
 import { maskSelfRegistrationCep, maskSelfRegistrationPhone } from '../../utils/memberSelfRegistration';
+import { ReusableRegistrationPage } from './ReusableRegistrationPage';
 
 const fieldClass = 'mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-100';
 const labels = { masculino: 'Masculino', feminino: 'Feminino', outro: 'Outro', nao_informado: 'Prefiro não informar', solteiro: 'Solteiro(a)', casado: 'Casado(a)', uniao_estavel: 'União estável', separado: 'Separado(a)', divorciado: 'Divorciado(a)', viuvo: 'Viúvo(a)' };
@@ -15,11 +16,12 @@ function Message({ sent = false }) {
 }
 
 const errorText = message => ({
+  AUTOCADASTRO_CONTATO_OBRIGATORIO: 'Informe um telefone com DDD.', AUTOCADASTRO_EMAIL_OBRIGATORIO: 'Informe um e-mail válido.',
   AUTOCADASTRO_EMAIL_INVALIDO: 'Informe um e-mail válido.', AUTOCADASTRO_CEP_INVALIDO: 'Informe um CEP com 8 dígitos.', AUTOCADASTRO_UF_INVALIDA: 'Informe uma UF com 2 letras.', AUTOCADASTRO_DATA_INVALIDA: 'Informe uma data de nascimento válida.',
   AUTOCADASTRO_DATA_INGRESSO_INVALIDA: 'Informe uma data de entrada válida.', AUTOCADASTRO_BATIZADO_OBRIGATORIO: 'Informe se foi batizado na CAESF.', AUTOCADASTRO_DATA_BATISMO_OBRIGATORIA: 'Informe a data de batismo na CAESF.', AUTOCADASTRO_DATA_INGRESSO_FUTURA: 'A data de entrada na Casa não pode ser futura.', AUTOCADASTRO_DATA_BATISMO_FUTURA: 'A data de batismo não pode ser futura.', AUTOCADASTRO_BATISMO_ANTERIOR_INGRESSO: 'A data de batismo não pode ser anterior à entrada na Casa.',
 }[message]);
 
-export function AutocadastroMembroPage() {
+function IndividualInviteRegistrationPage() {
   const [state, setState] = useState({ status: 'carregando', invite: null });
   const [form, setForm] = useState({ dataNascimento: '', contato: '', email: '', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: emptyAddress, dadosCasa: { dataIngresso: '', batizadoCaesf: null, dataBatismoCaesf: '' } });
   const [submitting, setSubmitting] = useState(false);
@@ -59,4 +61,9 @@ export function AutocadastroMembroPage() {
     <section><h2 className="font-black text-gray-900">Dados da Casa</h2><div className="mt-3 grid gap-4 sm:grid-cols-2"><label className="text-xs font-bold text-gray-600">Data de entrada na Casa<input className={fieldClass} type="date" value={form.dadosCasa.dataIngresso} onChange={e => updateHouseData('dataIngresso', e.target.value)} /></label><fieldset><legend className="text-xs font-bold text-gray-600">Batizado na CAESF? *</legend><div className="mt-3 flex gap-5 text-sm font-bold"><label><input type="radio" name="batizadoCaesf" required checked={form.dadosCasa.batizadoCaesf === true} onChange={() => updateHouseData('batizadoCaesf', true)} /> Sim</label><label><input type="radio" name="batizadoCaesf" required checked={form.dadosCasa.batizadoCaesf === false} onChange={() => updateHouseData('batizadoCaesf', false)} /> Não</label></div></fieldset>{form.dadosCasa.batizadoCaesf === true && <label className="text-xs font-bold text-gray-600 sm:col-span-2">Data de batismo na CAESF *<input className={fieldClass} type="date" required value={form.dadosCasa.dataBatismoCaesf} onChange={e => updateHouseData('dataBatismoCaesf', e.target.value)} /></label>}</div></section>
     <p className="rounded-2xl bg-amber-50 p-4 text-xs font-bold leading-relaxed text-amber-800">O envio deste cadastro não concede acesso ao Sistema Santa Fé. Seus dados serão analisados pela administração.</p>{error && <p role="alert" className="text-sm font-bold text-rose-600">{error}</p>}<Button type="submit" variant="purple" disabled={submitting} className="w-full">{submitting ? 'Enviando...' : 'Enviar cadastro para análise'}</Button>
   </form></main>;
+}
+
+export function AutocadastroMembroPage() {
+  const linkId = new URLSearchParams(window.location.search).get('link');
+  return linkId ? <ReusableRegistrationPage linkId={linkId}/> : <IndividualInviteRegistrationPage/>;
 }

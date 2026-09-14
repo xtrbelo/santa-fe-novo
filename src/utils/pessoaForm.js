@@ -4,7 +4,7 @@ export const FALLBACK_FUNCOES_MEMBRO = [{ id: 'medium', nome: 'Médium' }, { id:
 export const SEXOS = ['masculino', 'feminino', 'outro', 'nao_informado'];
 export const ESTADOS_CIVIS = ['solteiro', 'casado', 'uniao_estavel', 'separado', 'divorciado', 'viuvo', 'outro', 'nao_informado'];
 export const STATUS_CADASTRO = ['convite_enviado', 'preenchendo', 'aguardando_validacao', 'correcao_solicitada', 'aprovado', 'rejeitado'];
-export const ORIGENS_CADASTRO = ['administrativo', 'autocadastro'];
+export const ORIGENS_CADASTRO = ['administrativo', 'autocadastro', 'link_reutilizavel'];
 
 export const getEffectiveMemberFunctions = configuredFunctions => {
   const byId = new Map(FALLBACK_FUNCOES_MEMBRO.map(item => [item.id, { ...item }]));

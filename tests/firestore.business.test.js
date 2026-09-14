@@ -465,7 +465,7 @@ describe('Fase 9C - autocadastro público de Membro', () => {
 
   test('autocadastro respondido bloqueia novo convite, reemissão e segundo envio', async () => {
     const created = await createMemberInvite({ nome: 'Pendente', cpf: '39053344705', userId: USER_ID, origin: 'http://localhost' }, adminDb());
-    const data = { nome: created.convite.nome, cpf: created.convite.cpf, dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: false } };
+    const data = { nome: created.convite.nome, cpf: created.convite.cpf, contato: '96999999999', email: 'pendente@example.test', dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: false } };
     await submitMemberSelfRegistration({ inviteId: created.convite.id, data }, publicDb());
     await assert.rejects(createMemberInvite({ nome: 'Outro', cpf: created.convite.cpf, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /AUTOCADASTRO_PENDENTE/);
     await assert.rejects(reissueMemberInvite({ inviteId: created.convite.id, userId: USER_ID, origin: 'http://localhost' }, adminDb()), /AUTOCADASTRO_PENDENTE/);

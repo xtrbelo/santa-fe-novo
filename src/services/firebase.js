@@ -43,10 +43,13 @@ import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelf
 import { validateCPF } from '../utils/formatters.js';
 import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedUser, validateAccessAuthorization } from '../utils/accessAuthorization.js';
 import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
+import { buildConsulteeFromReusableRegistration } from '../utils/reusableRegistration.js';
 import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
 import { inspectAgendaOccupancy, vacancyMapsEqual } from '../utils/vacancyReconciliation.js';
 import { LIFECYCLE_AUDIT_TYPES, requireLifecycleReason } from '../utils/lifecycle.js';
 import { getAgendaSchedulingKey } from '../utils/agendaScheduling.js';
+import { buildRegistrationLinkUrl, normalizeRegistrationLinkConfig, normalizeRegistrationLinkEdit } from '../utils/registrationLink.js';
+import { buildReusableRegistrationPayload, validateReusableRegistrationPayload } from '../utils/reusableRegistration.js';
 
 const getDataCollection = (firestore, collName) => collection(firestore, 'artifacts', appId, 'public', 'data', collName);
 const getDataDoc = (firestore, collName, docId) => doc(firestore, 'artifacts', appId, 'public', 'data', collName, docId);
@@ -131,6 +134,85 @@ const createInviteCredentials = async origin => {
   const token = generateMemberInviteToken();
   const id = await hashMemberInviteToken(token);
   return { token, id, url: buildMemberInviteUrl(token, origin) };
+};
+
+const createRegistrationLinkHistory = (firestore, data) => ({ ref: doc(getDataCollection(firestore, 'links_autocadastro_historico')), data: { ...data, criadoEm: Timestamp.now() } });
+
+export const createRegistrationLink = async ({ tipoCadastro, nome, validadeDias, limiteUsos, userId, responsibleName = 'Responsável', origin = window.location.origin }, firestore = db) => {
+  const config = normalizeRegistrationLinkConfig({ tipoCadastro, nome, validadeDias, limiteUsos });
+  const linkId = await hashMemberInviteToken(generateMemberInviteToken());
+  const now = Timestamp.now();
+  const link = {
+    tipoCadastro: config.tipoCadastro, nome: config.nome, status: 'ativo',
+    expiraEm: config.validadeDias === null ? null : Timestamp.fromMillis(now.toMillis() + config.validadeDias * 86400000),
+    limiteUsos: config.limiteUsos, totalUsos: 0,
+    criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId,
+  };
+  const history = createRegistrationLinkHistory(firestore, { linkId, tipo: 'LINK_CRIADO', descricao: `Link criado como ${config.tipoCadastro === 'membro' ? 'Membro' : 'Consulente'}.`, executadoPor: userId, responsavelNome: responsibleName });
+  const batch = writeBatch(firestore);
+  batch.set(getDataDoc(firestore, 'links_autocadastro', linkId), link);
+  batch.set(history.ref, history.data);
+  await batch.commit();
+  return { id: linkId, link, url: buildRegistrationLinkUrl(linkId, origin) };
+};
+
+export const setRegistrationLinkActive = async ({ linkId, active, userId, responsibleName = 'Responsável' }, firestore = db) => {
+  const ref = getDataDoc(firestore, 'links_autocadastro', linkId);
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) throw new Error('LINK_NAO_ENCONTRADO');
+  if (active && snapshot.data().expiraEm?.toMillis?.() <= Date.now()) throw new Error('LINK_EXPIRADO');
+  const now = Timestamp.now();
+  const history = createRegistrationLinkHistory(firestore, { linkId, tipo: active ? 'LINK_ATIVADO' : 'LINK_DESATIVADO', descricao: active ? 'Link reativado.' : 'Link desativado.', executadoPor: userId, responsavelNome: responsibleName });
+  const batch = writeBatch(firestore);
+  batch.update(ref, { status: active ? 'ativo' : 'inativo', atualizadoEm: now, atualizadoPor: userId });
+  batch.set(history.ref, { ...history.data, criadoEm: now });
+  await batch.commit();
+};
+
+export const updateRegistrationLink = async ({ linkId, nome, validadeDias, limiteUsos, userId, responsibleName = 'Responsável' }, firestore = db) => {
+  const ref = getDataDoc(firestore, 'links_autocadastro', linkId);
+  const snapshot = await getDoc(ref);
+  if (!snapshot.exists()) throw new Error('LINK_NAO_ENCONTRADO');
+  const config = normalizeRegistrationLinkEdit({ nome, validadeDias, limiteUsos }, snapshot.data().totalUsos);
+  const now = Timestamp.now();
+  const changes = [];
+  if (snapshot.data().nome !== config.nome) changes.push('nome');
+  changes.push('validade', 'limite de usos');
+  const history = createRegistrationLinkHistory(firestore, { linkId, tipo: 'LINK_EDITADO', descricao: `Alterado: ${changes.join(', ')}.`, executadoPor: userId, responsavelNome: responsibleName });
+  const batch = writeBatch(firestore);
+  batch.update(ref, {
+    nome: config.nome,
+    expiraEm: config.validadeDias === null ? null : Timestamp.fromMillis(now.toMillis() + config.validadeDias * 86400000),
+    limiteUsos: config.limiteUsos,
+    atualizadoEm: now,
+    atualizadoPor: userId,
+  });
+  batch.set(history.ref, { ...history.data, criadoEm: now });
+  await batch.commit();
+};
+
+export const getRegistrationLinkById = async (linkId, firestore = db) => {
+  if (!/^[a-f0-9]{64}$/.test(String(linkId || ''))) return { status: 'invalido', link: null };
+  const snapshot = await getDoc(getDataDoc(firestore, 'links_autocadastro', linkId));
+  if (!snapshot.exists()) return { status: 'invalido', link: null };
+  return { status: 'ativo', link: { id: snapshot.id, ...snapshot.data() } };
+};
+
+export const submitReusableRegistration = async ({ linkId, data }, firestore = db) => {
+  const linkRef = getDataDoc(firestore, 'links_autocadastro', linkId);
+  const requestRef = doc(getDataCollection(firestore, 'solicitacoes_cadastro'));
+  await runTransaction(firestore, async transaction => {
+    const linkSnapshot = await transaction.get(linkRef);
+    if (!linkSnapshot.exists()) throw new Error('LINK_INDISPONIVEL');
+    const link = { id: linkSnapshot.id, ...linkSnapshot.data() };
+    if (link.status !== 'ativo' || link.expiraEm?.toMillis?.() <= Date.now() || (link.limiteUsos && Number(link.totalUsos || 0) >= link.limiteUsos)) throw new Error('LINK_INDISPONIVEL');
+    const payload = buildReusableRegistrationPayload(link, data);
+    const validationError = validateReusableRegistrationPayload(payload);
+    if (validationError) throw new Error(validationError);
+    transaction.set(requestRef, { ...payload, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+    transaction.update(linkRef, { totalUsos: Number(link.totalUsos || 0) + 1, ultimaSolicitacaoId: requestRef.id, atualizadoEm: serverTimestamp() });
+  });
+  return { id: requestRef.id };
 };
 
 export const createMemberInvite = async ({ nome, cpf, email, userId, origin }, firestore = db) => {
@@ -289,6 +371,47 @@ export const rejectMemberSelfRegistration = async ({ inviteId, userId, reason },
     transaction.update(registrationRef, { statusCadastro: 'rejeitado', motivoRejeicao, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
     transaction.delete(inviteIndexRef);
     transaction.set(auditRef, { tipo: 'AUTOCADASTRO_MEMBRO_REJEITADO', autocadastroId: inviteId, inviteId, executadoPor: userId, executadoEm: now, motivo: motivoRejeicao });
+  });
+};
+
+export const approveReusableRegistration = async ({ requestId, userId, funcoesCasa = [], dadosCasa }, firestore = db) => {
+  const requestRef = getDataDoc(firestore, 'solicitacoes_cadastro', requestId);
+  const pessoaRef = doc(getDataCollection(firestore, 'pessoas'));
+  const configuredFunctionsSnapshot = await getDocs(getDataCollection(firestore, 'config_funcoes_membro'));
+  const allowedFunctions = new Set(getEffectiveMemberFunctions(configuredFunctionsSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))).map(item => item.id));
+  const selectedFunctions = [...new Set(funcoesCasa.map(value => String(value || '').trim()).filter(Boolean))];
+  await runTransaction(firestore, async transaction => {
+    const requestSnapshot = await transaction.get(requestRef);
+    if (!requestSnapshot.exists()) throw new Error('SOLICITACAO_NAO_ENCONTRADA');
+    const registration = requestSnapshot.data();
+    if (registration.statusCadastro !== 'aguardando_validacao') throw new Error('AUTOCADASTRO_JA_ANALISADO');
+    if (registration.tipoCadastro === 'membro' && selectedFunctions.length === 0) throw new Error('FUNCAO_CASA_OBRIGATORIA');
+    if (selectedFunctions.some(code => !allowedFunctions.has(code))) throw new Error('FUNCAO_CASA_INVALIDA');
+    const pessoa = registration.tipoCadastro === 'membro'
+      ? { ...buildPessoaFromSelfRegistration(registration, { funcoesCasa: selectedFunctions, dadosCasa: dadosCasa ?? registration.dadosCasa }), origemCadastro: 'link_reutilizavel' }
+      : buildConsulteeFromReusableRegistration(registration);
+    const validationError = validatePessoaPayload(pessoa);
+    if (validationError) throw new Error(`SOLICITACAO_INVALIDA:${validationError}`);
+    const cpfIndexRef = registration.cpf ? getDataDoc(firestore, 'cpf_index', registration.cpf) : null;
+    if (cpfIndexRef && (await transaction.get(cpfIndexRef)).exists()) throw new Error('CPF_DUPLICADO');
+    const now = Timestamp.now();
+    transaction.set(pessoaRef, withPessoaSearchIndex({ ...pessoa, criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId }));
+    if (cpfIndexRef) transaction.set(cpfIndexRef, { pessoaId: pessoaRef.id, criadoEm: now });
+    transaction.update(requestRef, { statusCadastro: 'aprovado', pessoaId: pessoaRef.id, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
+  });
+  return { pessoaId: pessoaRef.id };
+};
+
+export const rejectReusableRegistration = async ({ requestId, userId, reason }, firestore = db) => {
+  const motivo = normalizeRejectionReason(reason);
+  if (!motivo) throw new Error('MOTIVO_REJEICAO_OBRIGATORIO');
+  const requestRef = getDataDoc(firestore, 'solicitacoes_cadastro', requestId);
+  await runTransaction(firestore, async transaction => {
+    const snapshot = await transaction.get(requestRef);
+    if (!snapshot.exists()) throw new Error('SOLICITACAO_NAO_ENCONTRADA');
+    if (snapshot.data().statusCadastro !== 'aguardando_validacao') throw new Error('AUTOCADASTRO_JA_ANALISADO');
+    const now = Timestamp.now();
+    transaction.update(requestRef, { statusCadastro: 'rejeitado', motivoRejeicao: motivo, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
   });
 };
 
