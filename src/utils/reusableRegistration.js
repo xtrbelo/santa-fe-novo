@@ -4,6 +4,7 @@ import { validateSelfRegistrationHouseData } from './memberSelfRegistration.js';
 
 const digits = (value, limit) => String(value ?? '').replace(/\D/g, '').slice(0, limit);
 const text = value => String(value ?? '').trim() || null;
+export const PRIVACY_NOTICE_VERSION = '2026-09-14.1';
 
 export const buildReusableRegistrationPayload = (link, data = {}) => ({
   linkId: link.id,
@@ -17,6 +18,13 @@ export const buildReusableRegistrationPayload = (link, data = {}) => ({
   estadoCivil: normalizeEstadoCivil(data.estadoCivil),
   endereco: normalizeEndereco(data.endereco),
   dadosCasa: link.tipoCadastro === 'membro' ? normalizeDadosCasa(data.dadosCasa) : { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null },
+  aceite: {
+    versao: PRIVACY_NOTICE_VERSION,
+    avisoPrivacidade: data.aceite?.avisoPrivacidade === true,
+    declaracaoVeracidade: data.aceite?.declaracaoVeracidade === true,
+    emailConfirmado: link.tipoCadastro === 'membro',
+  },
+  ...(link.tipoCadastro === 'membro' ? { verificacaoEmailId: text(data.verificacaoEmailId) } : {}),
   statusCadastro: 'aguardando_validacao',
   origemCadastro: 'link_reutilizavel',
 });
@@ -29,6 +37,9 @@ export const validateReusableRegistrationPayload = data => {
   if (!validateCPF(data.cpf || '')) return 'CPF_INVALIDO';
   if (data.tipoCadastro === 'membro' && !isValidEmail(data.email || '')) return 'EMAIL_OBRIGATORIO';
   if (data.email && !isValidEmail(data.email)) return 'EMAIL_INVALIDO';
+  if (data.aceite?.versao !== PRIVACY_NOTICE_VERSION || data.aceite?.avisoPrivacidade !== true) return 'AVISO_PRIVACIDADE_OBRIGATORIO';
+  if (data.aceite?.declaracaoVeracidade !== true) return 'DECLARACAO_VERACIDADE_OBRIGATORIA';
+  if (data.tipoCadastro === 'membro' && (!data.verificacaoEmailId || data.aceite?.emailConfirmado !== true)) return 'EMAIL_NAO_CONFIRMADO';
   if (data.tipoCadastro === 'membro') return validateSelfRegistrationHouseData(data.dadosCasa);
   return null;
 };
