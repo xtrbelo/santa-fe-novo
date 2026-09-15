@@ -137,3 +137,15 @@ test('Links oferecem busca, filtros, contadores e priorização por atenção', 
   assert.match(source, /linkCounters/);
   assert.match(source, /priority\(a\) - priority\(b\)/);
 });
+
+test('formulário público registra privacidade, declaração, código e comprovante', () => {
+  const source = readSource('../src/modules/Autocadastro/ReusableRegistrationPage.jsx');
+  assert.match(source, /Aviso de Privacidade/);
+  assert.match(source, /declaracaoVeracidade/);
+  assert.match(source, /requestRegistrationEmailCodeOnServer/);
+  assert.match(source, /confirmRegistrationEmailCodeOnServer/);
+  assert.match(source, /Comprovante do aceite/);
+  const reviewSource = readSource('../src/modules/Autocadastros/AutocadastrosModule.jsx');
+  assert.match(reviewSource, /Registro de aceite/);
+  assert.match(reviewSource, /Resumo criptográfico/);
+});

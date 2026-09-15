@@ -26,3 +26,5 @@ export const sendAccessActivationOnServer = pessoaBaseId => callEmailFunction('s
 export const sendEmailVerificationOnServer = () => callEmailFunction('sendEmailVerificationMailjet');
 export const sendPasswordResetOnServer = email => callEmailFunction('sendPasswordResetMailjet', { email });
 export const resendEmailCommunicationOnServer = communicationId => callEmailFunction('resendEmailCommunicationMailjet', { communicationId });
+export const requestRegistrationEmailCodeOnServer = (linkId, email) => callEmailFunction('requestRegistrationEmailCode', { linkId, email });
+export const confirmRegistrationEmailCodeOnServer = (verificationId, code) => callEmailFunction('confirmRegistrationEmailCode', { verificationId, code });

@@ -167,6 +167,7 @@ service cloud.firestore {
     function memberInvitePath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convites_membro/$(inviteId); }
     function memberSelfRegistrationPath(appId, inviteId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/autocadastros_membro/$(inviteId); }
     function reusableRegistrationPath(appId, requestId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/solicitacoes_cadastro/$(requestId); }
+    function registrationVerificationPath(appId, verificationId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/verificacoes_email_cadastro/$(verificationId); }
     function memberInviteCpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/convite_membro_cpf_index/$(cpf); }
     function cpfIndexPath(appId, cpf) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/cpf_index/$(cpf); }
     function userPersonIndexPath(appId, pessoaId) { return /databases/$(database)/documents/artifacts/$(appId)/public/data/usuario_pessoa_index/$(pessoaId); }
@@ -554,7 +555,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'linkId', 'tipoCadastro', 'nome', 'cpf', 'contato', 'email', 'dataNascimento',
           'sexo', 'estadoCivil', 'endereco', 'dadosCasa', 'statusCadastro', 'origemCadastro',
-          'enviadoEm', 'atualizadoEm'
+          'aceite', 'verificacaoEmailId', 'enviadoEm', 'atualizadoEm'
         ])
         && request.resource.data.linkId.matches('^[a-f0-9]{64}$')
         && request.resource.data.tipoCadastro in ['membro', 'consulente']
@@ -573,6 +574,13 @@ service cloud.firestore {
         && request.resource.data.dadosCasa.keys().hasOnly(['dataIngresso', 'batizadoCaesf', 'dataBatismoCaesf'])
         && request.resource.data.statusCadastro == 'aguardando_validacao'
         && request.resource.data.origemCadastro == 'link_reutilizavel'
+        && request.resource.data.aceite is map
+        && request.resource.data.aceite.keys().hasOnly(['versao', 'avisoPrivacidade', 'declaracaoVeracidade', 'emailConfirmado', 'aceitoEm', 'protocolo'])
+        && request.resource.data.aceite.versao == '2026-09-14.1'
+        && request.resource.data.aceite.avisoPrivacidade == true
+        && request.resource.data.aceite.declaracaoVeracidade == true
+        && request.resource.data.aceite.aceitoEm == request.time
+        && request.resource.data.aceite.protocolo == requestId
         && request.resource.data.enviadoEm == request.time
         && request.resource.data.atualizadoEm == request.time
         && exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/links_autocadastro/$(request.resource.data.linkId))
@@ -583,9 +591,20 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/artifacts/$(appId)/public/data/links_autocadastro/$(request.resource.data.linkId)).data.ultimaSolicitacaoId == requestId
         && ((request.resource.data.tipoCadastro == 'consulente'
             && request.resource.data.cpf is string && request.resource.data.cpf.matches('^[0-9]{11}$')
-            && request.resource.data.contato is string && request.resource.data.contato.matches('^[0-9]{10,11}$'))
+            && request.resource.data.contato is string && request.resource.data.contato.matches('^[0-9]{10,11}$')
+            && request.resource.data.aceite.emailConfirmado == false
+            && !request.resource.data.keys().hasAny(['verificacaoEmailId']))
           || (request.resource.data.tipoCadastro == 'membro'
             && request.resource.data.cpf is string
+            && request.resource.data.verificacaoEmailId is string
+            && request.resource.data.verificacaoEmailId.matches('^[A-Za-z0-9]{20}$')
+            && request.resource.data.aceite.emailConfirmado == true
+            && get(registrationVerificationPath(appId, request.resource.data.verificacaoEmailId)).data.status == 'confirmado'
+            && get(registrationVerificationPath(appId, request.resource.data.verificacaoEmailId)).data.linkId == request.resource.data.linkId
+            && get(registrationVerificationPath(appId, request.resource.data.verificacaoEmailId)).data.email == request.resource.data.email
+            && get(registrationVerificationPath(appId, request.resource.data.verificacaoEmailId)).data.expiraEm > request.time
+            && getAfter(registrationVerificationPath(appId, request.resource.data.verificacaoEmailId)).data.status == 'usado'
+            && getAfter(registrationVerificationPath(appId, request.resource.data.verificacaoEmailId)).data.solicitacaoId == requestId
             && request.resource.data.dadosCasa.batizadoCaesf is bool
             && ((request.resource.data.dadosCasa.batizadoCaesf == false && request.resource.data.dadosCasa.dataBatismoCaesf == null)
               || (request.resource.data.dadosCasa.batizadoCaesf == true && request.resource.data.dadosCasa.dataBatismoCaesf is string))));
@@ -613,6 +632,27 @@ service cloud.firestore {
             && request.resource.data.motivoRejeicao.size() > 0
             && !request.resource.data.keys().hasAny(['pessoaId'])));
       allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/verificacoes_email_cadastro/{verificationId} {
+      allow read, create, delete: if false;
+      allow update: if request.auth == null
+        && verificationId.matches('^[A-Za-z0-9]{20}$')
+        && resource.data.status == 'confirmado'
+        && resource.data.expiraEm > request.time
+        && request.resource.data.status == 'usado'
+        && request.resource.data.solicitacaoId is string
+        && request.resource.data.solicitacaoId.matches('^[A-Za-z0-9]{20}$')
+        && request.resource.data.usadoEm == request.time
+        && request.resource.data.atualizadoEm == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'solicitacaoId', 'usadoEm', 'atualizadoEm'])
+        && getAfter(reusableRegistrationPath(appId, request.resource.data.solicitacaoId)).data.verificacaoEmailId == verificationId
+        && getAfter(reusableRegistrationPath(appId, request.resource.data.solicitacaoId)).data.email == resource.data.email
+        && getAfter(reusableRegistrationPath(appId, request.resource.data.solicitacaoId)).data.linkId == resource.data.linkId;
+    }
+
+    match /artifacts/{appId}/public/data/limites_verificacao_cadastro/{id} {
+      allow read, write: if false;
     }
 
     match /artifacts/{appId}/public/data/convites_membro/{inviteId} {

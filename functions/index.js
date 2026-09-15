@@ -1,13 +1,14 @@
 import { getApp, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import process from 'node:process';
 import { assertAdminContinuity, isActiveAdmin, requiresActiveMember, requiresAdminCount, resolveProjectId } from './adminPolicy.js';
 import { buildApprovedRegistrationEmail, sendMailjetEmail, sendMailjetMessage, shouldSendApprovedRegistrationEmail } from './registrationEmail.js';
 import { buildActivationEmail, buildPasswordResetEmail, buildVerificationEmail, getSystemBaseUrl } from './accountEmail.js';
+import { buildRegistrationEvidenceHash, buildRegistrationVerificationEmail, createVerificationCode, hashVerificationCode, hashVerificationIdentity, isVerificationEmail, normalizeVerificationEmail, verificationCodeMatches } from './registrationVerification.js';
 
 if (!getApps().length) initializeApp();
 
@@ -70,6 +71,18 @@ export const sendApprovedLegacyRegistrationEmail = onDocumentUpdated({
   document: 'artifacts/{projectId}/public/data/autocadastros_membro/{requestId}',
 }, approvedRegistrationEmailHandler);
 
+export const sealReusableRegistrationEvidence = onDocumentCreated({
+  region: 'southamerica-east1',
+  document: 'artifacts/{projectId}/public/data/solicitacoes_cadastro/{requestId}',
+}, async event => {
+  const registration = event.data?.data();
+  if (!registration?.aceite || registration.aceite.protocolo !== event.params.requestId || registration.aceite.resumoConteudo) return;
+  await event.data.ref.update({
+    'aceite.resumoConteudo': buildRegistrationEvidenceHash(registration),
+    'aceite.registradoEm': FieldValue.serverTimestamp(),
+  });
+});
+
 const sendAccountMessage = ({ email, nome, message }) => sendMailjetMessage({ apiKey: mailjetApiKey.value(), secretKey: mailjetSecretKey.value(), fromEmail: registrationEmailFrom.value(), toEmail: email, toName: nome, ...message });
 const deliverTrackedAccountEmail = async ({ root, pessoaBaseId, tipo, email, nome, message, reenviadoDe = null }) => {
   const ref = root.collection('comunicacoes_email').doc();
@@ -84,6 +97,57 @@ const deliverTrackedAccountEmail = async ({ root, pessoaBaseId, tipo, email, nom
   return ref.id;
 };
 const mailjetCallableOptions = { region: 'southamerica-east1', maxInstances: 3, secrets: [mailjetApiKey, mailjetSecretKey, registrationEmailFrom] };
+
+export const requestRegistrationEmailCode = onCall(mailjetCallableOptions, async request => {
+  const linkId = String(request.data?.linkId || '').trim();
+  const email = normalizeVerificationEmail(request.data?.email);
+  if (!/^[a-f0-9]{64}$/.test(linkId) || !isVerificationEmail(email)) fail('invalid-argument', 'DADOS_INVALIDOS');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data');
+  const link = await root.collection('links_autocadastro').doc(linkId).get();
+  const linkData = link.data();
+  if (!link.exists || linkData.status !== 'ativo' || linkData.tipoCadastro !== 'membro' || linkData.expiraEm?.toMillis?.() <= Date.now() || (linkData.limiteUsos && Number(linkData.totalUsos || 0) >= linkData.limiteUsos)) fail('failed-precondition', 'LINK_INDISPONIVEL');
+  const verificationRef = root.collection('verificacoes_email_cadastro').doc();
+  const rateRef = root.collection('limites_verificacao_cadastro').doc(hashVerificationIdentity({ linkId, email }));
+  const linkRateRef = root.collection('limites_verificacao_cadastro').doc(`link_${linkId}`);
+  const code = createVerificationCode();
+  const nowMillis = Date.now();
+  await getFirestore().runTransaction(async transaction => {
+    const [rate, linkRate] = await Promise.all([transaction.get(rateRef), transaction.get(linkRateRef)]);
+    if (nowMillis - (rate.data()?.enviadoEm?.toMillis?.() || 0) < 60000) fail('resource-exhausted', 'AGUARDE_REENVIO');
+    if (nowMillis - (linkRate.data()?.enviadoEm?.toMillis?.() || 0) < 10000) fail('resource-exhausted', 'AGUARDE_REENVIO');
+    transaction.set(rateRef, { enviadoEm: Timestamp.fromMillis(nowMillis) });
+    transaction.set(linkRateRef, { enviadoEm: Timestamp.fromMillis(nowMillis) });
+    transaction.set(verificationRef, { linkId, email, codigoHash: hashVerificationCode({ verificationId: verificationRef.id, code }), status: 'pendente', tentativas: 0, criadoEm: Timestamp.fromMillis(nowMillis), expiraEm: Timestamp.fromMillis(nowMillis + 600000) });
+  });
+  try {
+    await sendAccountMessage({ email, nome: 'Membro', message: buildRegistrationVerificationEmail(code) });
+  } catch (error) {
+    await verificationRef.update({ status: 'erro', atualizadoEm: FieldValue.serverTimestamp() });
+    throw error;
+  }
+  return { verificationId: verificationRef.id };
+});
+
+export const confirmRegistrationEmailCode = onCall({ region: 'southamerica-east1', maxInstances: 3 }, async request => {
+  const verificationId = String(request.data?.verificationId || '').trim();
+  const code = String(request.data?.code || '').trim();
+  if (!/^[A-Za-z0-9]{20}$/.test(verificationId) || !/^[0-9]{6}$/.test(code)) fail('invalid-argument', 'CODIGO_INVALIDO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const ref = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data').collection('verificacoes_email_cadastro').doc(verificationId);
+  const confirmed = await getFirestore().runTransaction(async transaction => {
+    const snapshot = await transaction.get(ref);
+    const data = snapshot.data();
+    if (!snapshot.exists || data.status !== 'pendente' || data.expiraEm?.toMillis?.() <= Date.now() || Number(data.tentativas || 0) >= 5) fail('failed-precondition', 'CODIGO_INVALIDO_OU_EXPIRADO');
+    const matches = verificationCodeMatches({ verificationId, code, expectedHash: data.codigoHash });
+    transaction.update(ref, matches
+      ? { status: 'confirmado', confirmadoEm: FieldValue.serverTimestamp(), codigoHash: FieldValue.delete(), atualizadoEm: FieldValue.serverTimestamp() }
+      : { tentativas: FieldValue.increment(1), atualizadoEm: FieldValue.serverTimestamp() });
+    return matches;
+  });
+  if (!confirmed) fail('invalid-argument', 'CODIGO_INVALIDO_OU_EXPIRADO');
+  return { confirmed: true };
+});
 
 export const sendAccessActivationMailjet = onCall(mailjetCallableOptions, async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');

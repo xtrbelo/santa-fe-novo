@@ -209,8 +209,9 @@ export const submitReusableRegistration = async ({ linkId, data }, firestore = d
     const payload = buildReusableRegistrationPayload(link, data);
     const validationError = validateReusableRegistrationPayload(payload);
     if (validationError) throw new Error(validationError);
-    transaction.set(requestRef, { ...payload, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+    transaction.set(requestRef, { ...payload, aceite: { ...payload.aceite, aceitoEm: serverTimestamp(), protocolo: requestRef.id }, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
     transaction.update(linkRef, { totalUsos: Number(link.totalUsos || 0) + 1, ultimaSolicitacaoId: requestRef.id, atualizadoEm: serverTimestamp() });
+    if (payload.tipoCadastro === 'membro') transaction.update(getDataDoc(firestore, 'verificacoes_email_cadastro', payload.verificacaoEmailId), { status: 'usado', solicitacaoId: requestRef.id, usadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
   });
   return { id: requestRef.id };
 };

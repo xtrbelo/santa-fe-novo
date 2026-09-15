@@ -925,7 +925,7 @@ describe('Q. envio público por link reutilizável', () => {
   const linkPath = `${root}/links_autocadastro/${linkId}`;
   const requestId = 'r'.repeat(20);
   const requestPath = `${root}/solicitacoes_cadastro/${requestId}`;
-  const requestData = overrides => ({ linkId, tipoCadastro: 'consulente', nome: 'Consulente Público', cpf: '52998224725', contato: '96999991111', email: null, dataNascimento: null, sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'link_reutilizavel', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
+  const requestData = overrides => ({ linkId, tipoCadastro: 'consulente', nome: 'Consulente Público', cpf: '52998224725', contato: '96999991111', email: null, dataNascimento: null, sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, aceite: { versao: '2026-09-14.1', avisoPrivacidade: true, declaracaoVeracidade: true, emailConfirmado: false, aceitoEm: serverTimestamp(), protocolo: requestId }, statusCadastro: 'aguardando_validacao', origemCadastro: 'link_reutilizavel', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
 
   const seedLink = async () => setDoc(ref(authDb('admin-a'), linkPath), { tipoCadastro: 'consulente', nome: 'Cadastro de Consulentes', status: 'ativo', expiraEm: null, limiteUsos: 2, totalUsos: 0, criadoEm: new Date(), criadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
 
@@ -954,6 +954,23 @@ describe('Q. envio público por link reutilizável', () => {
   test('visitante não lista solicitações e Atendimento não as lê', async () => {
     await assertFails(getDocs(collection(anonymousDb(), `${root}/solicitacoes_cadastro`)));
     await assertFails(getDocs(collection(authDb('atendimento'), `${root}/solicitacoes_cadastro`)));
+  });
+
+  test('Membro exige confirmação de e-mail válida e a consome no mesmo lote', async () => {
+    const memberLinkId = 'e'.repeat(64); const memberRequestId = 'm'.repeat(20); const verificationId = 'v'.repeat(20);
+    const memberLinkPath = `${root}/links_autocadastro/${memberLinkId}`; const memberRequestPath = `${root}/solicitacoes_cadastro/${memberRequestId}`; const verificationPath = `${root}/verificacoes_email_cadastro/${verificationId}`;
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(ref(context.firestore(), memberLinkPath), { tipoCadastro: 'membro', nome: 'Cadastro de Membros', status: 'ativo', expiraEm: null, limiteUsos: 2, totalUsos: 0, criadoEm: new Date(), criadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
+      await setDoc(ref(context.firestore(), verificationPath), { linkId: memberLinkId, email: 'membro@example.test', status: 'confirmado', tentativas: 0, criadoEm: new Date(), confirmadoEm: new Date(), expiraEm: new Date(Date.now() + 600000) });
+    });
+    const memberData = requestData({ linkId: memberLinkId, tipoCadastro: 'membro', email: 'membro@example.test', verificacaoEmailId: verificationId, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, aceite: { versao: '2026-09-14.1', avisoPrivacidade: true, declaracaoVeracidade: true, emailConfirmado: true, aceitoEm: serverTimestamp(), protocolo: memberRequestId } });
+    const invalidDb = anonymousDb(); const invalidBatch = writeBatch(invalidDb);
+    invalidBatch.set(ref(invalidDb, memberRequestPath), memberData); invalidBatch.update(ref(invalidDb, memberLinkPath), { totalUsos: 1, ultimaSolicitacaoId: memberRequestId, atualizadoEm: serverTimestamp() });
+    await assertFails(invalidBatch.commit());
+    const db = anonymousDb(); const batch = writeBatch(db);
+    batch.set(ref(db, memberRequestPath), memberData); batch.update(ref(db, memberLinkPath), { totalUsos: 1, ultimaSolicitacaoId: memberRequestId, atualizadoEm: serverTimestamp() }); batch.update(ref(db, verificationPath), { status: 'usado', solicitacaoId: memberRequestId, usadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+    await assertSucceeds(batch.commit());
+    await assertFails(getDoc(ref(anonymousDb(), verificationPath)));
   });
 });
 
