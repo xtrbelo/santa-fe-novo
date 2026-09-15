@@ -549,10 +549,21 @@ describe('Fase 9D - análise de autocadastro de Membro', () => {
     assert.equal(attempts.filter(item => item.status === 'fulfilled').length, 1);
     assert.equal((await getDocs(collection(adminDb(), `${root}/pessoas`))).size, 1);
     const conflict = await submit(adminDb(), USER_ID, '11144477735');
-    await seedDocuments([['cpf_index', conflict.convite.cpf, { pessoaId: 'concorrente', criadoEm: new Date() }]]);
+    await seedDocuments([
+      ['pessoas', 'concorrente', { nome: 'Pessoa existente', cpf: conflict.convite.cpf, vinculo: 'membro', tipoPessoa: 'Membro', ativo: true }],
+      ['cpf_index', conflict.convite.cpf, { pessoaId: 'concorrente', criadoEm: new Date() }]
+    ]);
     await assert.rejects(approveMemberSelfRegistration({ inviteId: conflict.convite.id, userId: USER_ID, funcoesCasa: ['medium'] }, adminDb()), /CPF_DUPLICADO/);
     assert.equal((await getDoc(doc(adminDb(), path('autocadastros_membro', conflict.convite.id)))).data().statusCadastro, 'aguardando_validacao');
     assert.equal((await getDoc(doc(adminDb(), path('convite_membro_cpf_index', conflict.convite.cpf)))).exists(), true);
+  });
+
+  test('índice de CPF órfão não bloqueia a aprovação e é vinculado à nova Pessoa', async () => {
+    const created = await submit(adminDb(), USER_ID, '11144477735');
+    await seedDocuments([['cpf_index', created.convite.cpf, { pessoaId: 'pessoa-excluida', criadoEm: new Date() }]]);
+    const result = await approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID, funcoesCasa: ['medium'] }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('pessoas', result.pessoaId)))).exists(), true);
+    assert.equal((await getDoc(doc(adminDb(), path('cpf_index', created.convite.cpf)))).data().pessoaId, result.pessoaId);
   });
 });
 

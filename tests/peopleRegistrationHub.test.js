@@ -82,6 +82,7 @@ test('CPF já cadastrado bloqueia nova aprovação e abre a Pessoa existente', (
   assert.match(source, /CPF já cadastrado/);
   assert.match(source, /Abrir Pessoa existente/);
   assert.match(source, /!!duplicatePersonId/);
+  assert.match(source, /personSnapshot\?\.exists\(\)/);
 });
 
 test('solicitações têm busca, contadores filtrados e prioridade operacional', () => {
