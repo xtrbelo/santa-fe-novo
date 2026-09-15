@@ -311,6 +311,22 @@ const validateRegistrationOrigin = ({ registration, inviteId, invite, inviteInde
   if (!inviteIndex || inviteIndex.inviteId !== inviteId) throw new Error('INDICE_CONVITE_INVALIDO');
 };
 
+const removeOrphanCpfIndex = async (cpf, firestore) => {
+  if (!cpf) return false;
+  const indexRef = getDataDoc(firestore, 'cpf_index', cpf);
+  return runTransaction(firestore, async transaction => {
+    const indexSnapshot = await transaction.get(indexRef);
+    if (!indexSnapshot.exists()) return false;
+    const indexedPersonId = indexSnapshot.data().pessoaId;
+    if (indexedPersonId) {
+      const indexedPersonSnapshot = await transaction.get(getDataDoc(firestore, 'pessoas', indexedPersonId));
+      if (indexedPersonSnapshot.exists()) return false;
+    }
+    transaction.delete(indexRef);
+    return true;
+  });
+};
+
 export const approveMemberSelfRegistration = async ({ inviteId, userId, funcoesCasa = [], dadosCasa }, firestore = db) => {
   const registrationRef = getDataDoc(firestore, 'autocadastros_membro', inviteId);
   const inviteRef = getDataDoc(firestore, 'convites_membro', inviteId);
@@ -319,6 +335,8 @@ export const approveMemberSelfRegistration = async ({ inviteId, userId, funcoesC
   const configuredFunctionsSnapshot = await getDocs(getDataCollection(firestore, 'config_funcoes_membro'));
   const allowedFunctionCodes = new Set(getEffectiveMemberFunctions(configuredFunctionsSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))).map(item => item.id));
   const selectedFunctionCodes = [...new Set((funcoesCasa || []).map(value => String(value || '').trim()).filter(Boolean))];
+  const pendingRegistration = await getDoc(registrationRef);
+  if (pendingRegistration.exists()) await removeOrphanCpfIndex(pendingRegistration.data().cpf, firestore);
   await runTransaction(firestore, async transaction => {
     const registrationSnapshot = await transaction.get(registrationRef);
     if (!registrationSnapshot.exists()) throw new Error('AUTOCADASTRO_NAO_ENCONTRADO');
@@ -381,6 +399,8 @@ export const approveReusableRegistration = async ({ requestId, userId, funcoesCa
   const configuredFunctionsSnapshot = await getDocs(getDataCollection(firestore, 'config_funcoes_membro'));
   const allowedFunctions = new Set(getEffectiveMemberFunctions(configuredFunctionsSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))).map(item => item.id));
   const selectedFunctions = [...new Set(funcoesCasa.map(value => String(value || '').trim()).filter(Boolean))];
+  const pendingRequest = await getDoc(requestRef);
+  if (pendingRequest.exists()) await removeOrphanCpfIndex(pendingRequest.data().cpf, firestore);
   await runTransaction(firestore, async transaction => {
     const requestSnapshot = await transaction.get(requestRef);
     if (!requestSnapshot.exists()) throw new Error('SOLICITACAO_NAO_ENCONTRADA');

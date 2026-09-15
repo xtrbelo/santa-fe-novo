@@ -478,6 +478,7 @@ service cloud.firestore {
           && validApprovedSelfRegistration(appId, request.resource.data.pessoaId, getAfter(personPath(appId, request.resource.data.pessoaId)).data))
         || (isAtendimento(appId) && isConsulenteData(getAfter(personPath(appId, request.resource.data.pessoaId)).data));
       allow delete: if isAdmin(appId) || isGestor(appId)
+        || (canReviewMemberRegistration(appId) && !exists(personPath(appId, resource.data.pessoaId)))
         || (isAtendimento(appId) && isConsulenteData(getAfter(personPath(appId, resource.data.pessoaId)).data));
       allow update: if isAdmin(appId) || isGestor(appId);
     }

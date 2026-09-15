@@ -82,7 +82,12 @@ export function AutocadastrosModule({ user, onOpenPerson, filterLinkId = null, o
     setSelected(item); setReason(''); setSelectedFunctions([]); setDuplicatePersonId(null); setCheckingDuplicate(false);
     if (item.statusCadastro !== 'aguardando_validacao' || !item.cpf) return;
     setCheckingDuplicate(true);
-    getDoc(getAppDoc('cpf_index', item.cpf)).then(snapshot => setDuplicatePersonId(snapshot.exists() ? snapshot.data().pessoaId : null)).catch(error => console.error(error)).finally(() => setCheckingDuplicate(false));
+    getDoc(getAppDoc('cpf_index', item.cpf)).then(async snapshot => {
+      if (!snapshot.exists()) { setDuplicatePersonId(null); return; }
+      const personId = snapshot.data().pessoaId;
+      const personSnapshot = personId ? await getDoc(getAppDoc('pessoas', personId)) : null;
+      setDuplicatePersonId(personSnapshot?.exists() ? personId : null);
+    }).catch(error => console.error(error)).finally(() => setCheckingDuplicate(false));
   };
   const toggleFunction = id => setSelectedFunctions(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]);
   const decide = async action => {
