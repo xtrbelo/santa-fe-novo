@@ -483,6 +483,19 @@ service cloud.firestore {
       allow update: if isAdmin(appId) || isGestor(appId);
     }
 
+    match /artifacts/{appId}/public/data/membro_email_index/{emailId} {
+      allow read: if isInternal(appId);
+      allow create: if canManageMemberIntake(appId)
+        && request.resource.data.keys().hasOnly(['email', 'pessoaId', 'criadoEm'])
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 3
+        && request.resource.data.pessoaId is string
+        && request.resource.data.criadoEm is timestamp
+        && isActiveMemberData(getAfter(personPath(appId, request.resource.data.pessoaId)).data)
+        && getAfter(personPath(appId, request.resource.data.pessoaId)).data.email == request.resource.data.email;
+      allow update, delete: if false;
+    }
+
     match /artifacts/{appId}/public/data/links_autocadastro/{linkId} {
       allow get: if canManageMemberIntake(appId)
         || (request.auth == null

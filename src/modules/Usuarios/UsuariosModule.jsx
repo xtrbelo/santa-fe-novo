@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { autorizarUsuario, cancelAccessAuthorization, createAccessAuthorization, getAppCollection, onSnapshot, vincularUsuarioPessoa } from '../../services/firebase';
-import { sendAccessActivationOnServer, sendPasswordResetOnServer, updateUserAccessOnServer } from '../../services/firebaseFunctions';
+import { cancelAccessAuthorization, getAppCollection, onSnapshot } from '../../services/firebase';
+import { createAccessAuthorizationOnServer, sendAccessActivationOnServer, sendPasswordResetOnServer, updateUserAccessOnServer } from '../../services/firebaseFunctions';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
-import { getPessoaFuncoesCasa } from '../../utils/domain';
+import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
 import { getEffectiveMemberFunctions, getMemberFunctionLabels, localTextIncludes, normalizeEmail } from '../../utils/pessoaForm';
 import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
 import { Card } from '../../components/ui/Card';
@@ -19,7 +19,7 @@ import { validateAccessAuthorization } from '../../utils/accessAuthorization';
 import { getFriendlyErrorMessage } from '../../utils/firebaseErrorMessages';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 
-const FILTERS = [['todos', 'Todos'], ['pendentes', 'Pendentes'], ['admin', 'Administradores'], ['gestor', 'Gestores / Dirigentes'], ['atendimento', 'Atendimento / Recepção'], ['suspensos', 'Membro inativo'], ['inativos', 'Inativos'], ['sem-vinculo', 'Sem vínculo']];
+const FILTERS = [['todos', 'Todos'], ['pendentes', 'Pendentes'], ['admin', 'Administradores'], ['gestor', 'Gestores / Dirigentes'], ['atendimento', 'Atendimento / Recepção'], ['suspensos', 'Membro inativo'], ['vinculo-invalido', 'Vínculo inválido'], ['inativos', 'Inativos'], ['sem-vinculo', 'Sem vínculo']];
 const OPERATIONAL_ROLES = [ROLES.ADMIN, ROLES.GESTOR, ROLES.ATENDIMENTO];
 const MEMBER_FILTER = ['membro'];
 const ROLE_ORDER = { [ROLES.PENDENTE]: 0, [ROLES.ADMIN]: 1, [ROLES.GESTOR]: 2, [ROLES.ATENDIMENTO]: 3 };
@@ -28,6 +28,12 @@ const ROLE_IMPACT = {
   [ROLES.GESTOR]: 'Gestão de pessoas e programação, sem administrar usuários ou configurações.',
   [ROLES.ATENDIMENTO]: 'Operação de atendimentos e Fluxo do Dia, sem funções administrativas.'
 };
+
+const getActiveMemberEmailMatches = (people, email) => Object.values(people).filter(person =>
+  person.ativo !== false && getPessoaVinculo(person) === 'membro' && normalizeEmail(person.email) === normalizeEmail(email)
+);
+
+const describeEmailConflict = matches => `Este e-mail pertence a mais de um Membro ativo: ${matches.map(person => person.nome || 'Pessoa sem nome').join(', ')}. Corrija os cadastros antes de continuar.`;
 
 export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
   const [usuarios, setUsuarios] = useState([]);
@@ -74,14 +80,14 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
 
   const pendingCount = usuarios.filter(item => item.ativo !== false && item.role === ROLES.PENDENTE).length;
   const inactiveCount = usuarios.filter(item => item.ativo === false).length;
-  const activeCount = usuarios.filter(item => item.ativo !== false && OPERATIONAL_ROLES.includes(item.role) && pessoas[item.pessoaBaseId]?.ativo !== false).length;
+  const activeCount = usuarios.filter(item => item.ativo !== false && OPERATIONAL_ROLES.includes(item.role) && pessoas[item.pessoaBaseId]?.ativo !== false && Boolean(pessoas[item.pessoaBaseId])).length;
   const pendingAuthorizations = authorizations.filter(item => item.status === 'pendente');
   const effectiveMemberFunctions = getEffectiveMemberFunctions(memberFunctions);
   const filteredUsers = useMemo(() => {
     const term = search.trim();
     return usuarios.filter(item => {
       const matchesSearch = !term || [item.nome, item.email, item.uid, pessoas[item.pessoaBaseId]?.nome].some(value => localTextIncludes(value, term));
-      const matchesFilter = filter === 'todos' || (filter === 'pendentes' && item.role === ROLES.PENDENTE && item.ativo !== false) || (filter === 'suspensos' && item.ativo !== false && pessoas[item.pessoaBaseId]?.ativo === false) || (filter === 'inativos' && item.ativo === false) || (filter === 'sem-vinculo' && item.role !== ROLES.PENDENTE && !item.pessoaBaseId) || (filter === item.role && item.ativo !== false);
+      const matchesFilter = filter === 'todos' || (filter === 'pendentes' && item.role === ROLES.PENDENTE && item.ativo !== false) || (filter === 'suspensos' && item.ativo !== false && pessoas[item.pessoaBaseId]?.ativo === false) || (filter === 'vinculo-invalido' && item.ativo !== false && Boolean(item.pessoaBaseId) && !pessoas[item.pessoaBaseId]) || (filter === 'inativos' && item.ativo === false) || (filter === 'sem-vinculo' && item.role !== ROLES.PENDENTE && !item.pessoaBaseId) || (filter === item.role && item.ativo !== false);
       return matchesSearch && matchesFilter;
     }).sort((a, b) => {
       const groupA = a.ativo === false ? 4 : (ROLE_ORDER[a.role] ?? 4);
@@ -98,8 +104,8 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
     if (!accessTarget || !selectedPessoa) return;
     setSaving(true);
     try {
-      if (accessTarget.role === ROLES.PENDENTE) await autorizarUsuario({ uid: accessTarget.uid, pessoaBaseId: selectedPessoa.id, role: accessRole, executadoPor: user.uid });
-      else await vincularUsuarioPessoa({ uid: accessTarget.uid, pessoaBaseId: selectedPessoa.id, executadoPor: user.uid });
+      if (accessTarget.role === ROLES.PENDENTE) await updateUserAccessOnServer({ targetUid: accessTarget.uid, action: 'authorize', pessoaBaseId: selectedPessoa.id, role: accessRole });
+      else await updateUserAccessOnServer({ targetUid: accessTarget.uid, action: 'link', pessoaBaseId: selectedPessoa.id });
       toast.success(accessTarget.role === ROLES.PENDENTE ? 'Acesso autorizado com sucesso.' : 'Membro vinculado com sucesso.'); setAccessTarget(null);
     } catch (error) {
       console.error(error);
@@ -107,7 +113,10 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
         PESSOA_JA_POSSUI_ACESSO: 'Este membro já possui uma conta vinculada ao sistema.',
         PESSOA_NAO_E_MEMBRO_ATIVO: 'Selecione um membro ativo.',
         EMAIL_MEMBRO_DIVERGENTE: 'O e-mail desta conta não corresponde ao e-mail cadastrado para este membro.',
-        MEMBRO_SEM_EMAIL_ACESSO: 'Este membro não possui e-mail cadastrado para acesso ao sistema.'
+        EMAIL_MEMBRO_AMBIGUO: 'Este e-mail pertence a mais de um Membro ativo. Corrija os cadastros antes de continuar.',
+        MEMBRO_SEM_EMAIL_ACESSO: 'Este membro não possui e-mail cadastrado para acesso ao sistema.',
+        USUARIO_JA_VINCULADO: 'Este usuário já possui um vínculo válido.',
+        INDICE_VINCULO_DIVERGENTE: 'O vínculo está inconsistente e requer análise técnica.'
       };
       toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível concluir a autorização.', businessMessages: messages }));
     } finally { setSaving(false); }
@@ -115,17 +124,26 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
   const requestRoleChange = () => { if (roleTarget && roleTarget.uid !== user.uid && OPERATIONAL_ROLES.includes(selectedRole)) { setConfirmation({ type: 'role', usuario: roleTarget, newValue: selectedRole }); setRoleTarget(null); } };
   const requestStatusChange = usuario => { if (usuario.uid !== user.uid) { setLifecycleReason(''); setLifecycleTarget(usuario); } };
   const openNewAccess = () => { setNewAccessPessoa(null); setNewAccessRole(ROLES.ATENDIMENTO); setNewAccessStep('person'); setNewAccessOpen(true); };
+  const continueExistingAccess = () => {
+    if (!selectedPessoa?.email) return toast.error('Este membro não possui e-mail cadastrado para acesso ao sistema.');
+    if (normalizeEmail(selectedPessoa.email) !== normalizeEmail(accessTarget?.email)) return toast.error('O e-mail desta conta não corresponde ao e-mail cadastrado para este membro.');
+    const matches = getActiveMemberEmailMatches(pessoas, selectedPessoa.email);
+    if (matches.length !== 1 || matches[0].id !== selectedPessoa.id) return toast.error(describeEmailConflict(matches));
+    setAccessStep(accessTarget?.role === ROLES.PENDENTE ? 'role' : 'confirm');
+  };
   const continueNewAccess = () => {
     const error = validateAccessAuthorization({ pessoa: newAccessPessoa, role: newAccessRole });
     if (error === 'MEMBRO_SEM_EMAIL_ACESSO') return toast.error('Este membro não possui e-mail cadastrado para acesso ao sistema.');
     if (error) return toast.error('Selecione um membro ativo.');
+    const matches = getActiveMemberEmailMatches(pessoas, newAccessPessoa.email);
+    if (matches.length !== 1 || matches[0].id !== newAccessPessoa.id) return toast.error(describeEmailConflict(matches));
     if (newAccessPessoa && authorizations.some(item => item.id === newAccessPessoa.id && item.status === 'pendente')) return toast.error('Este membro já possui uma autorização de acesso pendente.');
     setNewAccessStep('role');
   };
   const saveNewAccess = async () => {
     setSaving(true);
     try {
-      const authorization = await createAccessAuthorization({ pessoaBaseId: newAccessPessoa.id, role: newAccessRole, executadoPor: user.uid });
+      const authorization = await createAccessAuthorizationOnServer({ pessoaBaseId: newAccessPessoa.id, role: newAccessRole });
       setNewAccessOpen(false);
       try {
         await sendAccessActivationOnServer(authorization.pessoaBaseId);
@@ -136,7 +154,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
       }
     } catch (error) {
       console.error(error);
-      const messages = { PESSOA_JA_POSSUI_ACESSO: 'Este membro já possui acesso ao sistema.', AUTORIZACAO_PENDENTE_JA_EXISTE: 'Este membro já possui uma autorização de acesso pendente.', MEMBRO_SEM_EMAIL_ACESSO: 'Este membro não possui e-mail cadastrado para acesso ao sistema.' };
+      const messages = { PESSOA_JA_POSSUI_ACESSO: 'Este membro já possui acesso ao sistema.', AUTORIZACAO_PENDENTE_JA_EXISTE: 'Este membro já possui uma autorização de acesso pendente.', MEMBRO_SEM_EMAIL_ACESSO: 'Este membro não possui e-mail cadastrado para acesso ao sistema.', EMAIL_MEMBRO_AMBIGUO: 'Este e-mail pertence a mais de um Membro ativo. Corrija os cadastros antes de continuar.' };
       toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível criar a autorização de acesso.', businessMessages: messages }));
     } finally { setSaving(false); }
   };
@@ -207,7 +225,7 @@ export const UsuariosModule = ({ user, profile, initialFilter = 'todos' }) => {
     <div className="flex gap-2 overflow-x-auto pb-1">{FILTERS.map(([value, label]) => <button key={value} onClick={() => setFilter(value)} className={`px-3 py-2 rounded-xl text-xs font-black whitespace-nowrap ${filter === value ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500'}`}>{label}</button>)}</div>
     <div className="grid grid-cols-1 gap-3">{filteredUsers.length ? filteredUsers.map(usuario => <UsuarioCard key={usuario.id} usuario={usuario} pessoa={pessoas[usuario.pessoaBaseId]} memberFunctions={effectiveMemberFunctions} currentUid={user.uid} busy={saving} onAuthorize={openAccess} onLink={openAccess} onEditRole={item => { setRoleTarget(item); setSelectedRole(item.role); }} onToggleStatus={requestStatusChange} onResetPassword={resetUserPassword} onHistory={setHistoryUser}/>) : <Card className="text-center text-gray-400"><ShieldCheck className="mx-auto mb-2"/><p>Nenhum usuário encontrado.</p></Card>}</div>
     <Modal isOpen={!!accessTarget} onClose={() => setAccessTarget(null)} title={accessTarget?.role === ROLES.PENDENTE ? 'Autorizar acesso' : 'Vincular membro'}>
-      {accessStep === 'person' && <PessoaSearchSelector value={selectedPessoa} onChange={setSelectedPessoa} allowedVinculos={MEMBER_FILTER} onContinue={() => { if (!selectedPessoa?.email) toast.error('Este membro não possui e-mail cadastrado para acesso ao sistema.'); else if (normalizeEmail(selectedPessoa.email) !== normalizeEmail(accessTarget?.email)) toast.error('O e-mail desta conta não corresponde ao e-mail cadastrado para este membro.'); else setAccessStep(accessTarget?.role === ROLES.PENDENTE ? 'role' : 'confirm'); }}/>}
+      {accessStep === 'person' && <PessoaSearchSelector value={selectedPessoa} onChange={setSelectedPessoa} allowedVinculos={MEMBER_FILTER} onContinue={continueExistingAccess}/>}
       {accessStep === 'role' && <div className="space-y-4"><p className="text-sm font-bold">Escolha o perfil de acesso ao sistema:</p><select value={accessRole} onChange={event => setAccessRole(event.target.value)} className="w-full bg-gray-50 px-4 py-3 rounded-xl font-bold">{OPERATIONAL_ROLES.map(role => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select><div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => setAccessStep('person')}>Voltar</Button><Button onClick={() => setAccessStep('confirm')}>Continuar</Button></div></div>}
       {accessStep === 'confirm' && <div className="space-y-4"><div className="bg-gray-50 p-4 rounded-xl text-sm space-y-2"><p><strong>Conta:</strong><br/>{accessTarget?.nome || 'Sem nome'} · {accessTarget?.email}</p><p><strong>Membro:</strong><br/>{selectedPessoa?.nome} · {selectedPessoa?.email}</p><p><strong>Funções na Casa:</strong><br/>{getMemberFunctionLabels(getPessoaFuncoesCasa(selectedPessoa), effectiveMemberFunctions).join(', ') || 'Sem função cadastrada'}</p>{accessTarget?.role === ROLES.PENDENTE && <p><strong>Perfil:</strong><br/>{ROLE_LABELS[accessRole]}</p>}</div><div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={() => setAccessStep(accessTarget?.role === ROLES.PENDENTE ? 'role' : 'person')}>Voltar</Button><Button onClick={confirmAccess} disabled={saving}>{saving ? 'Salvando...' : accessTarget?.role === ROLES.PENDENTE ? 'Autorizar acesso' : 'Vincular membro'}</Button></div></div>}
     </Modal>

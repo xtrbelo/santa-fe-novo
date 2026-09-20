@@ -8,9 +8,9 @@ import {
   runTransaction,
   doc,
   findPessoaByCpf,
-  withPessoaSearchIndex,
-  setMemberLifecycle
+  withPessoaSearchIndex
 } from '../../services/firebase';
+import { savePersonWithUniqueEmailOnServer, updateMemberLifecycleOnServer } from '../../services/firebaseFunctions';
 import { 
   calcularIdade, 
   isMenor, 
@@ -203,6 +203,13 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
       }
     }
 
+    const willBeActiveMember = effectiveVinculo === 'membro' && (editing?.ativo !== false);
+    const conflictingMember = willBeActiveMember ? pessoas.find(person => person.id !== editing?.id && person.ativo !== false && getPessoaVinculo(person) === 'membro' && String(person.email || '').trim().toLowerCase() === String(baseData.email || '').trim().toLowerCase()) : null;
+    if (conflictingMember) {
+      toast.error(`Este e-mail já pertence ao Membro ${conflictingMember.nome}. Abra o cadastro existente para corrigir a informação.`);
+      return;
+    }
+
     setIsSubmitting(true);
     const data = {
       ...baseData,
@@ -211,7 +218,11 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
     };
 
     try {
-      if (editing) {
+      const requiresSecureMemberSave = effectiveVinculo === 'membro' || (editing && getPessoaVinculo(editing) === 'membro');
+      if (requiresSecureMemberSave) {
+        await savePersonWithUniqueEmailOnServer({ pessoaId: editing?.id || null, data: withPessoaSearchIndex(baseData) });
+        toast.success(editing ? 'Cadastro atualizado com sucesso!' : 'Nova pessoa cadastrada com sucesso!');
+      } else if (editing) {
         const pessoaRef = getAppDoc('pessoas', editing.id);
         await runTransaction(pessoaRef.firestore, async transaction => {
           const oldCpf = cleanDigits(editing.cpf);
@@ -242,7 +253,8 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
       resetForm();
     } catch (err) {
       console.error(err);
-      toast.error(getFriendlyErrorMessage(err, { fallback: 'Não foi possível salvar os dados.', businessMessages: { CPF_DUPLICADO: 'Já existe uma pessoa cadastrada com este CPF.' } }));
+      const existingName = err?.details?.existingPersonName;
+      toast.error(getFriendlyErrorMessage(err, { fallback: 'Não foi possível salvar os dados.', businessMessages: { CPF_DUPLICADO: 'Já existe uma pessoa cadastrada com este CPF.', EMAIL_MEMBRO_DUPLICADO: existingName ? `Este e-mail já pertence ao Membro ${existingName}.` : 'Este e-mail já pertence a outro Membro ativo.', EMAIL_MEMBRO_INVALIDO: 'Informe um e-mail válido para o Membro.' } }));
     } finally {
       setIsSubmitting(false);
     }
@@ -254,13 +266,14 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
     if (!nextActive && !lifecycleReason.trim()) { toast.error('Informe o motivo da inativação.'); return; }
     setIsSubmitting(true);
     try {
-      await setMemberLifecycle({ pessoaBaseId: itemToDelete.id, ativo: nextActive, motivo: lifecycleReason, executadoPor: user.uid });
+      await updateMemberLifecycleOnServer({ pessoaBaseId: itemToDelete.id, active: nextActive, reason: lifecycleReason });
       toast.success(`Registro de ${itemToDelete.nome} ${nextActive ? 'reativado' : 'inativado'}.`);
       setItemToDelete(null);
       setLifecycleReason('');
     } catch (error) {
       console.error(error);
-      const messages = { AUTO_INATIVACAO_PROIBIDA: 'Você não pode inativar sua própria Pessoa vinculada.', MOTIVO_OBRIGATORIO: 'Informe o motivo da inativação.' };
+      const existingName = error?.details?.existingPersonName;
+      const messages = { AUTO_INATIVACAO_PROIBIDA: 'Você não pode inativar sua própria Pessoa vinculada.', MOTIVO_OBRIGATORIO: 'Informe o motivo da inativação.', EMAIL_MEMBRO_DUPLICADO: existingName ? `Não é possível reativar: este e-mail já pertence ao Membro ${existingName}.` : 'Não é possível reativar: este e-mail pertence a outro Membro ativo.' };
       toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível alterar a situação do registro.', businessMessages: messages }));
     } finally { setIsSubmitting(false); }
   };

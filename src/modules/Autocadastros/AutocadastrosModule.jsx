@@ -28,6 +28,10 @@ const emailStatus = {
 const errorMessage = error => {
   const message = String(error?.message || '');
   if (message.includes('CPF_DUPLICADO')) return 'Não é possível aprovar: já existe uma Pessoa cadastrada com este CPF.';
+  if (message.includes('EMAIL_MEMBRO_DUPLICADO')) {
+    const existingName = message.split('EMAIL_MEMBRO_DUPLICADO:')[1]?.trim();
+    return existingName ? `Não é possível aprovar: este e-mail já pertence ao Membro ${existingName}.` : 'Não é possível aprovar: este e-mail já pertence a outro Membro ativo.';
+  }
   if (message.includes('AUTOCADASTRO_JA_ANALISADO')) return 'Este cadastro já foi analisado.';
   if (message.includes('MOTIVO_REJEICAO_OBRIGATORIO')) return 'Informe o motivo da rejeição.';
   if (message.includes('FUNCAO_CASA_OBRIGATORIA')) return 'Selecione pelo menos uma função na Casa.';

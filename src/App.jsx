@@ -40,6 +40,7 @@ function AppContent() {
   const [loading, setLoading] = useState(isFirebaseConfigured);
   const [tab, setTab] = useState(() => getModuleFromPathname(window.location.pathname));
   const [usersFilter, setUsersFilter] = useState('todos');
+  const [focusedPersonId, setFocusedPersonId] = useState(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
   const [verificationCooldownUntil, setVerificationCooldownUntil] = useState(0);
@@ -124,7 +125,11 @@ function AppContent() {
             setLoading(true);
             unsubscribePerson = onSnapshot(getAppDoc('pessoas', nextProfile.pessoaBaseId), personSnapshot => {
               if (generation !== authGeneration) return;
-              setProfile({ ...nextProfile, pessoaAtiva: personSnapshot.exists() && personSnapshot.data().ativo !== false });
+              setProfile({
+                ...nextProfile,
+                pessoaEncontrada: personSnapshot.exists(),
+                pessoaAtiva: personSnapshot.exists() && personSnapshot.data().ativo !== false,
+              });
               setLoading(false);
             }, error => {
               if (generation !== authGeneration) return;
@@ -255,6 +260,7 @@ function AppContent() {
   if (authView === AUTH_VIEW.UNAUTHORIZED) return withSessionTimeout(<AccessScreen icon={<ShieldQuestion size={44} />} iconClass="text-amber-600" title="Acesso não autorizado" description="Esta conta não possui autorização para acessar o Sistema Santa Fé. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
   if (authView === AUTH_VIEW.EMAIL_NOT_VERIFIED) return withSessionTimeout(<AccessScreen icon={<MailCheck size={44} />} iconClass="text-indigo-600" title="Confirme seu e-mail para continuar" description="Enviamos uma mensagem de confirmação para seu e-mail. O acesso operacional será liberado somente após a confirmação." user={user} profile={profile} onSignOut={handleSignOut} onVerify={refreshVerification} primaryLabel="Atualizar verificação" checking={isCheckingAccess} secondaryAction={resendVerification} secondaryLabel={Date.now() < verificationCooldownUntil ? 'Aguarde para reenviar' : 'Reenviar confirmação'} secondaryDisabled={Date.now() < verificationCooldownUntil} />);
   if (authView === AUTH_VIEW.INACTIVE) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-rose-600" title="Acesso desativado" description="Seu acesso ao Sistema Santa Fé está desabilitado. Procure um administrador." user={user} profile={profile} onSignOut={handleSignOut} />);
+  if (authView === AUTH_VIEW.BROKEN_LINK) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-amber-600" title="Vínculo de cadastro não encontrado" description="Sua conta está ativa, mas o cadastro de membro vinculado não foi localizado. Peça a um Administrador para reparar o vínculo em Usuários." showAccountDetails={false} onSignOut={handleSignOut} />);
   if (authView === AUTH_VIEW.SUSPENDED) return withSessionTimeout(<AccessScreen icon={<ShieldOff size={44} />} iconClass="text-amber-600" title="Acesso suspenso — membro inativo" description="Seu cadastro de membro está inativo. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
   if (authView === AUTH_VIEW.PENDING) return withSessionTimeout(<AccessScreen icon={<Clock3 size={44} />} iconClass="text-amber-500" title="Solicitação enviada" description="Seu cadastro foi criado e está aguardando autorização de um Administrador da Casa Santa Fé." user={user} profile={profile} onSignOut={handleSignOut} onVerify={verifyAccess} checking={isCheckingAccess} />);
 
@@ -265,6 +271,7 @@ function AppContent() {
     window.history.pushState({}, '', getModulePath(nextTab));
   };
   const openUsersByFilter = filter => { if (hasPermission(profile, PERMISSIONS.USERS_MANAGE)) { setUsersFilter(filter); selectTab(MODULES.USERS); } };
+  const openPersonById = pessoaId => { if (pessoaId && hasPermission(profile, PERMISSIONS.PEOPLE_VIEW)) { setFocusedPersonId(pessoaId); selectTab(MODULES.PEOPLE); } };
   const openPendingRegistrations = () => {
     const navigationEvent = new Event(UNSAVED_NAVIGATION_EVENT, { cancelable: true });
     if (!window.dispatchEvent(navigationEvent)) return;
@@ -276,10 +283,10 @@ function AppContent() {
     if (tab === MODULES.AGENDAS) return <AgendasModule user={user} profile={profile} />;
     if (tab === MODULES.PROGRAMACAO) return <ProgramacaoModule user={user} profile={profile} />;
     if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} />;
-    if (tab === MODULES.PEOPLE) return <PessoasCadastrosModule user={user} profile={profile} />;
+    if (tab === MODULES.PEOPLE) return <PessoasCadastrosModule user={user} profile={profile} focusPersonId={focusedPersonId} onFocusConsumed={() => setFocusedPersonId(null)} />;
     if (tab === MODULES.USERS) return <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} />;
     if (tab === MODULES.MY_REGISTRATION) return <MeuCadastroModule user={user} profile={profile} />;
-    if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} />;
+    if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} onOpenPerson={openPersonById} />;
     return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenUsers={openUsersByFilter} onOpenPendingRegistrations={openPendingRegistrations} />;
   };
   return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col">

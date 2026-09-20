@@ -5,15 +5,20 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import process from 'node:process';
-import { assertAdminContinuity, isActiveAdmin, requiresActiveMember, requiresAdminCount, resolveProjectId } from './adminPolicy.js';
+import { assertAdminContinuity, isActiveAdmin, requiresActiveMember, requiresAdminCount, resolveProjectId, validateAccessAuthorizationCreation, validateUserPersonLinkChange } from './adminPolicy.js';
 import { buildApprovedRegistrationEmail, sendMailjetEmail, sendMailjetMessage, shouldSendApprovedRegistrationEmail } from './registrationEmail.js';
 import { buildActivationEmail, buildPasswordResetEmail, buildVerificationEmail, getSystemBaseUrl } from './accountEmail.js';
 import { buildRegistrationEvidenceHash, buildRegistrationVerificationEmail, createVerificationCode, hashVerificationCode, hashVerificationIdentity, isVerificationEmail, normalizeVerificationEmail, verificationCodeMatches } from './registrationVerification.js';
+import { assertMemberEmailAvailable, getMemberEmailIndexId, isActiveMemberIdentity, validateSecurePersonPayload } from './personIdentity.js';
 
 if (!getApps().length) initializeApp();
 
 const allowedRoles = new Set(['admin', 'gestor', 'atendimento']);
 const fail = (code, message) => { throw new HttpsError(code, message); };
+const normalizeIdentityEmail = value => String(value || '').trim().toLowerCase();
+const isActiveMemberRecord = person => person?.ativo !== false && String(person?.vinculo || person?.tipoPessoa || '').trim().toLowerCase() === 'membro';
+const PERSON_EDITABLE_FIELDS = new Set(['vinculo', 'funcoesCasa', 'tipoPessoa', 'nome', 'dataNascimento', 'cpf', 'contato', 'email', 'responsavelCpf', 'responsavelNome', 'responsavelContato', 'sexo', 'estadoCivil', 'endereco', 'dadosCasa', 'statusCadastro', 'origemCadastro', 'busca']);
+const cleanPersonPayload = data => Object.fromEntries(Object.entries(data || {}).filter(([key, value]) => PERSON_EDITABLE_FIELDS.has(key) && value !== undefined));
 const mailjetApiKey = defineSecret('MAILJET_API_KEY');
 const mailjetSecretKey = defineSecret('MAILJET_SECRET_KEY');
 const registrationEmailFrom = defineSecret('REGISTRATION_EMAIL_FROM');
@@ -238,13 +243,247 @@ export const resendEmailCommunicationMailjet = onCall(mailjetCallableOptions, as
   return { sent: true, communicationId: id };
 });
 
+export const createAccessAuthorizationSecure = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const pessoaBaseId = String(request.data?.pessoaBaseId || '').trim();
+  const role = String(request.data?.role || '').trim();
+  if (!pessoaBaseId || !allowedRoles.has(role)) fail('invalid-argument', 'AUTORIZACAO_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  if (!projectId) fail('internal', 'PROJETO_FIREBASE_NAO_IDENTIFICADO');
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const personRef = root.collection('pessoas').doc(pessoaBaseId);
+  const indexRef = root.collection('usuario_pessoa_index').doc(pessoaBaseId);
+  const authorizationRef = root.collection('autorizacoes_acesso').doc(pessoaBaseId);
+  const auditRef = root.collection('auditoria').doc();
+  try {
+    return await firestore.runTransaction(async transaction => {
+      const [executor, personSnapshot, indexSnapshot, authorizationSnapshot, peopleSnapshot] = await Promise.all([
+        transaction.get(root.collection('usuarios').doc(request.auth.uid)),
+        transaction.get(personRef),
+        transaction.get(indexRef),
+        transaction.get(authorizationRef),
+        transaction.get(root.collection('pessoas')),
+      ]);
+      if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+      const person = personSnapshot.exists ? personSnapshot.data() : null;
+      const email = normalizeIdentityEmail(person?.email);
+      const activeEmailMatchIds = peopleSnapshot.docs
+        .filter(snapshot => isActiveMemberRecord(snapshot.data()) && normalizeIdentityEmail(snapshot.data().email) === email)
+        .map(snapshot => snapshot.id);
+      try {
+        validateAccessAuthorizationCreation({
+          personId: pessoaBaseId,
+          person,
+          role,
+          index: indexSnapshot.exists ? indexSnapshot.data() : null,
+          authorization: authorizationSnapshot.exists ? authorizationSnapshot.data() : null,
+          activeEmailMatchIds,
+        });
+      } catch (error) {
+        fail('failed-precondition', error.message);
+      }
+      const now = FieldValue.serverTimestamp();
+      const authorization = {
+        pessoaBaseId,
+        email,
+        role,
+        status: 'pendente',
+        criadoEm: now,
+        criadoPor: request.auth.uid,
+        atualizadoEm: now,
+        atualizadoPor: request.auth.uid,
+        auditoriaPreautorizacaoId: auditRef.id,
+      };
+      transaction.set(authorizationRef, authorization);
+      transaction.set(auditRef, { tipo: 'USUARIO_ACESSO_PREAUTORIZADO', pessoaBaseId, email, role, executadoPor: request.auth.uid, criadoEm: now });
+      return { pessoaBaseId, email, role };
+    });
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    console.error('createAccessAuthorizationSecure failed', { name: error.name, code: error.code, message: error.message });
+    throw error;
+  }
+});
+
+export const savePersonWithUniqueEmail = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const pessoaId = String(request.data?.pessoaId || '').trim() || null;
+  const payload = cleanPersonPayload(request.data?.data);
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  if (!projectId) fail('internal', 'PROJETO_FIREBASE_NAO_IDENTIFICADO');
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const personRef = pessoaId ? root.collection('pessoas').doc(pessoaId) : root.collection('pessoas').doc();
+  try {
+    return await firestore.runTransaction(async transaction => {
+      const reads = [transaction.get(root.collection('usuarios').doc(request.auth.uid)), transaction.get(root.collection('pessoas'))];
+      if (pessoaId) reads.push(transaction.get(personRef));
+      const [executorSnapshot, peopleSnapshot, targetSnapshot] = await Promise.all(reads);
+      const executor = executorSnapshot.data();
+      if (!executorSnapshot.exists || executor?.ativo === false || !['admin', 'gestor'].includes(executor?.role)) fail('permission-denied', 'GESTAO_PESSOAS_OBRIGATORIA');
+      if (pessoaId && !targetSnapshot?.exists) fail('not-found', 'PESSOA_NAO_ENCONTRADA');
+      const current = targetSnapshot?.data() || null;
+      const next = {
+        ...(current || {}),
+        ...payload,
+        vinculo: payload.vinculo,
+        tipoPessoa: payload.vinculo === 'membro' ? 'Membro' : 'Consulente',
+        funcoesCasa: payload.vinculo === 'membro' ? [...new Set(payload.funcoesCasa || [])] : [],
+        email: normalizeIdentityEmail(payload.email) || null,
+        cpf: String(payload.cpf || '').replace(/\D/g, '') || null,
+        ativo: current ? current.ativo !== false : true,
+      };
+      try { validateSecurePersonPayload(next); }
+      catch (error) { fail('invalid-argument', error.message); }
+      const people = peopleSnapshot.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() }));
+      const nextEmailIndexRef = isActiveMemberIdentity(next) ? root.collection('membro_email_index').doc(getMemberEmailIndexId(next.email)) : null;
+      const previousEmailIndexRef = isActiveMemberIdentity(current) ? root.collection('membro_email_index').doc(getMemberEmailIndexId(current.email)) : null;
+      const nextCpfRef = next.cpf ? root.collection('cpf_index').doc(next.cpf) : null;
+      const previousCpf = String(current?.cpf || '').replace(/\D/g, '') || null;
+      const previousCpfRef = previousCpf ? root.collection('cpf_index').doc(previousCpf) : null;
+      const refs = [...new Map([nextEmailIndexRef, previousEmailIndexRef, nextCpfRef, previousCpfRef].filter(Boolean).map(ref => [ref.path, ref])).values()];
+      const snapshots = await Promise.all(refs.map(ref => transaction.get(ref)));
+      const byPath = new Map(snapshots.map(snapshot => [snapshot.ref.path, snapshot]));
+      const nextEmailIndex = nextEmailIndexRef ? byPath.get(nextEmailIndexRef.path) : null;
+      try {
+        assertMemberEmailAvailable({ personId: personRef.id, person: next, people, index: nextEmailIndex?.exists ? nextEmailIndex.data() : null });
+      } catch (error) {
+        throw new HttpsError('already-exists', error.message, { existingPersonName: error.existingPersonName || null });
+      }
+      const nextCpfSnapshot = nextCpfRef ? byPath.get(nextCpfRef.path) : null;
+      if (nextCpfSnapshot?.exists && nextCpfSnapshot.data().pessoaId !== personRef.id) fail('already-exists', 'CPF_DUPLICADO');
+      const now = FieldValue.serverTimestamp();
+      if (previousEmailIndexRef && (!nextEmailIndexRef || previousEmailIndexRef.path !== nextEmailIndexRef.path)) {
+        const oldIndex = byPath.get(previousEmailIndexRef.path);
+        if (oldIndex?.exists && oldIndex.data().pessoaId === personRef.id) transaction.delete(previousEmailIndexRef);
+      }
+      if (previousCpfRef && (!nextCpfRef || previousCpfRef.path !== nextCpfRef.path)) {
+        const oldIndex = byPath.get(previousCpfRef.path);
+        if (oldIndex?.exists && oldIndex.data().pessoaId === personRef.id) transaction.delete(previousCpfRef);
+      }
+      if (nextEmailIndexRef) transaction.set(nextEmailIndexRef, { email: next.email, pessoaId: personRef.id, atualizadoEm: now }, { merge: true });
+      if (nextCpfRef && !nextCpfSnapshot?.exists) transaction.set(nextCpfRef, { pessoaId: personRef.id, criadoEm: now });
+      if (current) transaction.update(personRef, { ...payload, vinculo: next.vinculo, tipoPessoa: next.tipoPessoa, funcoesCasa: next.funcoesCasa, email: next.email, cpf: next.cpf, atualizadoEm: now, atualizadoPor: request.auth.uid });
+      else transaction.set(personRef, { ...payload, vinculo: next.vinculo, tipoPessoa: next.tipoPessoa, funcoesCasa: next.funcoesCasa, email: next.email, cpf: next.cpf, ativo: true, criadoEm: now, criadoPor: request.auth.uid, atualizadoEm: now, atualizadoPor: request.auth.uid });
+      return { pessoaId: personRef.id, created: !current };
+    });
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    console.error('savePersonWithUniqueEmail failed', { name: error.name, code: error.code, message: error.message });
+    throw error;
+  }
+});
+
+export const updateMemberLifecycleSecure = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const pessoaBaseId = String(request.data?.pessoaBaseId || '').trim();
+  const active = request.data?.active;
+  const reason = String(request.data?.reason || '').trim();
+  if (!pessoaBaseId || typeof active !== 'boolean') fail('invalid-argument', 'LIFECYCLE_INVALIDO');
+  if (!active && !reason) fail('invalid-argument', 'MOTIVO_OBRIGATORIO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const personRef = root.collection('pessoas').doc(pessoaBaseId);
+  const auditRef = root.collection('auditoria').doc();
+  try {
+    return await firestore.runTransaction(async transaction => {
+      const [executorSnapshot, personSnapshot, peopleSnapshot] = await Promise.all([
+        transaction.get(root.collection('usuarios').doc(request.auth.uid)), transaction.get(personRef), transaction.get(root.collection('pessoas')),
+      ]);
+      const executor = executorSnapshot.data();
+      if (!executorSnapshot.exists || !isActiveAdmin(executor)) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+      if (executor.pessoaBaseId === pessoaBaseId) fail('failed-precondition', 'AUTO_INATIVACAO_PROIBIDA');
+      if (!personSnapshot.exists) fail('not-found', 'PESSOA_NAO_ENCONTRADA');
+      const person = personSnapshot.data();
+      if ((person.ativo !== false) === active) fail('failed-precondition', 'SITUACAO_JA_APLICADA');
+      const next = { ...person, ativo: active };
+      const emailIndexRef = String(person.vinculo || person.tipoPessoa || '').toLowerCase().includes('membro') && person.email
+        ? root.collection('membro_email_index').doc(getMemberEmailIndexId(person.email)) : null;
+      const emailIndexSnapshot = emailIndexRef ? await transaction.get(emailIndexRef) : null;
+      if (active) {
+        try {
+          assertMemberEmailAvailable({ personId: pessoaBaseId, person: next, people: peopleSnapshot.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() })), index: emailIndexSnapshot?.exists ? emailIndexSnapshot.data() : null });
+        } catch (error) {
+          throw new HttpsError('already-exists', error.message, { existingPersonName: error.existingPersonName || null });
+        }
+      }
+      const now = FieldValue.serverTimestamp();
+      if (emailIndexRef && active) transaction.set(emailIndexRef, { email: normalizeIdentityEmail(person.email), pessoaId: pessoaBaseId, atualizadoEm: now }, { merge: true });
+      if (emailIndexRef && !active && emailIndexSnapshot?.exists && emailIndexSnapshot.data().pessoaId === pessoaBaseId) transaction.delete(emailIndexRef);
+      transaction.update(personRef, {
+        ativo: active,
+        ...(active ? { reativadoEm: now, reativadoPor: request.auth.uid } : { inativadoEm: now, inativadoPor: request.auth.uid, motivoInativacao: reason }),
+        auditoriaLifecycleId: auditRef.id,
+        atualizadoEm: now,
+        atualizadoPor: request.auth.uid,
+      });
+      transaction.set(auditRef, { tipo: active ? 'MEMBRO_REATIVADO' : 'MEMBRO_INATIVADO', pessoaBaseId, ...(reason ? { motivo: reason } : {}), executadoPor: request.auth.uid, criadoEm: now });
+      return { updated: true };
+    });
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    console.error('updateMemberLifecycleSecure failed', { name: error.name, code: error.code, message: error.message });
+    throw error;
+  }
+});
+
+export const rebuildMemberEmailIndexSecure = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const pessoaBaseId = String(request.data?.pessoaBaseId || '').trim();
+  if (!pessoaBaseId) fail('invalid-argument', 'PESSOA_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  if (!projectId) fail('internal', 'PROJETO_FIREBASE_NAO_IDENTIFICADO');
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const personRef = root.collection('pessoas').doc(pessoaBaseId);
+  const auditRef = root.collection('auditoria').doc();
+  try {
+    return await firestore.runTransaction(async transaction => {
+      const [executorSnapshot, personSnapshot, peopleSnapshot] = await Promise.all([
+        transaction.get(root.collection('usuarios').doc(request.auth.uid)),
+        transaction.get(personRef),
+        transaction.get(root.collection('pessoas')),
+      ]);
+      if (!executorSnapshot.exists || !isActiveAdmin(executorSnapshot.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+      if (!personSnapshot.exists) fail('not-found', 'PESSOA_NAO_ENCONTRADA');
+      const person = personSnapshot.data();
+      if (!isActiveMemberIdentity(person)) fail('failed-precondition', 'PESSOA_NAO_E_MEMBRO_ATIVO');
+      const indexRef = root.collection('membro_email_index').doc(getMemberEmailIndexId(person.email));
+      const indexSnapshot = await transaction.get(indexRef);
+      try {
+        assertMemberEmailAvailable({
+          personId: pessoaBaseId,
+          person,
+          people: peopleSnapshot.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() })),
+          index: indexSnapshot.exists ? indexSnapshot.data() : null,
+        });
+      } catch (error) {
+        if (error.message === 'EMAIL_MEMBRO_INVALIDO') fail('failed-precondition', error.message);
+        throw new HttpsError('already-exists', error.message, { existingPersonName: error.existingPersonName || null });
+      }
+      if (indexSnapshot.exists) return { updated: false };
+      const now = FieldValue.serverTimestamp();
+      transaction.set(indexRef, { email: normalizeIdentityEmail(person.email), pessoaId: pessoaBaseId, criadoEm: now, atualizadoEm: now });
+      transaction.set(auditRef, { tipo: 'MEMBRO_EMAIL_INDEX_RECONSTRUIDO', pessoaBaseId, executadoPor: request.auth.uid, criadoEm: now });
+      return { updated: true };
+    });
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    console.error('rebuildMemberEmailIndexSecure failed', { name: error.name, code: error.code, message: error.message });
+    throw error;
+  }
+});
+
 export const updateUserAccess = onCall({ maxInstances: 3 }, async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
-  const { targetUid, action, role, active, reason } = request.data || {};
-  if (!targetUid || !['role', 'active'].includes(action)) fail('invalid-argument', 'OPERACAO_INVALIDA');
-  if (targetUid === request.auth.uid) fail('failed-precondition', 'AUTO_ALTERACAO_PROIBIDA');
-  if (action === 'role' && !allowedRoles.has(role)) fail('invalid-argument', 'ROLE_INVALIDA');
+  const { targetUid, action, role, active, reason, pessoaBaseId } = request.data || {};
+  if (!targetUid || !['role', 'active', 'link', 'authorize'].includes(action)) fail('invalid-argument', 'OPERACAO_INVALIDA');
+  if (targetUid === request.auth.uid && action !== 'link') fail('failed-precondition', 'AUTO_ALTERACAO_PROIBIDA');
+  if (['role', 'authorize'].includes(action) && !allowedRoles.has(role)) fail('invalid-argument', 'ROLE_INVALIDA');
   if (action === 'active' && typeof active !== 'boolean') fail('invalid-argument', 'SITUACAO_INVALIDA');
+  if (['link', 'authorize'].includes(action) && !pessoaBaseId) fail('invalid-argument', 'PESSOA_OBRIGATORIA');
   const cleanReason = typeof reason === 'string' ? reason.trim() : '';
   if (action === 'active' && active === false && !cleanReason) fail('invalid-argument', 'MOTIVO_OBRIGATORIO');
 
@@ -268,6 +507,64 @@ export const updateUserAccess = onCall({ maxInstances: 3 }, async request => {
       if (!executorSnapshot.exists || !isActiveAdmin(executor)) fail('permission-denied', 'ADMIN_OBRIGATORIO');
       if (!targetSnapshot.exists) fail('not-found', 'USUARIO_NAO_ENCONTRADO');
       const target = targetSnapshot.data();
+      if (['link', 'authorize'].includes(action)) {
+        if (action === 'authorize' && target.role !== 'pendente') fail('failed-precondition', 'USUARIO_NAO_PENDENTE');
+        const currentPessoaBaseId = target.pessoaBaseId || null;
+        const [nextPersonSnapshot, nextIndexSnapshot, peopleSnapshot] = await Promise.all([
+          transaction.get(root.collection('pessoas').doc(pessoaBaseId)),
+          transaction.get(root.collection('usuario_pessoa_index').doc(pessoaBaseId)),
+          transaction.get(root.collection('pessoas')),
+        ]);
+        let currentPersonSnapshot = null;
+        let currentIndexSnapshot = null;
+        if (currentPessoaBaseId) {
+          [currentPersonSnapshot, currentIndexSnapshot] = await Promise.all([
+            transaction.get(root.collection('pessoas').doc(currentPessoaBaseId)),
+            transaction.get(root.collection('usuario_pessoa_index').doc(currentPessoaBaseId)),
+          ]);
+        }
+        let decision;
+        try {
+          const nextEmail = normalizeIdentityEmail(nextPersonSnapshot.data()?.email);
+          const activeEmailMatchIds = peopleSnapshot.docs
+            .filter(snapshot => isActiveMemberRecord(snapshot.data()) && normalizeIdentityEmail(snapshot.data().email) === nextEmail)
+            .map(snapshot => snapshot.id);
+          decision = validateUserPersonLinkChange({
+            targetUid,
+            target: action === 'authorize' ? { ...target, role } : target,
+            currentPersonExists: currentPersonSnapshot?.exists === true,
+            nextPersonId: pessoaBaseId,
+            nextPerson: nextPersonSnapshot.exists ? nextPersonSnapshot.data() : null,
+            nextIndex: nextIndexSnapshot.exists ? nextIndexSnapshot.data() : null,
+            activeEmailMatchIds,
+          });
+        } catch (error) {
+          fail('failed-precondition', error.message);
+        }
+        if (!decision.updated) return { updated: false };
+        if (decision.repaired && currentIndexSnapshot?.exists) {
+          if (currentIndexSnapshot.data()?.uid !== targetUid) fail('failed-precondition', 'INDICE_VINCULO_DIVERGENTE');
+          transaction.delete(currentIndexSnapshot.ref);
+        }
+        const now = FieldValue.serverTimestamp();
+        if (!nextIndexSnapshot.exists) transaction.set(nextIndexSnapshot.ref, { pessoaBaseId, uid: targetUid, criadoEm: now, criadoPor: request.auth.uid });
+        transaction.update(targetRef, {
+          pessoaBaseId,
+          ...(action === 'authorize' ? { role, ativo: true } : {}),
+          atualizadoEm: now,
+          atualizadoPor: request.auth.uid,
+        });
+        transaction.set(auditRef, {
+          tipo: action === 'authorize' ? 'USUARIO_AUTORIZADO' : decision.repaired ? 'USUARIO_VINCULO_REPARADO' : 'USUARIO_VINCULADO',
+          alvoUid: targetUid,
+          pessoaBaseId,
+          ...(action === 'authorize' ? { role } : {}),
+          ...(decision.previousPessoaBaseId ? { vinculoAnteriorId: decision.previousPessoaBaseId } : {}),
+          executadoPor: request.auth.uid,
+          criadoEm: now,
+        });
+        return { updated: true, repaired: decision.repaired, authorized: action === 'authorize' };
+      }
       const next = { ...target, ...(action === 'role' ? { role } : { ativo: active }) };
       if (action === 'role' && target.role === role) return { updated: false };
       if (action === 'active' && (target.ativo !== false) === active) return { updated: false };

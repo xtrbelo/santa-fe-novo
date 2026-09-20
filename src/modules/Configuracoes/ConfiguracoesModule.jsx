@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, getAppCollection, getAppDoc, inspectCpfIndexes, inspectVacancyCounters, onSnapshot, rebuildCpfIndex, rebuildPessoaSearchIndex, reconcileAgendaVacancies, Timestamp, updateDoc } from '../../services/firebase';
+import { addDoc, getAppCollection, getAppDoc, inspectCpfIndexes, inspectMemberEmailIndexes, inspectVacancyCounters, onSnapshot, rebuildCpfIndex, rebuildPessoaSearchIndex, reconcileAgendaVacancies, Timestamp, updateDoc } from '../../services/firebase';
+import { rebuildMemberEmailIndexOnServer } from '../../services/firebaseFunctions';
 import { getPublicosPermitidosTrabalho, servicoControlaVagas } from '../../utils/domain';
 import { getEffectiveMemberFunctions } from '../../utils/pessoaForm';
 import { Card } from '../../components/ui/Card';
@@ -9,10 +10,11 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
+import { AccessIntegrityPanel } from './AccessIntegrityPanel';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 
-export const ConfiguracoesModule = ({ user, profile }) => {
+export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
   const canManageConfig = hasPermission(profile, PERMISSIONS.CONFIG_MANAGE);
   const [funcoes, setFuncoes] = useState([]);
   const [trabalhos, setTrabalhos] = useState([]);
@@ -29,6 +31,9 @@ export const ConfiguracoesModule = ({ user, profile }) => {
   const [cpfReport, setCpfReport] = useState(null);
   const [checkingCpf, setCheckingCpf] = useState(false);
   const [rebuildingCpf, setRebuildingCpf] = useState(false);
+  const [memberEmailReport, setMemberEmailReport] = useState(null);
+  const [checkingMemberEmails, setCheckingMemberEmails] = useState(false);
+  const [rebuildingMemberEmails, setRebuildingMemberEmails] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [reloadVersion, setReloadVersion] = useState(0);
@@ -156,6 +161,46 @@ export const ConfiguracoesModule = ({ user, profile }) => {
     setRebuildingCpf(false);
   };
 
+  const checkMemberEmailIndexes = async () => {
+    setCheckingMemberEmails(true);
+    try {
+      const report = await inspectMemberEmailIndexes();
+      setMemberEmailReport(report);
+      const conflicts = report.conflicts.length + report.indexConflicts.length;
+      toast.success(conflicts ? `${conflicts} conflito(s) de e-mail preservado(s) para análise.` : 'Índices de e-mail dos Membros conferidos.');
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível verificar os índices de e-mail dos Membros.');
+    } finally {
+      setCheckingMemberEmails(false);
+    }
+  };
+
+  const repairMemberEmailIndexes = async () => {
+    if (!memberEmailReport?.missing.length || !window.confirm(`Criar ${memberEmailReport.missing.length} índice(s) de e-mail ausente(s)?\n\nConflitos, e-mails inválidos e índices existentes não serão alterados.`)) return;
+    setRebuildingMemberEmails(true);
+    let updated = 0;
+    let errors = 0;
+    for (const item of memberEmailReport.missing) {
+      try {
+        const result = await rebuildMemberEmailIndexOnServer(item.pessoaId);
+        if (result.updated) updated += 1;
+      } catch (error) {
+        console.error(error);
+        errors += 1;
+      }
+    }
+    try {
+      const refreshed = await inspectMemberEmailIndexes();
+      setMemberEmailReport({ ...refreshed, updated, errors });
+    } catch (error) {
+      console.error(error);
+      setMemberEmailReport(current => ({ ...current, updated, errors }));
+    }
+    toast[errors ? 'error' : 'success'](errors ? `${updated} índice(s) criado(s) e ${errors} preservado(s) por segurança.` : `${updated} índice(s) de e-mail criado(s) com auditoria.`);
+    setRebuildingMemberEmails(false);
+  };
+
   const effectiveFunctions = getEffectiveMemberFunctions(funcoes);
   if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="as configurações" onRetry={() => setReloadVersion(value => value + 1)} />;
   return <div className="space-y-6 pb-10">
@@ -188,6 +233,18 @@ export const ConfiguracoesModule = ({ user, profile }) => {
         <span className="bg-emerald-50 p-2 rounded-lg">Já corretas<br/><strong>{rebuildReport.correct}</strong></span>
         <span className="bg-red-50 p-2 rounded-lg">Erros<br/><strong>{rebuildReport.errors}</strong></span>
       </div>}
+      <AccessIntegrityPanel onOpenPerson={onOpenPerson} />
+      <div className="border-t border-gray-100 pt-4 space-y-3">
+        <p className="text-sm text-gray-600">Confere o índice que impede e-mail duplicado entre Membros ativos. A verificação não altera cadastros.</p>
+        <Button variant="secondary" onClick={checkMemberEmailIndexes} disabled={checkingMemberEmails || rebuildingMemberEmails} className="w-full">{checkingMemberEmails ? 'Verificando e-mails...' : 'Verificar índices de e-mail dos Membros'}</Button>
+        {memberEmailReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs">
+          <p><strong>{memberEmailReport.analyzed}</strong> Membro(s) ativo(s) · <strong>{memberEmailReport.correct}</strong> correto(s) · <strong>{memberEmailReport.missing.length}</strong> ausente(s) · <strong>{memberEmailReport.conflicts.length}</strong> e-mail(s) duplicado(s) · <strong>{memberEmailReport.indexConflicts.length}</strong> índice(s) divergente(s) · <strong>{memberEmailReport.invalid.length}</strong> inválido(s)</p>
+          {memberEmailReport.orphanIndexes.length > 0 && <p><strong>{memberEmailReport.orphanIndexes.length}</strong> índice(s) órfão(s) preservado(s).</p>}
+          {memberEmailReport.updated !== undefined && <p className="font-bold text-emerald-700">Última correção: {memberEmailReport.updated} criado(s) · {memberEmailReport.errors} erro(s).</p>}
+          {(memberEmailReport.conflicts.length > 0 || memberEmailReport.indexConflicts.length > 0) && <p className="font-bold text-rose-700">Conflitos preservados para análise manual; nenhum e-mail ou índice existente será sobrescrito.</p>}
+          {memberEmailReport.missing.length > 0 && <Button variant="warning" onClick={repairMemberEmailIndexes} disabled={rebuildingMemberEmails} className="w-full">{rebuildingMemberEmails ? 'Criando índices...' : 'Criar índices de e-mail ausentes'}</Button>}
+        </div>}
+      </div>
       <div className="border-t border-gray-100 pt-4 space-y-3"><p className="text-sm text-gray-600">Confere se as vagas ocupadas correspondem aos atendimentos ativos. A verificação não altera dados.</p><Button variant="secondary" onClick={checkVacancies} disabled={checkingVacancies || reconcilingVacancies} className="w-full">{checkingVacancies ? 'Verificando vagas...' : 'Verificar contadores de vagas'}</Button>{vacancyReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs"><p><strong>{vacancyReport.analyzed}</strong> agenda(s) analisada(s) · <strong>{vacancyReport.divergences.length}</strong> divergência(s){vacancyReport.skippedClosed ? ` · ${vacancyReport.skippedClosed} encerrada(s) preservada(s)` : ''}</p>{vacancyReport.corrected !== undefined && <p className="font-bold text-emerald-700">Última correção: {vacancyReport.corrected} corrigida(s) · {vacancyReport.errors} erro(s).</p>}{vacancyReport.divergences.slice(0, 10).map(item => <p key={item.agendaId} className="rounded-lg bg-white p-2"><strong>{item.tipo}</strong> · {item.data?.toDate?.().toLocaleDateString('pt-BR') || 'data indisponível'}<br/>Registrado: {Object.values(item.current).reduce((sum, value) => sum + Number(value || 0), 0)} · Encontrado: {Object.values(item.expected).reduce((sum, value) => sum + Number(value || 0), 0)}</p>)}{vacancyReport.divergences.length > 10 && <p>Mais {vacancyReport.divergences.length - 10} divergência(s) não exibida(s).</p>}{vacancyReport.divergences.length > 0 && <Button variant="warning" onClick={reconcileVacancies} disabled={reconcilingVacancies} className="w-full">{reconcilingVacancies ? 'Corrigindo vagas...' : 'Corrigir divergências'}</Button>}</div>}</div>
       <div className="border-t border-gray-100 pt-4 space-y-3"><p className="text-sm text-gray-600">Localiza Pessoas antigas com CPF válido e sem índice. A verificação não altera dados.</p><Button variant="secondary" onClick={checkCpfIndexes} disabled={checkingCpf || rebuildingCpf} className="w-full">{checkingCpf ? 'Verificando CPFs...' : 'Verificar índices de CPF'}</Button>{cpfReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs"><p><strong>{cpfReport.analyzed}</strong> pessoa(s) analisada(s) · <strong>{cpfReport.missing.length}</strong> ausente(s) · <strong>{cpfReport.conflicts.length}</strong> conflito(s) · <strong>{cpfReport.invalid}</strong> CPF(s) inválido(s) · <strong>{cpfReport.withoutCpf}</strong> sem CPF</p>{cpfReport.updated !== undefined && <p className="font-bold text-emerald-700">Última correção: {cpfReport.updated} criado(s) · {cpfReport.errors} erro(s).</p>}{cpfReport.conflicts.length > 0 && <p className="font-bold text-rose-700">Conflitos preservados para análise manual; nenhum índice existente será sobrescrito.</p>}{cpfReport.missing.length > 0 && <Button variant="warning" onClick={repairCpfIndexes} disabled={rebuildingCpf} className="w-full">{rebuildingCpf ? 'Criando índices...' : 'Criar índices ausentes'}</Button>}</div>}</div>
     </Card>}
