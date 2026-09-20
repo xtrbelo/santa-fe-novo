@@ -21,6 +21,26 @@ export const updateUserAccessOnServer = async payload => {
   return response.data;
 };
 
+export const createAccessAuthorizationOnServer = async payload => {
+  const response = await httpsCallable(getFunctionsClient(), 'createAccessAuthorizationSecure')(payload);
+  return response.data;
+};
+
+export const savePersonWithUniqueEmailOnServer = async payload => {
+  const response = await httpsCallable(getFunctionsClient(), 'savePersonWithUniqueEmail')(payload);
+  return response.data;
+};
+
+export const updateMemberLifecycleOnServer = async payload => {
+  const response = await httpsCallable(getFunctionsClient(), 'updateMemberLifecycleSecure')(payload);
+  return response.data;
+};
+
+export const rebuildMemberEmailIndexOnServer = async pessoaBaseId => {
+  const response = await httpsCallable(getFunctionsClient(), 'rebuildMemberEmailIndexSecure')({ pessoaBaseId });
+  return response.data;
+};
+
 const callEmailFunction = async (name, payload = {}) => (await httpsCallable(getEmailFunctionsClient(), name)(payload)).data;
 export const sendAccessActivationOnServer = pessoaBaseId => callEmailFunction('sendAccessActivationMailjet', { pessoaBaseId });
 export const sendEmailVerificationOnServer = () => callEmailFunction('sendEmailVerificationMailjet');

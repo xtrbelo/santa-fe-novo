@@ -34,6 +34,7 @@ export const AUTH_VIEW = Object.freeze({
   EMAIL_NOT_VERIFIED: 'email_not_verified',
   INACTIVE: 'inactive',
   SUSPENDED: 'suspended',
+  BROKEN_LINK: 'broken_link',
   PENDING: 'pending',
   UNAUTHORIZED: 'unauthorized',
   AUTHORIZED: 'authorized',
@@ -45,6 +46,7 @@ export const resolveAuthView = ({ loading, user, profile, pendingRole }) => {
   if (!profile) return AUTH_VIEW.UNAUTHORIZED;
   if (usesPasswordProvider(user) && !user.emailVerified) return AUTH_VIEW.EMAIL_NOT_VERIFIED;
   if (profile.ativo === false) return AUTH_VIEW.INACTIVE;
+  if (profile.pessoaBaseId && profile.pessoaEncontrada === false) return AUTH_VIEW.BROKEN_LINK;
   if (profile.pessoaBaseId && profile.pessoaAtiva === false) return AUTH_VIEW.SUSPENDED;
   if (profile.role === pendingRole) return AUTH_VIEW.PENDING;
   return AUTH_VIEW.AUTHORIZED;

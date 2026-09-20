@@ -13,5 +13,5 @@ test('gera os três e-mails com links seguros e identidade da Casa', () => {
 
 test('mantém URLs de HML e produção separadas', () => {
   assert.equal(getSystemBaseUrl('santa-fe-v2-hml'), 'https://santa-fe-v2-hml.web.app');
-  assert.equal(getSystemBaseUrl('santa-fe-v2-prod'), 'https://santa-fe-v2-prod.web.app');
+  assert.equal(getSystemBaseUrl('santa-fe-v2-prod'), 'https://caesf.com.br');
 });

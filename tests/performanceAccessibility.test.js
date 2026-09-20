@@ -63,7 +63,7 @@ test('versão do ambiente permanece visível no rodapé e na navegação', () =>
   const footerSource = readSource('../src/components/layout/AppFooter.jsx');
   const appSource = readSource('../src/App.jsx');
   const sidebarSource = readSource('../src/components/layout/Sidebar.jsx');
-  assert.match(versionSource, /APP_VERSION = '21A'/);
+  assert.match(versionSource, /APP_VERSION = '21H'/);
   assert.match(footerSource, /fixed inset-x-0 bottom-0/);
   assert.match(appSource, /APP_VERSION_LABEL/);
   assert.match(sidebarSource, /APP_VERSION_LABEL/);
@@ -154,6 +154,8 @@ test('build separa autenticação, banco e base Firebase para cache independente
 test('alterações administrativas de acesso usam função protegida no servidor', () => {
   const source = readSource('../src/modules/Usuarios/UsuariosModule.jsx');
   assert.match(source, /updateUserAccessOnServer/);
+  assert.match(source, /createAccessAuthorizationOnServer/);
+  assert.match(source, /EMAIL_MEMBRO_AMBIGUO/);
   assert.match(source, /último Administrador ativo/);
   assert.doesNotMatch(source, /batch\.update\(getAppDoc\('usuarios'/);
 });
@@ -164,12 +166,30 @@ test('suspensão de membro não exibe sucesso de login nem erro técnico de perm
   assert.match(source, /error\?\.code === 'permission-denied'.*pessoaAtiva: false/s);
 });
 
-test('Usuários separa acessos efetivamente ativos dos suspensos por membro', () => {
+test('Usuários separa acessos ativos, membros inativos e vínculos inválidos', () => {
   const moduleSource = readSource('../src/modules/Usuarios/UsuariosModule.jsx');
   const cardSource = readSource('../src/modules/Usuarios/UsuarioCard.jsx');
   assert.match(moduleSource, /\['suspensos', 'Membro inativo'\]/);
-  assert.match(moduleSource, /pessoas\[item\.pessoaBaseId\]\?\.ativo !== false/);
-  assert.match(cardSource, /!usuario\.pessoaBaseId \|\| pessoa\?\.ativo === false/);
+  assert.match(moduleSource, /\['vinculo-invalido', 'Vínculo inválido'\]/);
+  assert.match(moduleSource, /Boolean\(pessoas\[item\.pessoaBaseId\]\)/);
+  assert.match(moduleSource, /action: 'link'/);
+  assert.match(cardSource, /hasBrokenLink/);
+  assert.match(cardSource, /Reparar vínculo/);
+});
+
+test('Configurações verifica e repara vínculos de acesso sem excluir índices automaticamente', () => {
+  const configSource = readSource('../src/modules/Configuracoes/ConfiguracoesModule.jsx');
+  const panelSource = readSource('../src/modules/Configuracoes/AccessIntegrityPanel.jsx');
+  assert.match(configSource, /AccessIntegrityPanel/);
+  assert.match(panelSource, /Verificar integridade dos acessos/);
+  assert.match(panelSource, /action: 'link'/);
+  assert.match(panelSource, /nada foi excluído automaticamente/);
+  assert.match(panelSource, /e-mail\(s\) duplicado\(s\)/);
+  assert.match(panelSource, /Compare os cadastros, corrija o e-mail incorreto/);
+  assert.match(panelSource, /Abrir cadastro/);
+  assert.match(panelSource, /execute uma nova verificação/);
+  assert.match(configSource, /onOpenPerson/);
+  assert.match(panelSource, /window\.confirm/);
 });
 
 test('Pessoas avisa quando a inativação suspenderá uma conta vinculada', () => {
@@ -185,6 +205,34 @@ test('Pessoas explica o efeito da reativação conforme a conta vinculada', () =
   assert.match(source, /linked-revoked/);
   assert.match(source, /o acesso ao sistema será restabelecido imediatamente/);
   assert.match(source, /reativado separadamente em Usuários/);
+});
+
+test('manutenção de e-mail dos Membros preserva conflitos e só cria índices ausentes', () => {
+  const configSource = readSource('../src/modules/Configuracoes/ConfiguracoesModule.jsx');
+  const functionSource = readSource('../functions/index.js');
+  assert.match(configSource, /Verificar índices de e-mail dos Membros/);
+  assert.match(configSource, /Criar índices de e-mail ausentes/);
+  assert.match(configSource, /nenhum e-mail ou índice existente será sobrescrito/);
+  assert.match(functionSource, /rebuildMemberEmailIndexSecure/);
+  assert.match(functionSource, /MEMBRO_EMAIL_INDEX_RECONSTRUIDO/);
+});
+
+test('Pessoas impede e-mail duplicado de Membro antes e durante o salvamento', () => {
+  const source = readSource('../src/modules/Pessoas/PessoasModule.jsx');
+  const functionsSource = readSource('../src/services/firebaseFunctions.js');
+  assert.match(source, /Este e-mail já pertence ao Membro/);
+  assert.match(source, /savePersonWithUniqueEmailOnServer/);
+  assert.match(source, /updateMemberLifecycleOnServer/);
+  assert.match(functionsSource, /savePersonWithUniqueEmail/);
+  assert.match(functionsSource, /updateMemberLifecycleSecure/);
+});
+
+test('aprovação de convite e link também bloqueia e-mail de Membro já ativo', () => {
+  const serviceSource = readSource('../src/services/firebase.js');
+  const reviewSource = readSource('../src/modules/Autocadastros/AutocadastrosModule.jsx');
+  assert.match(serviceSource, /assertNoActiveMemberEmailConflict/);
+  assert.match(serviceSource, /membro_email_index/);
+  assert.match(reviewSource, /EMAIL_MEMBRO_DUPLICADO/);
 });
 
 test('histórico de usuário apresenta mudanças de perfil com valores legíveis', () => {

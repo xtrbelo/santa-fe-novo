@@ -32,6 +32,7 @@ import {
   revokeMemberInvite,
   submitMemberSelfRegistration,
   approveMemberSelfRegistration,
+  approveReusableRegistration,
   rejectMemberSelfRegistration,
   autorizarUsuario,
   vincularUsuarioPessoa,
@@ -564,6 +565,29 @@ describe('Fase 9D - análise de autocadastro de Membro', () => {
     const result = await approveMemberSelfRegistration({ inviteId: created.convite.id, userId: USER_ID, funcoesCasa: ['medium'] }, adminDb());
     assert.equal((await getDoc(doc(adminDb(), path('pessoas', result.pessoaId)))).exists(), true);
     assert.equal((await getDoc(doc(adminDb(), path('cpf_index', created.convite.cpf)))).data().pessoaId, result.pessoaId);
+  });
+});
+
+describe('Fase 21F - unicidade de e-mail na aprovação', () => {
+  const reusableRequest = (cpf, email) => ({
+    linkId: 'a'.repeat(64), tipoCadastro: 'membro', nome: 'Membro por link', cpf, contato: '96999999999', email,
+    dataNascimento: '1990-01-20', sexo: 'feminino', estadoCivil: 'solteiro', endereco: { cep: '68900000', logradouro: null, numero: null, complemento: null, bairro: 'Centro', cidade: 'Macapá', uf: 'AP' },
+    dadosCasa: { dataIngresso: '2020-01-01', batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'link_reutilizavel',
+  });
+
+  test('link reutilizável cria índice de e-mail e bloqueia outro Membro ativo', async () => {
+    await seedDocuments([
+      ['config_funcoes_membro', 'medium', { codigo: 'medium', nome: 'Médium', ativo: true }],
+      ['solicitacoes_cadastro', 'solicitacao-unica', reusableRequest('52998224725', 'unico@example.test')],
+    ]);
+    const approved = await approveReusableRegistration({ requestId: 'solicitacao-unica', userId: USER_ID, funcoesCasa: ['medium'] }, adminDb());
+    assert.equal((await getDoc(doc(adminDb(), path('membro_email_index', encodeURIComponent('unico@example.test'))))).data().pessoaId, approved.pessoaId);
+
+    await seedDocuments([
+      ['solicitacoes_cadastro', 'solicitacao-duplicada', reusableRequest('11144477735', 'UNICO@example.test')],
+    ]);
+    await assert.rejects(approveReusableRegistration({ requestId: 'solicitacao-duplicada', userId: USER_ID, funcoesCasa: ['medium'] }, adminDb()), /EMAIL_MEMBRO_DUPLICADO/);
+    assert.equal((await getDoc(doc(adminDb(), path('solicitacoes_cadastro', 'solicitacao-duplicada')))).data().statusCadastro, 'aguardando_validacao');
   });
 });
 

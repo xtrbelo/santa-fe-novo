@@ -11,6 +11,7 @@ const formatTimestamp = timestamp => timestamp?.toDate?.().toLocaleString('pt-BR
 export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, busy = false, onAuthorize, onLink, onEditRole, onToggleStatus, onResetPassword, onHistory }) => {
   const isOwnAccount = usuario.uid === currentUid;
   const isPending = usuario.role === ROLES.PENDENTE;
+  const hasBrokenLink = Boolean(usuario.pessoaBaseId) && !pessoa;
   return (
     <Card className={`!border-none shadow-md ${usuario.ativo === false ? 'opacity-70' : ''}`}>
       <div className="flex items-start gap-3">
@@ -20,6 +21,7 @@ export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, busy
             <h3 className="font-black text-gray-900 [overflow-wrap:anywhere]">{usuario.nome || 'Usuário sem nome'}</h3>
             {isOwnAccount && <span className="text-[9px] font-black uppercase bg-blue-100 text-blue-700 px-2 py-1 rounded-full">Sua conta</span>}
             {usuario.ativo === false && <span className="text-[9px] font-black uppercase bg-rose-100 text-rose-700 px-2 py-1 rounded-full">Inativo</span>}
+            {usuario.ativo !== false && hasBrokenLink && <span className="text-[9px] font-black uppercase bg-amber-100 text-amber-800 px-2 py-1 rounded-full">Vínculo inválido</span>}
             {usuario.ativo !== false && pessoa?.ativo === false && <span className="text-[9px] font-black uppercase bg-amber-100 text-amber-800 px-2 py-1 rounded-full">Acesso suspenso — membro inativo</span>}
           </div>
           <p className="text-xs text-gray-500 [overflow-wrap:anywhere] mt-1">{usuario.email || 'E-mail não informado'}</p>
@@ -31,15 +33,15 @@ export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, busy
         <p><strong className="block uppercase text-gray-400">Atualização</strong>{formatTimestamp(usuario.atualizadoEm)}</p>
       </div>
       {usuario.ativo === false && <div className="mt-4 rounded-xl bg-rose-50 p-3 text-xs text-rose-800"><strong>Acesso revogado em:</strong> {formatTimestamp(usuario.acessoRevogadoEm)}{usuario.motivoRevogacao && <p className="mt-1"><strong>Motivo:</strong> {usuario.motivoRevogacao}</p>}</div>}
-      {pessoa ? <div className="mt-4 bg-emerald-50 p-3 rounded-xl text-xs"><strong className="text-emerald-800">Membro vinculado: {pessoa.nome}</strong><p className="text-gray-600 mt-1">Funções: {getMemberFunctionLabels(getPessoaFuncoesCasa(pessoa), memberFunctions).join(', ') || 'Sem função cadastrada'}</p></div> : !isPending && <div className="mt-4 bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs text-amber-800"><strong>⚠ Cadastro de membro ainda não vinculado.</strong><p className="mt-1">Vincule um Membro antes de alterar o perfil. A revogação do acesso continua disponível.</p></div>}
+      {pessoa ? <div className="mt-4 bg-emerald-50 p-3 rounded-xl text-xs"><strong className="text-emerald-800">Membro vinculado: {pessoa.nome}</strong><p className="text-gray-600 mt-1">Funções: {getMemberFunctionLabels(getPessoaFuncoesCasa(pessoa), memberFunctions).join(', ') || 'Sem função cadastrada'}</p></div> : !isPending && <div className="mt-4 bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs text-amber-800"><strong>⚠ {hasBrokenLink ? 'O cadastro de membro vinculado não existe mais.' : 'Cadastro de membro ainda não vinculado.'}</strong><p className="mt-1">{hasBrokenLink ? 'Repare o vínculo selecionando o cadastro ativo com o mesmo e-mail.' : 'Vincule um Membro antes de alterar o perfil.'} A revogação do acesso continua disponível.</p></div>}
       <div className="flex flex-col sm:flex-row gap-2 border-t border-gray-100 mt-4 pt-4">
         {isPending ? <Button onClick={() => onAuthorize(usuario)} disabled={busy} className="flex-1">Autorizar acesso</Button> : <>
-        {!usuario.pessoaBaseId && <Button variant="secondary" onClick={() => onLink(usuario)} disabled={busy} className="flex-1">Vincular membro</Button>}
-        <Button variant="secondary" onClick={() => onEditRole(usuario)} disabled={busy || isOwnAccount || !usuario.pessoaBaseId || pessoa?.ativo === false} className="flex-1">
+        {(!usuario.pessoaBaseId || hasBrokenLink) && <Button variant="secondary" onClick={() => onLink(usuario)} disabled={busy} className="flex-1">{hasBrokenLink ? 'Reparar vínculo' : 'Vincular membro'}</Button>}
+        <Button variant="secondary" onClick={() => onEditRole(usuario)} disabled={busy || isOwnAccount || !pessoa || pessoa.ativo === false} className="flex-1">
           Perfil: {ROLE_LABELS[usuario.role] || usuario.role}
         </Button>
         </>}
-        <Button variant={usuario.ativo === false ? 'success' : 'danger'} onClick={() => onToggleStatus(usuario)} disabled={busy || isOwnAccount || (usuario.ativo === false && pessoa?.ativo === false)} className="flex-1">
+        <Button variant={usuario.ativo === false ? 'success' : 'danger'} onClick={() => onToggleStatus(usuario)} disabled={busy || isOwnAccount || (usuario.ativo === false && (!pessoa || pessoa.ativo === false))} className="flex-1">
           {usuario.ativo === false ? <><UserRoundCheck size={16} /> Reativar acesso</> : <><UserRoundX size={16} /> Revogar acesso</>}
         </Button>
       </div>

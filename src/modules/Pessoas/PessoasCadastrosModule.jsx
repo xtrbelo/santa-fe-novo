@@ -17,19 +17,20 @@ const initialSection = () => {
 
 const LoadingSection = () => <div role="status" className="py-16 text-center text-sm font-bold text-gray-500">Carregando seção...</div>;
 
-export function PessoasCadastrosModule({ user, profile }) {
+export function PessoasCadastrosModule({ user, profile, focusPersonId = null, onFocusConsumed }) {
   const sections = useMemo(() => [
     { id: 'pessoas', label: 'Pessoas', description: 'Cadastros existentes', icon: Users, visible: hasPermission(profile, PERMISSIONS.PEOPLE_VIEW) },
     { id: 'links', label: 'Links', description: 'Cadastros reutilizáveis', icon: Link2, visible: hasPermission(profile, PERMISSIONS.MEMBER_INVITES_MANAGE) },
     { id: 'solicitacoes', label: 'Solicitações', description: 'Autocadastros recebidos', icon: ClipboardCheck, visible: hasPermission(profile, PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW) },
   ].filter(section => section.visible), [profile]);
   const [section, setSection] = useState(() => initialSection());
-  const [focusedPersonId, setFocusedPersonId] = useState(null);
+  const [localFocusedPersonId, setLocalFocusedPersonId] = useState(null);
   const [filteredLinkId, setFilteredLinkId] = useState(null);
   const [pendingRegistrations, setPendingRegistrations] = useState({ membro: 0, consulente: 0 });
   const activeSection = sections.some(item => item.id === section) ? section : sections[0]?.id;
-  const openPerson = pessoaId => { setFocusedPersonId(pessoaId); setSection('pessoas'); };
+  const openPerson = pessoaId => { setLocalFocusedPersonId(pessoaId); setSection('pessoas'); };
   const openLinkRequests = linkId => { setFilteredLinkId(linkId); setSection('solicitacoes'); };
+  useEffect(() => { if (focusPersonId) setSection('pessoas'); }, [focusPersonId]);
   useEffect(() => {
     if (!hasPermission(profile, PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW)) return undefined;
     let inviteMembers = 0; let linkMembers = 0; let linkConsultees = 0;
@@ -56,7 +57,7 @@ export function PessoasCadastrosModule({ user, profile }) {
       })}
     </nav>
     <Suspense fallback={<LoadingSection />}>
-      {activeSection === 'links' ? <LinksCadastroModule user={user} onOpenRequests={openLinkRequests} /> : activeSection === 'solicitacoes' ? <AutocadastrosModule user={user} onOpenPerson={openPerson} filterLinkId={filteredLinkId} onClearLinkFilter={() => setFilteredLinkId(null)} /> : <PessoasModule user={user} profile={profile} focusPersonId={focusedPersonId} onFocusConsumed={() => setFocusedPersonId(null)} />}
+      {activeSection === 'links' ? <LinksCadastroModule user={user} onOpenRequests={openLinkRequests} /> : activeSection === 'solicitacoes' ? <AutocadastrosModule user={user} onOpenPerson={openPerson} filterLinkId={filteredLinkId} onClearLinkFilter={() => setFilteredLinkId(null)} /> : <PessoasModule user={user} profile={profile} focusPersonId={focusPersonId || localFocusedPersonId} onFocusConsumed={() => { setLocalFocusedPersonId(null); onFocusConsumed?.(); }} />}
     </Suspense>
   </div>;
 }

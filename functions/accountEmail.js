@@ -10,4 +10,4 @@ export const buildActivationEmail = ({ nome, link }) => template({ title: 'Ative
 export const buildVerificationEmail = ({ nome, link }) => template({ title: 'Confirme seu e-mail', greeting: `Olá, ${String(nome || '').trim().split(/\s+/)[0] || 'membro'}`, description: 'Confirme seu endereço de e-mail para continuar usando o Sistema Santa Fé.', actionLabel: 'Confirmar e-mail', actionUrl: link });
 export const buildPasswordResetEmail = ({ nome, link }) => template({ title: 'Redefina sua senha', greeting: `Olá, ${String(nome || '').trim().split(/\s+/)[0] || 'membro'}`, description: 'Recebemos uma solicitação para redefinir sua senha do Sistema Santa Fé.', actionLabel: 'Criar nova senha', actionUrl: link });
 
-export const getSystemBaseUrl = projectId => projectId === 'santa-fe-v2-prod' ? 'https://santa-fe-v2-prod.web.app' : 'https://santa-fe-v2-hml.web.app';
+export const getSystemBaseUrl = projectId => projectId === 'santa-fe-v2-prod' ? 'https://caesf.com.br' : 'https://santa-fe-v2-hml.web.app';

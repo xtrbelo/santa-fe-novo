@@ -37,6 +37,7 @@ import { app, appId, auth, db, firebaseConfig, getAppCollection, getAppDoc, isFi
 import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, servicoAtivoNaAgenda, servicoControlaVagas } from '../utils/domain.js';
 import { buildPessoaSearchIndex, normalizeSearchDigits, normalizeSearchText, PESSOA_SEARCH_VERSION } from '../utils/pessoaSearch.js';
 import { buildPessoaPayload, getEffectiveMemberFunctions, isValidEmail, normalizeEmail, validatePessoaPayload } from '../utils/pessoaForm.js';
+import { inspectMemberEmailIndexData } from '../utils/memberEmailIntegrity.js';
 import { buildMemberInviteUrl, generateMemberInviteToken, getMemberInviteEffectiveStatus, getMemberInviteExpiration, hashMemberInviteToken, isValidMemberInviteToken } from '../utils/memberInvite.js';
 import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPayload } from '../utils/memberSelfRegistration.js';
 import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelfRegistrationApproval, validateSelfRegistrationRejection } from '../utils/memberSelfRegistrationReview.js';
@@ -48,11 +49,24 @@ import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
 import { inspectAgendaOccupancy, vacancyMapsEqual } from '../utils/vacancyReconciliation.js';
 import { LIFECYCLE_AUDIT_TYPES, requireLifecycleReason } from '../utils/lifecycle.js';
 import { getAgendaSchedulingKey } from '../utils/agendaScheduling.js';
+import { inspectAccessIntegrityData } from '../utils/accessIntegrity.js';
 import { buildRegistrationLinkUrl, normalizeRegistrationLinkConfig, normalizeRegistrationLinkEdit } from '../utils/registrationLink.js';
 import { buildReusableRegistrationPayload, validateReusableRegistrationPayload } from '../utils/reusableRegistration.js';
 
 const getDataCollection = (firestore, collName) => collection(firestore, 'artifacts', appId, 'public', 'data', collName);
 const getDataDoc = (firestore, collName, docId) => doc(firestore, 'artifacts', appId, 'public', 'data', collName, docId);
+const getMemberEmailIndexRef = (firestore, email) => getDataDoc(firestore, 'membro_email_index', encodeURIComponent(normalizeEmail(email)));
+
+const assertNoActiveMemberEmailConflict = async ({ email, firestore = db }) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) throw new Error('EMAIL_MEMBRO_INVALIDO');
+  const snapshot = await getDocs(getDataCollection(firestore, 'pessoas'));
+  const conflict = snapshot.docs.find(item => {
+    const person = item.data();
+    return person.ativo !== false && getPessoaVinculo(person) === 'membro' && normalizeEmail(person.email) === normalized;
+  });
+  if (conflict) throw new Error(`EMAIL_MEMBRO_DUPLICADO:${conflict.data().nome || 'Membro existente'}`);
+};
 
 /**
  * Busca otimizada de pessoa por CPF no Firestore utilizando indexação direta
@@ -336,7 +350,12 @@ export const approveMemberSelfRegistration = async ({ inviteId, userId, funcoesC
   const allowedFunctionCodes = new Set(getEffectiveMemberFunctions(configuredFunctionsSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))).map(item => item.id));
   const selectedFunctionCodes = [...new Set((funcoesCasa || []).map(value => String(value || '').trim()).filter(Boolean))];
   const pendingRegistration = await getDoc(registrationRef);
-  if (pendingRegistration.exists()) await removeOrphanCpfIndex(pendingRegistration.data().cpf, firestore);
+  if (pendingRegistration.exists()) {
+    if (pendingRegistration.data().statusCadastro !== 'aguardando_validacao') throw new Error('AUTOCADASTRO_JA_ANALISADO');
+    await removeOrphanCpfIndex(pendingRegistration.data().cpf, firestore);
+    if ((await getDoc(getDataDoc(firestore, 'cpf_index', pendingRegistration.data().cpf))).exists()) throw new Error('CPF_DUPLICADO');
+    await assertNoActiveMemberEmailConflict({ email: pendingRegistration.data().email, firestore });
+  }
   await runTransaction(firestore, async transaction => {
     const registrationSnapshot = await transaction.get(registrationRef);
     if (!registrationSnapshot.exists()) throw new Error('AUTOCADASTRO_NAO_ENCONTRADO');
@@ -349,12 +368,14 @@ export const approveMemberSelfRegistration = async ({ inviteId, userId, funcoesC
     if (validationError) throw new Error(validationError);
     const inviteIndexRef = getDataDoc(firestore, 'convite_membro_cpf_index', registration.cpf);
     const cpfIndexRef = getDataDoc(firestore, 'cpf_index', registration.cpf);
-    const [inviteSnapshot, inviteIndexSnapshot, cpfIndexSnapshot] = await Promise.all([
-      transaction.get(inviteRef), transaction.get(inviteIndexRef), transaction.get(cpfIndexRef)
+    const emailIndexRef = getMemberEmailIndexRef(firestore, registration.email);
+    const [inviteSnapshot, inviteIndexSnapshot, cpfIndexSnapshot, emailIndexSnapshot] = await Promise.all([
+      transaction.get(inviteRef), transaction.get(inviteIndexRef), transaction.get(cpfIndexRef), transaction.get(emailIndexRef)
     ]);
     if (!inviteSnapshot.exists()) throw new Error('CONVITE_INCOMPATIVEL');
     validateRegistrationOrigin({ registration, inviteId, invite: inviteSnapshot.data(), inviteIndex: inviteIndexSnapshot.exists() ? inviteIndexSnapshot.data() : null });
     if (cpfIndexSnapshot.exists()) throw new Error('CPF_DUPLICADO');
+    if (emailIndexSnapshot.exists()) throw new Error('EMAIL_MEMBRO_DUPLICADO');
     const now = Timestamp.now();
     const pessoa = withPessoaSearchIndex({
       ...buildPessoaFromSelfRegistration(registration, approvalData),
@@ -362,6 +383,7 @@ export const approveMemberSelfRegistration = async ({ inviteId, userId, funcoesC
     });
     transaction.set(pessoaRef, pessoa);
     transaction.set(cpfIndexRef, { pessoaId: pessoaRef.id, criadoEm: now });
+    transaction.set(emailIndexRef, { email: normalizeEmail(registration.email), pessoaId: pessoaRef.id, criadoEm: now });
     transaction.update(registrationRef, { statusCadastro: 'aprovado', pessoaId: pessoaRef.id, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
     transaction.delete(inviteIndexRef);
     transaction.set(auditRef, { tipo: 'AUTOCADASTRO_MEMBRO_APROVADO', autocadastroId: inviteId, inviteId, pessoaId: pessoaRef.id, executadoPor: userId, executadoEm: now });
@@ -400,7 +422,12 @@ export const approveReusableRegistration = async ({ requestId, userId, funcoesCa
   const allowedFunctions = new Set(getEffectiveMemberFunctions(configuredFunctionsSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))).map(item => item.id));
   const selectedFunctions = [...new Set(funcoesCasa.map(value => String(value || '').trim()).filter(Boolean))];
   const pendingRequest = await getDoc(requestRef);
-  if (pendingRequest.exists()) await removeOrphanCpfIndex(pendingRequest.data().cpf, firestore);
+  if (pendingRequest.exists()) {
+    if (pendingRequest.data().statusCadastro !== 'aguardando_validacao') throw new Error('AUTOCADASTRO_JA_ANALISADO');
+    await removeOrphanCpfIndex(pendingRequest.data().cpf, firestore);
+    if (pendingRequest.data().cpf && (await getDoc(getDataDoc(firestore, 'cpf_index', pendingRequest.data().cpf))).exists()) throw new Error('CPF_DUPLICADO');
+    if (pendingRequest.data().tipoCadastro === 'membro') await assertNoActiveMemberEmailConflict({ email: pendingRequest.data().email, firestore });
+  }
   await runTransaction(firestore, async transaction => {
     const requestSnapshot = await transaction.get(requestRef);
     if (!requestSnapshot.exists()) throw new Error('SOLICITACAO_NAO_ENCONTRADA');
@@ -414,10 +441,17 @@ export const approveReusableRegistration = async ({ requestId, userId, funcoesCa
     const validationError = validatePessoaPayload(pessoa);
     if (validationError) throw new Error(`SOLICITACAO_INVALIDA:${validationError}`);
     const cpfIndexRef = registration.cpf ? getDataDoc(firestore, 'cpf_index', registration.cpf) : null;
-    if (cpfIndexRef && (await transaction.get(cpfIndexRef)).exists()) throw new Error('CPF_DUPLICADO');
+    const emailIndexRef = registration.tipoCadastro === 'membro' ? getMemberEmailIndexRef(firestore, registration.email) : null;
+    const [cpfIndexSnapshot, emailIndexSnapshot] = await Promise.all([
+      cpfIndexRef ? transaction.get(cpfIndexRef) : Promise.resolve(null),
+      emailIndexRef ? transaction.get(emailIndexRef) : Promise.resolve(null),
+    ]);
+    if (cpfIndexSnapshot?.exists()) throw new Error('CPF_DUPLICADO');
+    if (emailIndexSnapshot?.exists()) throw new Error('EMAIL_MEMBRO_DUPLICADO');
     const now = Timestamp.now();
     transaction.set(pessoaRef, withPessoaSearchIndex({ ...pessoa, criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId }));
     if (cpfIndexRef) transaction.set(cpfIndexRef, { pessoaId: pessoaRef.id, criadoEm: now });
+    if (emailIndexRef) transaction.set(emailIndexRef, { email: normalizeEmail(registration.email), pessoaId: pessoaRef.id, criadoEm: now });
     transaction.update(requestRef, { statusCadastro: 'aprovado', pessoaId: pessoaRef.id, analisadoEm: now, analisadoPor: userId, atualizadoEm: now });
   });
   return { pessoaId: pessoaRef.id };
@@ -478,6 +512,19 @@ export const rebuildPessoaSearchIndex = async ({ pageSize = 200, cursor = null }
   };
 };
 
+export const inspectAccessIntegrity = async (firestore = db) => {
+  const [usersSnapshot, peopleSnapshot, indexesSnapshot] = await Promise.all([
+    getDocs(getDataCollection(firestore, 'usuarios')),
+    getDocs(getDataCollection(firestore, 'pessoas')),
+    getDocs(getDataCollection(firestore, 'usuario_pessoa_index')),
+  ]);
+  return inspectAccessIntegrityData({
+    users: usersSnapshot.docs.map(item => ({ id: item.id, ...item.data() })),
+    people: peopleSnapshot.docs.map(item => ({ id: item.id, ...item.data() })),
+    indexes: indexesSnapshot.docs.map(item => ({ id: item.id, ...item.data() })),
+  });
+};
+
 export const inspectCpfIndexes = async ({ pageSize = 100, cursor = null } = {}, firestore = db) => {
   const effectivePageSize = Math.min(Math.max(1, pageSize), 200);
   const constraints = [orderBy(documentId()), limit(effectivePageSize)];
@@ -502,6 +549,17 @@ export const inspectCpfIndexes = async ({ pageSize = 100, cursor = null } = {}, 
     withoutCpf: inspected.filter(item => item.status === 'sem_cpf').length,
     nextCursor: snapshot.size === effectivePageSize ? snapshot.docs.at(-1).id : null,
   };
+};
+
+export const inspectMemberEmailIndexes = async (firestore = db) => {
+  const [peopleSnapshot, indexesSnapshot] = await Promise.all([
+    getDocs(getDataCollection(firestore, 'pessoas')),
+    getDocs(getDataCollection(firestore, 'membro_email_index')),
+  ]);
+  return inspectMemberEmailIndexData({
+    people: peopleSnapshot.docs.map(item => ({ id: item.id, ...item.data() })),
+    indexes: indexesSnapshot.docs.map(item => ({ id: item.id, ...item.data() })),
+  });
 };
 
 export const rebuildCpfIndex = async ({ pessoaId, userId }, firestore = db) => {
