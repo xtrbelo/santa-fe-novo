@@ -22,12 +22,14 @@ import {
 import { getPessoaFuncoesCasa, getPessoaVinculo } from '../../utils/domain';
 import { buildPessoaPayload, createEmptyMemberDetails, getEffectiveMemberFunctions, getMemberFunctionLabels, getPessoaStatusCadastro, localTextIncludes, validatePessoaPayload } from '../../utils/pessoaForm';
 import { normalizeSearchText } from '../../utils/pessoaSearch';
+import { filterPeople, getMissingPersonFields } from '../../utils/peopleFilters';
 import { getFriendlyErrorMessage } from '../../utils/firebaseErrorMessages';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { DataLoadState } from '../../components/ui/DataLoadState';
+import { Pagination, usePagination } from '../../components/ui/Pagination';
+import { exportFilteredCsv, PEOPLE_EXPORT_COLUMNS } from '../../utils/dataExport';
 import { Modal } from '../../components/ui/Modal';
-import { PessoaHistoricoModal } from './PessoaHistoricoModal';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { MembroDadosComplementares } from '../../components/pessoas/MembroDadosComplementares';
 import { PessoaDetalhesModal } from '../../components/pessoas/PessoaDetalhesModal';
@@ -40,8 +42,7 @@ import {
   UserSquare2, 
   Edit, 
   Trash2, 
-  CheckCircle2,
-  History
+  CheckCircle2, Download,
 } from 'lucide-react';
 
 export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusConsumed }) => {
@@ -54,6 +55,8 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
   const [abaAtiva, setAbaAtiva] = useState('todos');
   const [situacao, setSituacao] = useState('ativos');
   const [buscaTexto, setBuscaTexto] = useState('');
+  const [funcaoFiltro, setFuncaoFiltro] = useState('todas');
+  const [completudeFiltro, setCompletudeFiltro] = useState('todos');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -61,7 +64,6 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
   const [linkedAccessStatus, setLinkedAccessStatus] = useState('idle');
   const [lifecycleReason, setLifecycleReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [historyPerson, setHistoryPerson] = useState(null);
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -299,15 +301,18 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
   const effectiveMemberFunctions = getEffectiveMemberFunctions(funcoesMembro);
   const activePeopleCount = pessoas.filter(p => p.ativo !== false).length;
   const inactivePeopleCount = pessoas.filter(p => p.ativo === false).length;
-  const filtradas = pessoas.filter(p => {
-    const mType = abaAtiva === 'todos' || getPessoaVinculo(p) === abaAtiva;
-    const mSituation = situacao === 'todos' || (situacao === 'ativos' ? p.ativo !== false : p.ativo === false);
-    const mSearch = 
-      !cleanSearch ||
-      localTextIncludes(p.nome, cleanSearch) ||
-      (p.cpf && p.cpf.includes(cleanSearch));
-    return mType && mSituation && mSearch;
+  const filtradas = filterPeople(pessoas, {
+    type: abaAtiva,
+    situation: situacao,
+    functionId: funcaoFiltro,
+    completeness: completudeFiltro,
+    search: cleanSearch,
+    matchesSearch: (p, term) => !term || localTextIncludes(p.nome, term) || (p.cpf && p.cpf.includes(term)) || localTextIncludes(p.email, term) || (p.contato && p.contato.includes(term)),
   });
+  const advancedFiltersActive = funcaoFiltro !== 'todas' || completudeFiltro !== 'todos';
+  const pagination = usePagination(filtradas, [abaAtiva, situacao, buscaTexto, funcaoFiltro, completudeFiltro]);
+  const clearAdvancedFilters = () => { setFuncaoFiltro('todas'); setCompletudeFiltro('todos'); };
+  const exportPeople = () => exportFilteredCsv({ filename: 'pessoas-filtradas.csv', columns: PEOPLE_EXPORT_COLUMNS, rows: filtradas });
   const updateMemberDetails = (field, value) => field === 'funcoesCasa' ? setEFuncoes(value) : setEMemberDetails(current => ({ ...current, [field]: value }));
 
   if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="as pessoas" onRetry={() => setReloadVersion(value => value + 1)} />;
@@ -365,6 +370,21 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
             <option value="ativos">Situação: Ativos</option><option value="inativos">Situação: Inativos</option><option value="todos">Situação: Todos</option>
           </select>
         </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex items-center rounded-2xl border border-gray-100 bg-white px-4 py-1.5 shadow-sm">
+            <Filter size={18} className="mr-3 shrink-0 text-purple-400" />
+            <select value={funcaoFiltro} onChange={event => setFuncaoFiltro(event.target.value)} className="w-full cursor-pointer border-none bg-transparent py-2.5 text-sm font-bold text-gray-700 outline-none">
+              <option value="todas">Função: Todas</option>{effectiveMemberFunctions.map(item => <option key={item.id} value={item.id}>{item.nome}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center rounded-2xl border border-gray-100 bg-white px-4 py-1.5 shadow-sm">
+            <Filter size={18} className="mr-3 shrink-0 text-purple-400" />
+            <select value={completudeFiltro} onChange={event => setCompletudeFiltro(event.target.value)} className="w-full cursor-pointer border-none bg-transparent py-2.5 text-sm font-bold text-gray-700 outline-none">
+              <option value="todos">Cadastro: Todos</option><option value="completos">Cadastro: Completos</option><option value="incompletos">Cadastro: Incompletos</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-xs text-gray-500"><span><strong className="text-gray-900">{filtradas.length}</strong> de {pessoas.length} pessoa(s) encontrada(s)</span><div className="flex items-center gap-3">{advancedFiltersActive && <button type="button" onClick={clearAdvancedFilters} className="font-bold text-purple-700 underline underline-offset-2">Limpar filtros avançados</button>}<Button type="button" variant="secondary" disabled={!filtradas.length} onClick={exportPeople}><Download size={15}/> Exportar CSV</Button></div></div>
       </div>
 
       <div className="grid grid-cols-1 gap-3">
@@ -376,7 +396,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
             </p>
           </div>
         ) : (
-          filtradas.map(p => (
+          pagination.items.map(p => (
             <Card key={p.id} className="flex flex-col gap-4 !border-none shadow-md">
               <div className="flex cursor-pointer items-start gap-3.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-purple-400" role="button" tabIndex={0} onClick={() => setSelectedPerson(p)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedPerson(p); } }}>
                 <div className="w-11 h-11 rounded-2xl bg-purple-100 text-purple-600 flex items-center justify-center shrink-0">
@@ -393,6 +413,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
                       </span>
                     )}
                     <span className={`text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider ${p.ativo === false ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{p.ativo === false ? 'Inativo' : 'Ativo'}</span>
+                    {getMissingPersonFields(p).length > 0 && <span title={`Faltam: ${getMissingPersonFields(p).join(', ')}`} className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-amber-800">Cadastro incompleto</span>}
                     {getPessoaVinculo(p) === 'membro' && getPessoaStatusCadastro(p) === 'aprovado' && <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider bg-blue-50 text-blue-700">Cadastro aprovado</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
@@ -415,7 +436,6 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
               </div>
 
               <div className="flex gap-2 border-t border-gray-50 pt-3" onClick={event => event.stopPropagation()}>
-                <Button variant="secondary" onClick={() => setHistoryPerson(p)} className="flex-1 py-2 text-xs h-10 rounded-xl text-blue-700 hover:bg-blue-50"><History size={14} /> Histórico</Button>
                 {(canManagePeople || (canManageConsulentes && getPessoaVinculo(p) === 'consulente')) && <Button
                   variant="secondary" 
                   onClick={() => openEdit(p)} 
@@ -435,6 +455,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
           ))
         )}
       </div>
+      <Pagination pagination={pagination} label="pessoa(s)" />
 
       <Modal 
         isOpen={isModalOpen} 
@@ -572,7 +593,6 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
         canEdit={canManagePeople || (canManageConsulentes && getPessoaVinculo(selectedPerson) === 'consulente')}
         canToggleActive={canManageLifecycle}
         onClose={() => setSelectedPerson(null)}
-        onHistory={() => { setHistoryPerson(selectedPerson); setSelectedPerson(null); }}
         onEdit={() => { const pessoa = selectedPerson; setSelectedPerson(null); openEdit(pessoa); }}
         onToggleActive={() => { openLifecycle(selectedPerson); setSelectedPerson(null); }}
       />
@@ -590,7 +610,6 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
           <div className="grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => { setItemToDelete(null); setLifecycleReason(''); setLinkedAccessStatus('idle'); }}>Cancelar</Button><Button variant={itemToDelete?.ativo === false ? 'success' : 'danger'} onClick={handleLifecycle} disabled={isSubmitting || linkedAccessStatus === 'loading' || linkedAccessStatus === 'error'}>{isSubmitting ? 'Salvando...' : itemToDelete?.ativo === false ? 'Reativar membro' : 'Inativar membro'}</Button></div>
         </div>
       </Modal>
-      <PessoaHistoricoModal pessoa={historyPerson} profile={profile} onClose={() => setHistoryPerson(null)} />
     </div>
   );
 };

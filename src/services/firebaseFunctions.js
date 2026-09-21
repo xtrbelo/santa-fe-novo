@@ -41,6 +41,11 @@ export const rebuildMemberEmailIndexOnServer = async pessoaBaseId => {
   return response.data;
 };
 
+export const archiveAuditHistoryOnServer = async action => {
+  const response = await httpsCallable(getFunctionsClient(), 'archiveAuditHistory')({ action });
+  return response.data;
+};
+
 const callEmailFunction = async (name, payload = {}) => (await httpsCallable(getEmailFunctionsClient(), name)(payload)).data;
 export const sendAccessActivationOnServer = pessoaBaseId => callEmailFunction('sendAccessActivationMailjet', { pessoaBaseId });
 export const sendEmailVerificationOnServer = () => callEmailFunction('sendEmailVerificationMailjet');

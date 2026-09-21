@@ -22,6 +22,31 @@ const cleanPersonPayload = data => Object.fromEntries(Object.entries(data || {})
 const mailjetApiKey = defineSecret('MAILJET_API_KEY');
 const mailjetSecretKey = defineSecret('MAILJET_SECRET_KEY');
 const registrationEmailFrom = defineSecret('REGISTRATION_EMAIL_FROM');
+const AUDIT_RETENTION_MONTHS = 24;
+
+export const archiveAuditHistory = onCall(async request => {
+  if (!request.auth) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+  const cutoffDate = new Date();
+  cutoffDate.setUTCMonth(cutoffDate.getUTCMonth() - AUDIT_RETENTION_MONTHS);
+  const cutoff = Timestamp.fromDate(cutoffDate);
+  const collect = async field => (await root.collection('auditoria').where(field, '<', cutoff).limit(200).get()).docs;
+  const candidates = [...new Map([...(await collect('criadoEm')), ...(await collect('executadoEm'))].map(snapshot => [snapshot.id, snapshot])).values()].slice(0, 200);
+  if (request.data?.action !== 'archive') return { eligible: candidates.length, retentionMonths: AUDIT_RETENTION_MONTHS, cutoff: cutoffDate.toISOString() };
+  if (!candidates.length) return { archived: 0, retentionMonths: AUDIT_RETENTION_MONTHS };
+  const batch = firestore.batch();
+  const archivedAt = Timestamp.now();
+  candidates.forEach(snapshot => {
+    batch.create(root.collection('auditoria_arquivada').doc(snapshot.id), { ...snapshot.data(), registroOriginalId: snapshot.id, arquivadoEm: archivedAt, arquivadoPor: request.auth.uid, politicaRetencaoMeses: AUDIT_RETENTION_MONTHS });
+    batch.delete(snapshot.ref);
+  });
+  await batch.commit();
+  return { archived: candidates.length, retentionMonths: AUDIT_RETENTION_MONTHS };
+});
 
 const approvedRegistrationEmailHandler = async event => {
   const before = event.data?.before.data();
@@ -354,6 +379,10 @@ export const savePersonWithUniqueEmail = onCall({ maxInstances: 3 }, async reque
       const nextCpfSnapshot = nextCpfRef ? byPath.get(nextCpfRef.path) : null;
       if (nextCpfSnapshot?.exists && nextCpfSnapshot.data().pessoaId !== personRef.id) fail('already-exists', 'CPF_DUPLICADO');
       const now = FieldValue.serverTimestamp();
+      const changedFields = current
+        ? Object.keys(payload).filter(key => JSON.stringify(current[key] ?? null) !== JSON.stringify(next[key] ?? null))
+        : Object.keys(payload).filter(key => key !== 'busca');
+      const auditRef = root.collection('auditoria').doc();
       if (previousEmailIndexRef && (!nextEmailIndexRef || previousEmailIndexRef.path !== nextEmailIndexRef.path)) {
         const oldIndex = byPath.get(previousEmailIndexRef.path);
         if (oldIndex?.exists && oldIndex.data().pessoaId === personRef.id) transaction.delete(previousEmailIndexRef);
@@ -366,6 +395,7 @@ export const savePersonWithUniqueEmail = onCall({ maxInstances: 3 }, async reque
       if (nextCpfRef && !nextCpfSnapshot?.exists) transaction.set(nextCpfRef, { pessoaId: personRef.id, criadoEm: now });
       if (current) transaction.update(personRef, { ...payload, vinculo: next.vinculo, tipoPessoa: next.tipoPessoa, funcoesCasa: next.funcoesCasa, email: next.email, cpf: next.cpf, atualizadoEm: now, atualizadoPor: request.auth.uid });
       else transaction.set(personRef, { ...payload, vinculo: next.vinculo, tipoPessoa: next.tipoPessoa, funcoesCasa: next.funcoesCasa, email: next.email, cpf: next.cpf, ativo: true, criadoEm: now, criadoPor: request.auth.uid, atualizadoEm: now, atualizadoPor: request.auth.uid });
+      transaction.set(auditRef, { tipo: current ? 'PESSOA_ATUALIZADA' : 'PESSOA_CRIADA', pessoaBaseId: personRef.id, camposAlterados: changedFields, executadoPor: request.auth.uid, criadoEm: now });
       return { pessoaId: personRef.id, created: !current };
     });
   } catch (error) {
@@ -580,7 +610,7 @@ export const updateUserAccess = onCall({ maxInstances: 3 }, async request => {
       const now = FieldValue.serverTimestamp();
       if (action === 'role') {
         transaction.update(targetRef, { role, atualizadoEm: now, atualizadoPor: request.auth.uid });
-        transaction.set(auditRef, { tipo: 'USUARIO_ROLE_ALTERADO', alvoUid: targetUid, valorAnterior: target.role, valorNovo: role, executadoPor: request.auth.uid, criadoEm: now });
+        transaction.set(auditRef, { tipo: 'USUARIO_ROLE_ALTERADO', alvoUid: targetUid, ...(target.pessoaBaseId ? { pessoaBaseId: target.pessoaBaseId } : {}), valorAnterior: target.role, valorNovo: role, executadoPor: request.auth.uid, criadoEm: now });
       } else {
         transaction.update(targetRef, active
           ? { ativo: true, acessoReativadoEm: now, acessoReativadoPor: request.auth.uid, atualizadoEm: now, atualizadoPor: request.auth.uid }

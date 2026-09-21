@@ -7,10 +7,12 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { DataLoadState } from '../../components/ui/DataLoadState';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { Pagination, usePagination } from '../../components/ui/Pagination';
 import { useToast } from '../../components/ui/useToast';
 import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { AccessIntegrityPanel } from './AccessIntegrityPanel';
+import { SystemHealthPanel } from './SystemHealthPanel';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 
@@ -202,29 +204,36 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
   };
 
   const effectiveFunctions = getEffectiveMemberFunctions(funcoes);
+  const functionsPagination = usePagination(effectiveFunctions);
+  const worksPagination = usePagination(trabalhos);
+  const servicesPagination = usePagination(servicos);
   if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="as configurações" onRetry={() => setReloadVersion(value => value + 1)} />;
   return <div className="space-y-6 pb-10">
     <header><h2 className="text-3xl font-black uppercase italic">Configurações</h2><p className="text-sm text-gray-500">Modelo operacional da Casa</p></header>
     <Card className="space-y-4"><h3 className="font-black uppercase text-purple-700 flex gap-2"><Users size={18}/> 1. Vínculos e Funções da Casa</h3>
       <div className="grid sm:grid-cols-2 gap-3">{publics.map(item => <div key={item.id} className="bg-purple-50 p-4 rounded-xl"><strong>{item.nome}</strong><p className="text-xs text-gray-500 mt-1">{item.id === 'consulente' ? 'Pessoa atendida pela Casa.' : 'Integrante da Casa; pode atuar em funções e também receber atendimento.'}</p></div>)}</div>
       <div className="flex flex-col sm:flex-row gap-2"><input value={novaFuncao.codigo} onChange={e => setNovaFuncao({ ...novaFuncao, codigo: e.target.value })} placeholder="Código (ex: dirigente)" className="flex-1 bg-gray-50 p-3 rounded-xl"/><input value={novaFuncao.nome} onChange={e => setNovaFuncao({ ...novaFuncao, nome: e.target.value })} placeholder="Nome exibido" className="flex-1 bg-gray-50 p-3 rounded-xl"/><Button onClick={addFunction}><Plus size={16}/> Função</Button></div>
-      <div className="flex flex-wrap gap-2">{effectiveFunctions.map(f => <span key={f.id} className="bg-gray-100 px-3 py-2 rounded-xl text-xs font-bold">{f.nome}</span>)}</div>
+      <div className="flex flex-wrap gap-2">{functionsPagination.items.map(f => <span key={f.id} className="bg-gray-100 px-3 py-2 rounded-xl text-xs font-bold">{f.nome}</span>)}</div>
+      <Pagination pagination={functionsPagination} label="função(ões)" />
     </Card>
     <Card className="space-y-4"><h3 className="font-black uppercase text-amber-600 flex gap-2"><CalendarDays size={18}/> 2. Tipos de Trabalho</h3>
       <input value={novoTrabalho.nome} onChange={e => setNovoTrabalho({ ...novoTrabalho, nome: e.target.value })} placeholder="Ex: Atendimento" className="w-full bg-gray-50 p-3 rounded-xl"/>
       <div className="flex gap-2">{publics.map(p => <label key={p.id} className="text-xs font-bold"><input type="checkbox" checked={novoTrabalho.publicosPermitidos.includes(p.id)} onChange={() => setNovoTrabalho({ ...novoTrabalho, publicosPermitidos: toggle(novoTrabalho.publicosPermitidos, p.id) })}/> {p.nome}</label>)}</div>
       <Button onClick={addWork} variant="warning" className="w-full"><Plus size={16}/> Salvar Trabalho</Button>
-      {trabalhos.map(t => <div key={t.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{t.nome}</strong><p className="text-[10px] text-gray-500">Público: {getPublicosPermitidosTrabalho(t).join(', ') || 'sem restrição'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_eventos', id: t.id })}><Trash2 size={16}/></button></div>)}
+      {worksPagination.items.map(t => <div key={t.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{t.nome}</strong><p className="text-[10px] text-gray-500">Público: {getPublicosPermitidosTrabalho(t).join(', ') || 'sem restrição'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_eventos', id: t.id })}><Trash2 size={16}/></button></div>)}
+      <Pagination pagination={worksPagination} label="tipo(s) de trabalho" />
     </Card>
     <Card className="space-y-4"><h3 className="font-black uppercase text-emerald-700 flex gap-2"><Tag size={18}/> 3. Catálogo de Serviços</h3>
       <input value={novoServico.nome} onChange={e => setNovoServico({ ...novoServico, nome: e.target.value })} placeholder="Nome do serviço" className="w-full bg-gray-50 p-3 rounded-xl"/>
       <div><p className="text-[10px] uppercase font-black text-gray-400 mb-2">Tipos de Trabalho *</p>{trabalhos.map(t => <label key={t.id} className="block text-xs font-bold mb-1"><input type="checkbox" checked={novoServico.tipoTrabalhoIds.includes(t.id)} onChange={() => setNovoServico({ ...novoServico, tipoTrabalhoIds: toggle(novoServico.tipoTrabalhoIds, t.id) })}/> {t.nome}</label>)}</div>
       <label className="text-xs font-bold"><input type="checkbox" checked={novoServico.controlaVagas} onChange={e => setNovoServico({ ...novoServico, controlaVagas: e.target.checked })}/> Controla quantidade de atendimentos?</label>
       <Button onClick={addService} variant="success" className="w-full"><Plus size={16}/> Adicionar Serviço</Button>
-      {servicos.map(s => <div key={s.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{s.nome}</strong><p className="text-[10px] text-gray-500">{servicoControlaVagas(s) ? 'Controla vagas' : 'Sem limite'} · {(s.tipoTrabalhoIds || []).map(id => trabalhos.find(t => t.id === id)?.nome).filter(Boolean).join(', ') || 'Legado/global'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_servicos', id: s.id })}><Trash2 size={16}/></button></div>)}
+      {servicesPagination.items.map(s => <div key={s.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{s.nome}</strong><p className="text-[10px] text-gray-500">{servicoControlaVagas(s) ? 'Controla vagas' : 'Sem limite'} · {(s.tipoTrabalhoIds || []).map(id => trabalhos.find(t => t.id === id)?.nome).filter(Boolean).join(', ') || 'Legado/global'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_servicos', id: s.id })}><Trash2 size={16}/></button></div>)}
+      <Pagination pagination={servicesPagination} label="serviço(s)" />
     </Card>
     {canManageConfig && <Card className="space-y-4">
       <h3 className="font-black uppercase text-blue-700 flex gap-2"><DatabaseZap size={18}/> Manutenção</h3>
+      <SystemHealthPanel />
       <p className="text-sm text-gray-600">Reconstrói somente o índice derivado usado na busca de pessoas, em lotes seguros.</p>
       <Button onClick={rebuildIndex} disabled={rebuilding} className="w-full">{rebuilding ? 'Atualizando índice...' : 'Atualizar índice de busca de pessoas'}</Button>
       {rebuildReport && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
@@ -233,8 +242,8 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
         <span className="bg-emerald-50 p-2 rounded-lg">Já corretas<br/><strong>{rebuildReport.correct}</strong></span>
         <span className="bg-red-50 p-2 rounded-lg">Erros<br/><strong>{rebuildReport.errors}</strong></span>
       </div>}
-      <AccessIntegrityPanel onOpenPerson={onOpenPerson} />
-      <div className="border-t border-gray-100 pt-4 space-y-3">
+      <div id="health-access" className="scroll-mt-6"><AccessIntegrityPanel onOpenPerson={onOpenPerson} /></div>
+      <div id="health-member-email" className="scroll-mt-6 border-t border-gray-100 pt-4 space-y-3">
         <p className="text-sm text-gray-600">Confere o índice que impede e-mail duplicado entre Membros ativos. A verificação não altera cadastros.</p>
         <Button variant="secondary" onClick={checkMemberEmailIndexes} disabled={checkingMemberEmails || rebuildingMemberEmails} className="w-full">{checkingMemberEmails ? 'Verificando e-mails...' : 'Verificar índices de e-mail dos Membros'}</Button>
         {memberEmailReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs">

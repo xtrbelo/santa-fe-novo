@@ -6,7 +6,8 @@ import {
   Users, 
   UsersRound,
   Settings,
-  ContactRound
+  ContactRound,
+  ScrollText
 } from 'lucide-react';
 import { canAccessModule } from '../../constants/permissions';
 
@@ -20,6 +21,7 @@ export const MobileNav = ({ activeTab, onSelectTab, profile }) => {
     { id: 'pessoas', label: 'Pessoas', icon: Users },
     { id: 'usuarios', label: 'Usuários', icon: UsersRound },
     { id: 'config', label: 'Ajustes', icon: Settings },
+    { id: 'auditoria', label: 'Auditoria', icon: ScrollText },
     { id: 'meu-cadastro', label: 'Cadastro', icon: ContactRound },
   ];
 

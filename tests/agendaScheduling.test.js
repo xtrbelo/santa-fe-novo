@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterAppointments, generateWeeklyRecurrence, getAgendaSchedulingKey, getAvailableAgendas, selectQuickRegisteredPerson } from '../src/utils/agendaScheduling.js';
+import { filterAppointments, generateWeeklyRecurrence, getAgendaSchedulingKey, getAvailableAgendas, isAgendaAvailableForServices, selectQuickRegisteredPerson } from '../src/utils/agendaScheduling.js';
 
 const now = new Date('2030-01-10T10:00:00');
 const stamp = value => ({ toDate: () => new Date(value) });
@@ -10,6 +10,14 @@ const agenda = (id, overrides = {}) => ({ id, data: stamp('2030-01-11T12:00:00')
 test('serviço sem data e filtro por serviço', () => {
   assert.deepEqual(getAvailableAgendas({ agendas: [agenda('outra', { servicosIds: ['consulta'] })], service, now }), []);
   assert.deepEqual(getAvailableAgendas({ agendas: [agenda('ok'), agenda('outra', { servicosIds: ['consulta'] })], service, now }).map(item => item.id), ['ok']);
+});
+
+test('agenda precisa atender todos os serviços selecionados e suas vagas', () => {
+  const consulta = { id: 'consulta', nome: 'Consulta', ativo: true, controlaVagas: true };
+  const completa = agenda('completa', { servicosIds: ['passe', 'consulta'], servicosStatus: { passe: 'Ativo', consulta: 'Ativo' }, vagasTotais: { passe: 2, consulta: 1 }, vagasOcupadas: { passe: 0, consulta: 0 } });
+  assert.equal(isAgendaAvailableForServices(completa, [service, consulta], now), true);
+  assert.deepEqual(getAvailableAgendas({ agendas: [completa, agenda('somente-passe')], services: [service, consulta], now }).map(item => item.id), ['completa']);
+  assert.equal(isAgendaAvailableForServices({ ...completa, vagasOcupadas: { passe: 0, consulta: 1 } }, [service, consulta], now), false);
 });
 
 test('filtra pelo público e exige pessoa ativa', () => {

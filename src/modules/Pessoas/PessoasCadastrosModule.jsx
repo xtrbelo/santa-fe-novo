@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { ClipboardCheck, Link2, Users } from 'lucide-react';
+import { ClipboardCheck, Link2, MessagesSquare, Users } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { getAppCollection, onSnapshot, query, where } from '../../services/firebase';
 
@@ -7,11 +7,13 @@ const lazyNamed = (loader, exportName) => lazy(() => loader().then(module => ({ 
 const PessoasModule = lazyNamed(() => import('./PessoasModule'), 'PessoasModule');
 const AutocadastrosModule = lazyNamed(() => import('../Autocadastros/AutocadastrosModule'), 'AutocadastrosModule');
 const LinksCadastroModule = lazyNamed(() => import('../LinksCadastro/LinksCadastroModule'), 'LinksCadastroModule');
+const ComunicacoesModule = lazyNamed(() => import('../Comunicacoes/ComunicacoesModule'), 'ComunicacoesModule');
 
 const initialSection = () => {
   if (window.location.pathname === '/convites' || new URLSearchParams(window.location.search).get('secao') === 'links') return 'links';
   if (window.location.pathname === '/autocadastros') return 'solicitacoes';
   if (new URLSearchParams(window.location.search).get('secao') === 'solicitacoes') return 'solicitacoes';
+  if (new URLSearchParams(window.location.search).get('secao') === 'comunicacoes') return 'comunicacoes';
   return 'pessoas';
 };
 
@@ -22,6 +24,7 @@ export function PessoasCadastrosModule({ user, profile, focusPersonId = null, on
     { id: 'pessoas', label: 'Pessoas', description: 'Cadastros existentes', icon: Users, visible: hasPermission(profile, PERMISSIONS.PEOPLE_VIEW) },
     { id: 'links', label: 'Links', description: 'Cadastros reutilizáveis', icon: Link2, visible: hasPermission(profile, PERMISSIONS.MEMBER_INVITES_MANAGE) },
     { id: 'solicitacoes', label: 'Solicitações', description: 'Autocadastros recebidos', icon: ClipboardCheck, visible: hasPermission(profile, PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW) },
+    { id: 'comunicacoes', label: 'Comunicações', description: 'E-mails e contatos', icon: MessagesSquare, visible: hasPermission(profile, PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW) },
   ].filter(section => section.visible), [profile]);
   const [section, setSection] = useState(() => initialSection());
   const [localFocusedPersonId, setLocalFocusedPersonId] = useState(null);
@@ -46,7 +49,7 @@ export function PessoasCadastrosModule({ user, profile, focusPersonId = null, on
       <h1 className="text-2xl font-black uppercase italic tracking-tighter text-gray-900 sm:text-3xl">Pessoas e Cadastros</h1>
       <p className="mt-1 text-sm font-medium text-gray-500">Pessoas, links de cadastro e solicitações reunidos em um único fluxo.</p>
     </div>
-    <nav aria-label="Seções de Pessoas e Cadastros" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <nav aria-label="Seções de Pessoas e Cadastros" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {sections.map(item => {
         const Icon = item.icon;
         const active = activeSection === item.id;
@@ -57,7 +60,7 @@ export function PessoasCadastrosModule({ user, profile, focusPersonId = null, on
       })}
     </nav>
     <Suspense fallback={<LoadingSection />}>
-      {activeSection === 'links' ? <LinksCadastroModule user={user} onOpenRequests={openLinkRequests} /> : activeSection === 'solicitacoes' ? <AutocadastrosModule user={user} onOpenPerson={openPerson} filterLinkId={filteredLinkId} onClearLinkFilter={() => setFilteredLinkId(null)} /> : <PessoasModule user={user} profile={profile} focusPersonId={focusPersonId || localFocusedPersonId} onFocusConsumed={() => { setLocalFocusedPersonId(null); onFocusConsumed?.(); }} />}
+      {activeSection === 'links' ? <LinksCadastroModule user={user} onOpenRequests={openLinkRequests} /> : activeSection === 'solicitacoes' ? <AutocadastrosModule user={user} onOpenPerson={openPerson} filterLinkId={filteredLinkId} onClearLinkFilter={() => setFilteredLinkId(null)} /> : activeSection === 'comunicacoes' ? <ComunicacoesModule /> : <PessoasModule user={user} profile={profile} focusPersonId={focusPersonId || localFocusedPersonId} onFocusConsumed={() => { setLocalFocusedPersonId(null); onFocusConsumed?.(); }} />}
     </Suspense>
   </div>;
 }

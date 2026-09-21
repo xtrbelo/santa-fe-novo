@@ -31,6 +31,7 @@ const UsuariosModule = lazyNamed(() => import('./modules/Usuarios/UsuariosModule
 const AutocadastroMembroPage = lazyNamed(() => import('./modules/Autocadastro/AutocadastroMembroPage'), 'AutocadastroMembroPage');
 const AtivacaoAcessoPage = lazyNamed(() => import('./modules/AtivacaoAcesso/AtivacaoAcessoPage'), 'AtivacaoAcessoPage');
 const MeuCadastroModule = lazyNamed(() => import('./modules/MeuCadastro/MeuCadastroModule'), 'MeuCadastroModule');
+const AuditoriaModule = lazyNamed(() => import('./modules/Auditoria/AuditoriaModule'), 'AuditoriaModule');
 
 const ModuleLoading = () => <div className="min-h-40 flex items-center justify-center"><p className="font-bold text-gray-500">Carregando módulo...</p></div>;
 
@@ -41,6 +42,7 @@ function AppContent() {
   const [tab, setTab] = useState(() => getModuleFromPathname(window.location.pathname));
   const [usersFilter, setUsersFilter] = useState('todos');
   const [focusedPersonId, setFocusedPersonId] = useState(null);
+  const [returnRequest, setReturnRequest] = useState(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
   const [verificationCooldownUntil, setVerificationCooldownUntil] = useState(0);
@@ -272,22 +274,30 @@ function AppContent() {
   };
   const openUsersByFilter = filter => { if (hasPermission(profile, PERMISSIONS.USERS_MANAGE)) { setUsersFilter(filter); selectTab(MODULES.USERS); } };
   const openPersonById = pessoaId => { if (pessoaId && hasPermission(profile, PERMISSIONS.PEOPLE_VIEW)) { setFocusedPersonId(pessoaId); selectTab(MODULES.PEOPLE); } };
+  const openReturnScheduling = appointment => { setReturnRequest(appointment); selectTab(MODULES.AGENDAS); };
   const openPendingRegistrations = () => {
     const navigationEvent = new Event(UNSAVED_NAVIGATION_EVENT, { cancelable: true });
     if (!window.dispatchEvent(navigationEvent)) return;
     setTab(MODULES.PEOPLE);
     window.history.pushState({}, '', `${getModulePath(MODULES.PEOPLE)}?secao=solicitacoes`);
   };
+  const openCommunications = () => {
+    const navigationEvent = new Event(UNSAVED_NAVIGATION_EVENT, { cancelable: true });
+    if (!window.dispatchEvent(navigationEvent)) return;
+    setTab(MODULES.PEOPLE);
+    window.history.pushState({}, '', `${getModulePath(MODULES.PEOPLE)}?secao=comunicacoes`);
+  };
   const renderContent = () => {
     if (!canAccessModule(profile, tab)) return <PermissionDenied />;
-    if (tab === MODULES.AGENDAS) return <AgendasModule user={user} profile={profile} />;
+    if (tab === MODULES.AGENDAS) return <AgendasModule user={user} profile={profile} returnRequest={returnRequest} onReturnConsumed={() => setReturnRequest(null)} />;
     if (tab === MODULES.PROGRAMACAO) return <ProgramacaoModule user={user} profile={profile} />;
-    if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} />;
+    if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} onScheduleReturn={openReturnScheduling} />;
     if (tab === MODULES.PEOPLE) return <PessoasCadastrosModule user={user} profile={profile} focusPersonId={focusedPersonId} onFocusConsumed={() => setFocusedPersonId(null)} />;
     if (tab === MODULES.USERS) return <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} />;
     if (tab === MODULES.MY_REGISTRATION) return <MeuCadastroModule user={user} profile={profile} />;
     if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} onOpenPerson={openPersonById} />;
-    return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenUsers={openUsersByFilter} onOpenPendingRegistrations={openPendingRegistrations} />;
+    if (tab === MODULES.AUDIT) return <AuditoriaModule onOpenPerson={openPersonById} />;
+    return <HomeModule user={user} profile={profile} onSelectTab={selectTab} onOpenUsers={openUsersByFilter} onOpenPendingRegistrations={openPendingRegistrations} onOpenCommunications={openCommunications} />;
   };
   return withSessionTimeout(<div className="min-h-screen bg-gray-50/50 lg:pl-72 flex flex-col">
     <a href="#main-content" className="fixed left-3 top-3 z-[250] -translate-y-24 rounded-xl bg-indigo-700 px-4 py-3 text-sm font-bold text-white shadow-xl transition-transform focus:translate-y-0">Ir para o conteúdo principal</a>

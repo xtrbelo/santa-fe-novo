@@ -35,14 +35,20 @@ export const isAgendaAvailableForService = (agenda, service, now = new Date()) =
   return Number(agenda.vagasOcupadas?.[service.id] || 0) < Number(agenda.vagasTotais?.[service.id] || 0);
 };
 
-export const getAvailableAgendas = ({ agendas, service, pessoa = null, now = new Date() }) => (agendas || [])
-  .filter(agenda => isAgendaAvailableForService(agenda, service, now))
+export const isAgendaAvailableForServices = (agenda, services, now = new Date()) => Array.isArray(services) && services.length > 0
+  && services.every(service => isAgendaAvailableForService(agenda, service, now));
+
+export const getAvailableAgendas = ({ agendas, service, services, pessoa = null, now = new Date() }) => {
+  const selected = services?.length ? services : service ? [service] : [];
+  return (agendas || [])
+  .filter(agenda => isAgendaAvailableForServices(agenda, selected, now))
   .filter(agenda => {
     if (!pessoa || pessoa.ativo === false) return !pessoa;
     const allowed = getAgendaPublicosPermitidos(agenda);
     return !allowed.length || allowed.includes(getPessoaVinculo(pessoa));
   })
   .sort((a, b) => agendaDate(a) - agendaDate(b));
+};
 
 export const getRemainingVacancies = (agenda, service) => servicoControlaVagas(service)
   ? Math.max(0, Number(agenda.vagasTotais?.[service.id] || 0) - Number(agenda.vagasOcupadas?.[service.id] || 0))

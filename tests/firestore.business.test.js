@@ -12,6 +12,7 @@ import {
   createProgramacaoLote,
   setAgendamentoPrioridade,
   updateAtendimentoStatus,
+  updateAtendimentoServicos,
   editarAgenda,
   cancelarServicoAgenda,
   cancelarAgenda,
@@ -662,6 +663,32 @@ describe('transações do fluxo operacional', () => {
     const appointments = await getDocs(collection(db, `${root}/consulentes`));
     assert.equal(appointments.size, 1);
     assert.equal((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas[service.id], 1);
+  });
+
+  test('altera múltiplos serviços no mesmo atendimento e ajusta as vagas', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-servicos-atendimento', { servicosIds: [service.id, serviceB.id], servicosStatus: { [service.id]: 'Ativo', [serviceB.id]: 'Ativo' }, vagasTotais: { [service.id]: 2, [serviceB.id]: 2 }, vagasOcupadas: { [service.id]: 0, [serviceB.id]: 0 } });
+    const appointmentId = await book(db, agenda, person('multi'));
+    await updateAtendimentoServicos({ agendaId: agenda.id, agendamentoId: appointmentId, servicos: [service, serviceB], userId: USER_ID, responsavelNome: 'Administrador' }, db);
+    assert.deepEqual((await getDoc(appointmentById(db, appointmentId))).data().servicosIds, [service.id, serviceB.id]);
+    assert.deepEqual((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas, { [service.id]: 1, [serviceB.id]: 1 });
+    await updateAtendimentoServicos({ agendaId: agenda.id, agendamentoId: appointmentId, servicos: [serviceB], userId: USER_ID }, db);
+    assert.deepEqual((await getDoc(appointmentById(db, appointmentId))).data().servicosIds, [serviceB.id]);
+    assert.deepEqual((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas, { [service.id]: 0, [serviceB.id]: 1 });
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 1);
+    const history = (await getDocs(collection(db, `${root}/auditoria`))).docs.map(item => item.data()).filter(item => item.tipo === 'ATENDIMENTO_SERVICOS_ALTERADOS');
+    assert.equal(history.length, 2);
+    assert.equal(history.some(item => item.responsavelNome === 'Administrador'), true);
+  });
+
+  test('agenda vários serviços criando um único atendimento para a pessoa', async () => {
+    const db = adminDb();
+    const agenda = await seedAgenda('agenda-multiplos-servicos', { servicosIds: [service.id, serviceB.id], servicosStatus: { [service.id]: 'Ativo', [serviceB.id]: 'Ativo' }, vagasTotais: { [service.id]: 2, [serviceB.id]: 2 }, vagasOcupadas: { [service.id]: 0, [serviceB.id]: 0 } });
+    const appointmentId = await createAgendamento({ agenda, pessoa: person('agenda-multi'), servicos: [service, serviceB], userId: USER_ID, status: 'Agendado' }, db);
+    const stored = (await getDoc(appointmentById(db, appointmentId))).data();
+    assert.deepEqual(stored.servicosIds, [service.id, serviceB.id]);
+    assert.deepEqual((await getDoc(agendaRef(db, agenda.id))).data().vagasOcupadas, { [service.id]: 1, [serviceB.id]: 1 });
+    assert.equal((await getDocs(collection(db, `${root}/consulentes`))).size, 1);
   });
 
   test('preserva cancelado, remove lock e cria novo documento ao reagendar', async () => {
