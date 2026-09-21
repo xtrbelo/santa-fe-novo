@@ -563,6 +563,15 @@ describe('I. integridade operacional', () => {
     await assertSucceeds(setDoc(ref(db, `${root}/auditoria/prioridade`), { tipo: 'PRIORIDADE_ALTERADA', executadoPor: 'atendimento', criadoEm: new Date() }));
     await assertFails(setDoc(ref(db, `${root}/auditoria/usuario`), { tipo: 'USUARIO_STATUS_ALTERADO', executadoPor: 'atendimento', criadoEm: new Date() }));
   });
+
+  test('perfil interno lê histórico de serviços, mas não auditoria administrativa', async () => {
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(ref(context.firestore(), `${root}/auditoria/servicos-atendimento`), { tipo: 'ATENDIMENTO_SERVICOS_ALTERADOS', agendaId: 'agenda-1', agendamentoId: 'consulta-1', executadoPor: 'admin-a', criadoEm: new Date() });
+    });
+    const db = authDb('atendimento');
+    await assertSucceeds(getDoc(ref(db, `${root}/auditoria/servicos-atendimento`)));
+    await assertFails(getDoc(ref(db, paths.audit)));
+  });
   test('agenda concluída bloqueia novos agendamentos e alterações', async () => {
     const db = authDb('admin-a');
     await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));

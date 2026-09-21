@@ -1,4 +1,4 @@
-import { 
+import {
   GoogleAuthProvider, 
   isSignInWithEmailLink,
   sendEmailVerification,
@@ -43,6 +43,7 @@ import { buildMemberSelfRegistrationPayload, validateMemberSelfRegistrationPaylo
 import { buildPessoaFromSelfRegistration, normalizeRejectionReason, validateSelfRegistrationApproval, validateSelfRegistrationRejection } from '../utils/memberSelfRegistrationReview.js';
 import { validateCPF } from '../utils/formatters.js';
 import { ACCESS_AUTHORIZATION_STATUS, buildAccessAuthorization, buildAuthorizedUser, validateAccessAuthorization } from '../utils/accessAuthorization.js';
+import { normalizeAppointmentObservation } from '../utils/appointmentObservation.js';
 import { buildAccessActivationActionCodeSettings, normalizeAccessActivationEmail } from '../utils/accessActivation.js';
 import { buildConsulteeFromReusableRegistration } from '../utils/reusableRegistration.js';
 import { buildMyRegistrationUpdate } from '../utils/myRegistration.js';
@@ -818,7 +819,8 @@ export const setUserAccessLifecycle = async ({ alvoUid, ativo, motivo, executado
   });
 };
 
-export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null, requireFuture = false, requireActivePessoa = false }, firestore = db) => {
+export const createAgendamento = async ({ agenda, pessoa, servicos, userId, status, horaChegada = null, observacao = '', requireFuture = false, requireActivePessoa = false }, firestore = db) => {
+  const cleanObservation = normalizeAppointmentObservation(observacao);
   if (requireFuture && agenda.data?.toDate?.().getTime() < Date.now()) throw new Error('AGENDA_INDISPONIVEL');
   if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
   const permittedTypes = getAgendaPublicosPermitidos(agenda);
@@ -863,6 +865,7 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
     const now = Timestamp.now();
     transaction.set(appointmentRef, {
       agendaId: agenda.id, nome: pessoa.nome, pessoaBaseId: pessoa.id, cpf: pessoa.cpf || '', status,
+      ...(cleanObservation ? { observacao: cleanObservation } : {}),
       ...(horaChegada ? { horaChegada } : {}), servicosIds: servicos.map(service => service.id),
       servicosNomes: servicos.map(service => service.nome), criadoEm: now, criadoPor: userId,
       atualizadoEm: now, atualizadoPor: userId, prioridade: false
@@ -1118,6 +1121,48 @@ export const updateAtendimentoStatus = async ({ agendaId, agendamentoId, status,
     if (status === 'Presente' && !current.horaChegada) data.horaChegada = now;
     if (status === 'Concluído' && !current.horaSaida) data.horaSaida = now;
     transaction.update(appointmentRef, data);
+  });
+};
+
+export const updateAtendimentoServicos = async ({ agendaId, agendamentoId, servicos, userId, responsavelNome = null }, firestore = db) => {
+  const selected = [...new Map((servicos || []).map(service => [service.id, service])).values()];
+  if (!selected.length) throw new Error('SERVICO_OBRIGATORIO');
+  const agendaRef = getDataDoc(firestore, 'agendas', agendaId);
+  const appointmentRef = getDataDoc(firestore, 'consulentes', agendamentoId);
+  const auditRef = createAuditRef(firestore);
+  await runTransaction(firestore, async transaction => {
+    const [agendaSnapshot, appointmentSnapshot] = await Promise.all([transaction.get(agendaRef), transaction.get(appointmentRef)]);
+    if (!agendaSnapshot.exists() || !appointmentSnapshot.exists()) throw new Error('REGISTRO_NAO_ENCONTRADO');
+    const agenda = agendaSnapshot.data();
+    const appointment = appointmentSnapshot.data();
+    if (appointment.agendaId !== agendaId || ['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
+    if (!['Agendado', 'Presente'].includes(appointment.status)) throw new Error('ATENDIMENTO_NAO_EDITAVEL');
+    selected.forEach(service => {
+      if (!agendaAceitaServico(agenda, service.id)) throw new Error(`SERVICO_NAO_DISPONIVEL:${service.nome}`);
+      if (!servicoAtivoNaAgenda(agenda, service.id)) throw new Error(`SERVICO_CANCELADO:${service.nome}`);
+    });
+    const previousIds = getServicosAtivosAtendimento(appointment);
+    const selectedIds = selected.map(service => service.id);
+    const added = selectedIds.filter(id => !previousIds.includes(id));
+    const removed = previousIds.filter(id => !selectedIds.includes(id));
+    if (!added.length && !removed.length) throw new Error('SERVICOS_SEM_ALTERACAO');
+    const occupied = { ...(agenda.vagasOcupadas || {}) };
+    removed.filter(id => Object.hasOwn(agenda.vagasTotais || {}, id)).forEach(id => { occupied[id] = Math.max(0, Number(occupied[id] || 0) - 1); });
+    added.filter(id => Object.hasOwn(agenda.vagasTotais || {}, id)).forEach(id => {
+      const total = Number(agenda.vagasTotais?.[id] || 0);
+      const current = Number(occupied[id] || 0);
+      if (current >= total) throw new Error(`SEM_VAGA:${selected.find(service => service.id === id)?.nome || id}`);
+      occupied[id] = current + 1;
+    });
+    const relocatedIds = Object.keys(appointment.servicosRealocados || {});
+    const finalIds = [...new Set([...relocatedIds, ...selectedIds])];
+    const previousNames = Object.fromEntries((appointment.servicosIds || []).map(id => [id, getNomeServicoAtendimento(appointment, id)]));
+    const selectedNames = Object.fromEntries(selected.map(service => [service.id, service.nome]));
+    const finalNames = finalIds.map(id => selectedNames[id] || previousNames[id] || id);
+    const now = Timestamp.now();
+    transaction.update(appointmentRef, { servicosIds: finalIds, servicosNomes: finalNames, atualizadoEm: now, atualizadoPor: userId });
+    transaction.update(agendaRef, { vagasOcupadas: occupied, atualizadoEm: now, atualizadoPor: userId });
+    transaction.set(auditRef, { tipo: 'ATENDIMENTO_SERVICOS_ALTERADOS', agendaId, agendamentoId, alvoId: agendamentoId, servicosAnteriores: previousIds, servicosNovos: selectedIds, executadoPor: userId, ...(responsavelNome ? { responsavelNome } : {}), criadoEm: now });
   });
 };
 

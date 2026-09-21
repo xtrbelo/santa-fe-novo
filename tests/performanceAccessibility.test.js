@@ -28,6 +28,25 @@ test('Fluxo do Dia consulta apenas agendas da data corrente', () => {
   assert.doesNotMatch(source, /onSnapshot\(getAppCollection\('agendas'\)/);
 });
 
+test('Fluxo do Dia permite correção auditada de status conforme a permissão', () => {
+  const source = readSource('../src/modules/Fluxo/AtendimentoDiaCard.jsx');
+  assert.match(source, /ATTENDANCE_STATUS_CORRECT/);
+  assert.match(source, /corrigirStatusAtendimento/);
+  assert.match(source, /Informe o motivo da correção/);
+});
+
+test('auditoria fica centralizada e restrita ao perfil autorizado', () => {
+  const permissions = readSource('../src/constants/permissions.js');
+  const app = readSource('../src/App.jsx');
+  const sidebar = readSource('../src/components/layout/Sidebar.jsx');
+  const audit = readSource('../src/modules/Auditoria/AuditoriaModule.jsx');
+  assert.match(permissions, /AUDIT: 'auditoria'/);
+  assert.match(permissions, /\[MODULES\.AUDIT\]: PERMISSIONS\.AUDIT_VIEW/);
+  assert.match(app, /AuditoriaModule/);
+  assert.match(sidebar, /label: 'Auditoria'/);
+  assert.match(audit, /Histórico centralizado das alterações do sistema/);
+});
+
 test('Programação mantém datas atuais e pagina somente o histórico antigo', () => {
   const source = readSource('../src/modules/Programacao/ProgramacaoModule.jsx');
   assert.match(source, /where\('data', '>=', today\)/);
@@ -63,7 +82,7 @@ test('versão do ambiente permanece visível no rodapé e na navegação', () =>
   const footerSource = readSource('../src/components/layout/AppFooter.jsx');
   const appSource = readSource('../src/App.jsx');
   const sidebarSource = readSource('../src/components/layout/Sidebar.jsx');
-  assert.match(versionSource, /APP_VERSION = '21H'/);
+  assert.match(versionSource, /APP_VERSION = '25A'/);
   assert.match(footerSource, /fixed inset-x-0 bottom-0/);
   assert.match(appSource, /APP_VERSION_LABEL/);
   assert.match(sidebarSource, /APP_VERSION_LABEL/);

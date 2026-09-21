@@ -7,6 +7,8 @@ import {
   cancelAgendamento,
   setAgendamentoPrioridade,
   updateAtendimentoStatus,
+  updateAtendimentoServicos,
+  corrigirStatusAtendimento,
   query,
   where
 } from '../../services/firebase';
@@ -23,6 +25,7 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/useToast';
 import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
+import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { 
   BookOpenCheck, 
   Plus, 
@@ -31,9 +34,12 @@ import {
   Star,
   XCircle,
   UserX
+  ,Pencil, RotateCcw
 } from 'lucide-react';
 
-export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) => {
+const correctionOptions = status => ({ 'Concluído': ['Presente', 'Agendado'], Presente: ['Agendado'], Faltou: ['Agendado'] }[status] || []);
+
+export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, onScheduleReturn }) => {
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
   const [selCons, setSelCons] = useState(null);
@@ -41,6 +47,14 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) 
   const [selSrvs, setSelSrvs] = useState({});
   const [step, setStep] = useState('search');
   const [cancelTarget, setCancelTarget] = useState(null);
+  const [serviceTarget, setServiceTarget] = useState(null);
+  const [editSrvs, setEditSrvs] = useState({});
+  const [savingServices, setSavingServices] = useState(false);
+  const [correctionTarget, setCorrectionTarget] = useState(null);
+  const [correctionStatus, setCorrectionStatus] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [correctingStatus, setCorrectingStatus] = useState(false);
+  const [returnTarget, setReturnTarget] = useState(null);
 
   const toast = useToast();
   const agendaServices = servicosCatalogo.filter(service => agendaAceitaServico(agenda, service.id) && servicoAtivoNaAgenda(agenda, service.id));
@@ -57,10 +71,12 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) 
     });
   }, [agenda.id, user]);
 
-  const updateSt = async (id, st) => {
+
+  const updateSt = async (appointment, st) => {
     try {
-      await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: id, status: st, userId: user.uid });
+      await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: appointment.id, status: st, userId: user.uid });
       toast.success(`Status alterado para ${st}`);
+      if (st === 'Concluído') setReturnTarget(appointment);
     } catch (err) {
       console.error(err);
       toast.error('Erro ao atualizar status.');
@@ -116,6 +132,47 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) 
       else if (err.code === 'permission-denied' || err.code === 'firestore/permission-denied') toast.error('A operação foi bloqueada pelas regras de segurança.');
       else toast.error('Erro ao marcar presença.');
     }
+  };
+
+  const startServiceEdit = appointment => {
+    setServiceTarget(appointment);
+    setEditSrvs(Object.fromEntries(getServicosAtivosAtendimento(appointment).map(id => [id, true])));
+  };
+
+  const confirmServiceEdit = async () => {
+    const selected = agendaServices.filter(service => editSrvs[service.id]);
+    if (!selected.length) { toast.error('O atendimento deve manter pelo menos um serviço.'); return; }
+    setSavingServices(true);
+    try {
+      await updateAtendimentoServicos({ agendaId: agenda.id, agendamentoId: serviceTarget.id, servicos: selected, userId: user.uid, responsavelNome: profile?.nome || user.displayName || user.email });
+      toast.success('Serviços do atendimento atualizados.');
+      setServiceTarget(null);
+    } catch (error) {
+      console.error(error);
+      if (error.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${error.message.split(':')[1]}.`);
+      else if (error.message === 'SERVICOS_SEM_ALTERACAO') toast.info('Nenhuma alteração foi feita nos serviços.');
+      else toast.error('Não foi possível alterar os serviços do atendimento.');
+    } finally { setSavingServices(false); }
+  };
+
+  const startStatusCorrection = appointment => {
+    const options = correctionOptions(appointment.status);
+    setCorrectionTarget(appointment);
+    setCorrectionStatus(options[0] || '');
+    setCorrectionReason('');
+  };
+
+  const confirmStatusCorrection = async () => {
+    if (!correctionReason.trim()) { toast.error('Informe o motivo da correção.'); return; }
+    setCorrectingStatus(true);
+    try {
+      await corrigirStatusAtendimento({ agendaId: agenda.id, agendamentoId: correctionTarget.id, status: correctionStatus, motivo: correctionReason, userId: user.uid });
+      toast.success(`Status corrigido para ${correctionStatus}.`);
+      setCorrectionTarget(null);
+    } catch (error) {
+      console.error(error);
+      toast.error('Não foi possível corrigir o status do atendimento.');
+    } finally { setCorrectingStatus(false); }
   };
 
   return (
@@ -177,22 +234,25 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) 
                     <p className="text-[10px] sm:text-xs font-bold text-emerald-600 uppercase mt-0.5 truncate">
                       {getServicosAtivosAtendimento(c).map(id => servicosCatalogo.find(service => service.id === id)?.nome || getNomeServicoAtendimento(c, id)).join(' • ')}
                     </p>
+                    {c.observacao && <p className="mt-1 text-xs text-gray-600"><strong>Observação:</strong> {c.observacao}</p>}
                   </div>
                 </div>
                 <span className={`text-[10px] font-black uppercase px-2.5 py-1.5 rounded-lg shadow-sm ${getStatusColor(c.status)}`}>{c.status}</span>
               </div>
 
               {['Agendado', 'Presente'].includes(c.status) && <div className="flex flex-wrap gap-2 mt-3">
+                <Button onClick={() => startServiceEdit(c)} variant="secondary" className="px-3 h-10"><Pencil size={16}/> Alterar serviços</Button>
                 <Button onClick={() => togglePriority(c)} variant="secondary" className={`px-3 h-10 ${c.prioridade ? 'text-amber-600 bg-amber-50' : ''}`} title="Alternar prioridade">
                   <Star size={16} fill={c.prioridade ? 'currentColor' : 'none'} /> Prioridade
                 </Button>
                 <Button onClick={() => setCancelTarget(c)} variant="danger" className="px-3 h-10"><XCircle size={16} /> Cancelar</Button>
                 {c.status === 'Agendado' && <>
-                  <Button onClick={() => updateSt(c.id, 'Faltou')} variant="secondary" className="px-3 h-10"><UserX size={16} /> Faltou</Button>
-                  <Button onClick={() => updateSt(c.id, 'Presente')} className="flex-1 min-w-48 h-10 bg-blue-600 hover:bg-blue-700 text-white"><UserCheck size={16} /> Dar Entrada</Button>
+                  <Button onClick={() => updateSt(c, 'Faltou')} variant="secondary" className="px-3 h-10"><UserX size={16} /> Faltou</Button>
+                  <Button onClick={() => updateSt(c, 'Presente')} className="flex-1 min-w-48 h-10 bg-blue-600 hover:bg-blue-700 text-white"><UserCheck size={16} /> Dar Entrada</Button>
                 </>}
-                {c.status === 'Presente' && <Button onClick={() => updateSt(c.id, 'Concluído')} variant="success" className="flex-1 min-w-48 h-10"><CheckCircle2 size={16} /> Finalizar Atendimento</Button>}
+                {c.status === 'Presente' && <Button onClick={() => updateSt(c, 'Concluído')} variant="success" className="flex-1 min-w-48 h-10"><CheckCircle2 size={16} /> Finalizar Atendimento</Button>}
               </div>}
+              {hasPermission(profile, PERMISSIONS.ATTENDANCE_STATUS_CORRECT) && correctionOptions(c.status).length > 0 && <Button onClick={() => startStatusCorrection(c)} variant="ghost" className="mt-2 h-9 px-3 text-xs text-amber-700"><RotateCcw size={15}/> Corrigir status</Button>}
             </div>
           ))
         )}
@@ -246,7 +306,23 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo }) 
           </div>
         )}
       </Modal>
+      <Modal isOpen={!!serviceTarget} onClose={() => !savingServices && setServiceTarget(null)} title="Alterar serviços do atendimento">
+        <div className="space-y-5"><div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><p className="text-sm font-black text-emerald-950">{serviceTarget?.nome}</p><p className="mt-1 text-xs text-emerald-700">O atendimento continuará único para esta pessoa.</p></div><div className="space-y-2"><p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Serviços deste atendimento</p>{agendaServices.map(service => <label key={service.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${editSrvs[service.id] ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 bg-white'}`}><input type="checkbox" checked={editSrvs[service.id] || false} onChange={() => setEditSrvs(current => ({ ...current, [service.id]: !current[service.id] }))} className="h-4 w-4 rounded text-emerald-600"/><span className="text-sm font-bold text-gray-700">{service.nome}</span></label>)}</div><div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={savingServices} onClick={() => setServiceTarget(null)}>Cancelar</Button><Button variant="success" disabled={savingServices} onClick={confirmServiceEdit}>{savingServices ? 'Salvando...' : 'Salvar serviços'}</Button></div></div>
+      </Modal>
+      <Modal isOpen={!!correctionTarget} onClose={() => !correctingStatus && setCorrectionTarget(null)} title="Corrigir status do atendimento">
+        <div className="space-y-4"><div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Use esta opção somente para desfazer uma marcação incorreta. A correção ficará registrada na auditoria.</div><p className="text-sm"><strong>Pessoa:</strong> {correctionTarget?.nome}</p><p className="text-sm"><strong>Status atual:</strong> {correctionTarget?.status}</p><label className="block text-sm font-bold">Novo status<select value={correctionStatus} onChange={event => setCorrectionStatus(event.target.value)} className="mt-1 w-full rounded-xl bg-gray-50 p-3">{correctionOptions(correctionTarget?.status).map(status => <option key={status}>{status}</option>)}</select></label><label className="block text-sm font-bold">Motivo<textarea value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Ex.: Finalizado por engano; a pessoa ainda aguarda atendimento." className="mt-1 min-h-24 w-full rounded-xl bg-gray-50 p-3"/></label><div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={correctingStatus} onClick={() => setCorrectionTarget(null)}>Cancelar</Button><Button variant="warning" disabled={correctingStatus || !correctionReason.trim()} onClick={confirmStatusCorrection}>{correctingStatus ? 'Corrigindo...' : 'Confirmar correção'}</Button></div></div>
+      </Modal>
       <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' ? ['consulente'] : ['consulente', 'membro']} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
+
+      <ConfirmDialog
+        isOpen={!!returnTarget}
+        onClose={() => setReturnTarget(null)}
+        onConfirm={() => { const target = returnTarget; setReturnTarget(null); onScheduleReturn?.({ ...target, servicosIds: getServicosAtivosAtendimento(target) }); }}
+        title="Agendar retorno"
+        message={`O atendimento de "${returnTarget?.nome || ''}" foi concluído. Deseja marcar um retorno em uma data futura?`}
+        confirmText="Sim, Agendar Retorno"
+        cancelText="Não, Finalizar"
+      />
 
       <ConfirmDialog
         isOpen={!!cancelTarget}

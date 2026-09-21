@@ -34,6 +34,7 @@ export const MODULES = Object.freeze({
   MEMBER_REGISTRATIONS: 'autocadastros',
   USERS: 'usuarios',
   CONFIG: 'config',
+  AUDIT: 'auditoria',
   MY_REGISTRATION: 'meu-cadastro',
 });
 
@@ -47,6 +48,7 @@ export const MODULE_LABELS = Object.freeze({
   [MODULES.MEMBER_REGISTRATIONS]: 'Autocadastros',
   [MODULES.USERS]: 'Usuários',
   [MODULES.CONFIG]: 'Configurações',
+  [MODULES.AUDIT]: 'Auditoria',
   [MODULES.MY_REGISTRATION]: 'Meu Cadastro',
 });
 
@@ -60,6 +62,7 @@ export const MODULE_PERMISSIONS = Object.freeze({
   [MODULES.MEMBER_REGISTRATIONS]: PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW,
   [MODULES.USERS]: PERMISSIONS.USERS_VIEW,
   [MODULES.CONFIG]: PERMISSIONS.CONFIG_MANAGE,
+  [MODULES.AUDIT]: PERMISSIONS.AUDIT_VIEW,
   [MODULES.MY_REGISTRATION]: PERMISSIONS.MY_REGISTRATION_VIEW,
 });
 
