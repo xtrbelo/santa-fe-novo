@@ -1,20 +1,23 @@
-import React, { useEffect, useState } from 'react';
-import { getAppCollection, getAppDoc, getDoc, onSnapshot, query, where } from '../../services/firebase';
+import React, { useEffect, useMemo, useState } from 'react';
+import { getAppCollection, getAppDoc, getDoc, getDocs, onSnapshot, query, where } from '../../services/firebase';
 import { getStatusColor } from '../../utils/formatters';
+import { describePersonAudit, PERSON_HISTORY_FILTERS } from '../../utils/personHistory';
 import { Modal } from '../../components/ui/Modal';
-import { CalendarClock, Mail, RotateCcw } from 'lucide-react';
+import { CalendarClock, History, Mail, RotateCcw, ShieldCheck } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/useToast';
 import { resendEmailCommunicationOnServer } from '../../services/firebaseFunctions';
 
 const toMillis = value => value?.toMillis?.() || value?.toDate?.().getTime?.() || 0;
+const formatDate = value => value?.toDate?.().toLocaleString('pt-BR') || 'Data indisponível';
 const formatTime = value => value?.toDate?.().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) || null;
 
 export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
-  const [items, setItems] = useState([]);
-  const [lifecycleEvents, setLifecycleEvents] = useState([]);
+  const [appointments, setAppointments] = useState([]);
+  const [auditEvents, setAuditEvents] = useState([]);
   const [communications, setCommunications] = useState([]);
+  const [filter, setFilter] = useState('todos');
   const [resending, setResending] = useState(null);
   const [loading, setLoading] = useState(false);
   const canViewAudit = hasPermission(profile, PERMISSIONS.AUDIT_VIEW);
@@ -27,65 +30,71 @@ export const PessoaHistoricoModal = ({ pessoa, profile, onClose }) => {
       const enriched = await Promise.all(snapshot.docs.map(async item => {
         const appointment = { id: item.id, ...item.data() };
         if (!appointment.agendaId) return appointment;
-        const relatedAgendaIds = [...new Set([
-          appointment.agendaId,
-          appointment.origemRealocacao?.agendaId,
-          appointment.reagendadoParaAgendaId,
-          ...Object.values(appointment.servicosRealocados || {}).map(value => value.destinoAgendaId)
-        ].filter(Boolean))];
-        const relatedSnapshots = await Promise.all(relatedAgendaIds.map(id => getDoc(getAppDoc('agendas', id))));
-        const relatedAgendas = Object.fromEntries(relatedAgendaIds.map((id, index) => [id, relatedSnapshots[index].exists() ? relatedSnapshots[index].data() : null]));
+        const ids = [...new Set([appointment.agendaId, appointment.origemRealocacao?.agendaId, appointment.reagendadoParaAgendaId, ...Object.values(appointment.servicosRealocados || {}).map(value => value.destinoAgendaId)].filter(Boolean))];
+        const agendaSnapshots = await Promise.all(ids.map(id => getDoc(getAppDoc('agendas', id))));
+        const relatedAgendas = Object.fromEntries(ids.map((id, index) => [id, agendaSnapshots[index].exists() ? agendaSnapshots[index].data() : null]));
         return { ...appointment, agenda: relatedAgendas[appointment.agendaId], relatedAgendas };
       }));
-      setItems(enriched.sort((a, b) => toMillis(b.agenda?.data) - toMillis(a.agenda?.data)));
-      setLoading(false);
+      setAppointments(enriched); setLoading(false);
     }, () => setLoading(false));
   }, [pessoa]);
 
   useEffect(() => {
-    if (!pessoa || !canViewAudit) { setLifecycleEvents([]); return undefined; }
-    return onSnapshot(query(getAppCollection('auditoria'), where('pessoaBaseId', '==', pessoa.id)), async snapshot => {
-      const relevant = snapshot.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => ['MEMBRO_INATIVADO', 'MEMBRO_REATIVADO'].includes(item.tipo));
-      const actors = await Promise.all(relevant.map(item => getDoc(getAppDoc('usuarios', item.executadoPor))));
-      setLifecycleEvents(relevant.map((item, index) => ({ ...item, responsavel: actors[index].data()?.nome || actors[index].data()?.email || 'Administrador' })).sort((a, b) => toMillis(b.criadoEm) - toMillis(a.criadoEm)));
-    });
-  }, [pessoa, canViewAudit]);
+    if (!pessoa || !canViewAudit) { setAuditEvents([]); return undefined; }
+    let cancelled = false;
+    const unsubs = [];
+    const snapshots = new Map();
+    const refresh = async () => {
+      const merged = [...new Map([...snapshots.values()].flat().map(item => [item.id, item])).values()];
+      const actorIds = [...new Set(merged.map(item => item.executadoPor).filter(Boolean))];
+      const actors = await Promise.all(actorIds.map(id => getDoc(getAppDoc('usuarios', id))));
+      const names = Object.fromEntries(actorIds.map((id, index) => [id, actors[index].data()?.nome || actors[index].data()?.email || 'Responsável não identificado']));
+      if (!cancelled) setAuditEvents(merged.map(item => ({ ...item, responsavel: names[item.executadoPor] || 'Sistema' })));
+    };
+    const start = async () => {
+      const users = await getDocs(query(getAppCollection('usuarios'), where('pessoaBaseId', '==', pessoa.id)));
+      const queries = [query(getAppCollection('auditoria'), where('pessoaBaseId', '==', pessoa.id)), ...users.docs.map(user => query(getAppCollection('auditoria'), where('alvoUid', '==', user.id)))];
+      queries.forEach((auditQuery, index) => unsubs.push(onSnapshot(auditQuery, snapshot => { snapshots.set(index, snapshot.docs.map(item => ({ id: item.id, ...item.data() }))); refresh(); })));
+    };
+    start().catch(error => { console.error(error); toast.error('Não foi possível carregar todo o histórico administrativo.'); });
+    return () => { cancelled = true; unsubs.forEach(unsub => unsub()); };
+  }, [pessoa, canViewAudit, toast]);
 
   useEffect(() => {
     if (!pessoa || !canViewAudit) { setCommunications([]); return undefined; }
-    return onSnapshot(query(getAppCollection('comunicacoes_email'), where('pessoaBaseId', '==', pessoa.id)), snapshot => setCommunications(snapshot.docs.map(item => ({ id: item.id, ...item.data() })).sort((a, b) => toMillis(b.criadoEm) - toMillis(a.criadoEm))));
+    return onSnapshot(query(getAppCollection('comunicacoes_email'), where('pessoaBaseId', '==', pessoa.id)), snapshot => setCommunications(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))));
   }, [pessoa, canViewAudit]);
 
+  const timeline = useMemo(() => {
+    if (!pessoa) return [];
+    const base = [
+      ...(pessoa.criadoEm ? [{ id: 'person-created', category: 'cadastro', title: 'Cadastro registrado', timestamp: pessoa.criadoEm, responsavel: pessoa.criadoPor || 'Sistema' }] : []),
+      ...auditEvents.map(event => ({ ...event, ...describePersonAudit(event), timestamp: event.criadoEm })),
+      ...communications.map(item => ({ ...item, id: `mail-${item.id}`, category: 'comunicacao', title: ({ cadastro_aprovado: 'Cadastro aprovado', ativacao_acesso: 'Ativação de acesso', validacao_email: 'Validação de e-mail', recuperacao_senha: 'Recuperação de senha' })[item.tipo] || 'Comunicação por e-mail', timestamp: item.criadoEm })),
+      ...appointments.map(item => ({ ...item, id: `appointment-${item.id}`, category: 'atendimento', title: item.agenda?.tipo || 'Atendimento', timestamp: item.agenda?.data })),
+    ];
+    return base.filter(item => filter === 'todos' || item.category === filter).sort((a, b) => toMillis(b.timestamp) - toMillis(a.timestamp));
+  }, [pessoa, auditEvents, communications, appointments, filter]);
+
   const resend = async item => {
-    setResending(item.id);
-    try { await resendEmailCommunicationOnServer(item.id); toast.success('E-mail reenviado.'); }
+    const id = item.id.replace('mail-', ''); setResending(id);
+    try { await resendEmailCommunicationOnServer(id); toast.success('E-mail reenviado.'); }
     catch (error) { console.error(error); toast.error('Não foi possível reenviar este e-mail.'); }
     finally { setResending(null); }
   };
 
-  const communicationLabels = { cadastro_aprovado: 'Cadastro aprovado', ativacao_acesso: 'Ativação de acesso', validacao_email: 'Validação de e-mail', recuperacao_senha: 'Recuperação de senha' };
-
   return <Modal isOpen={!!pessoa} onClose={onClose} title={`Histórico de ${pessoa?.nome || ''}`}>
-    <div className="space-y-3 max-h-[65vh] overflow-y-auto">
-      {lifecycleEvents.length > 0 && <section className="space-y-2"><h4 className="text-xs font-black uppercase text-purple-700">Ciclo de vida</h4>{lifecycleEvents.map(event => <div key={event.id} className="rounded-2xl border border-purple-100 bg-purple-50/50 p-4"><p className="font-black text-sm text-gray-900">{event.tipo === 'MEMBRO_INATIVADO' ? 'Membro inativado' : 'Membro reativado'}</p><p className="mt-1 text-xs text-gray-500">{event.criadoEm?.toDate?.().toLocaleString('pt-BR') || 'Data indisponível'} · {event.responsavel}</p>{event.motivo && <p className="mt-2 text-sm text-gray-700"><strong>Motivo:</strong> {event.motivo}</p>}</div>)}</section>}
-      {communications.length > 0 && <section className="space-y-2"><h4 className="text-xs font-black uppercase text-purple-700">Comunicações por e-mail</h4>{communications.map(item => <div key={item.id} className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4"><div className="flex items-start justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-black text-gray-900"><Mail size={15}/>{communicationLabels[item.tipo] || 'Comunicação'}</p><p className="mt-1 text-xs text-gray-500">{item.destinatario} · {item.criadoEm?.toDate?.().toLocaleString('pt-BR') || 'Data indisponível'}</p></div><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${item.status === 'enviado' ? 'bg-emerald-100 text-emerald-800' : item.status === 'erro' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>{item.status}</span></div>{item.status === 'erro' && <Button variant="secondary" disabled={resending === item.id} onClick={() => resend(item)} className="mt-3"><RotateCcw size={15}/>{resending === item.id ? 'Reenviando...' : 'Reenviar'}</Button>}</div>)}</section>}
-      {loading && <p className="text-center text-sm text-gray-400 py-8">Carregando histórico...</p>}
-      {!loading && items.length === 0 && <p className="text-center text-sm text-gray-400 py-8">Nenhum atendimento registrado.</p>}
-      {items.map(item => <div key={item.id} className="border border-gray-100 rounded-2xl p-4 bg-gray-50/60">
-        <div className="flex justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-black text-gray-900 text-sm flex items-center gap-2"><CalendarClock size={15} /> {item.agenda?.data?.toDate?.().toLocaleDateString('pt-BR') || 'Data indisponível'}</p>
-            <p className="text-xs text-gray-500 mt-1">{item.agenda?.tipo || 'Agenda indisponível'}</p>
-          </div>
-          <span className={`h-fit text-[9px] font-black px-2.5 py-1 rounded-full uppercase ${getStatusColor(item.status)}`}>{item.status}</span>
-        </div>
-        <div className="text-[11px] font-bold text-purple-700 mt-3 space-y-1">{(item.servicosIds || []).length ? item.servicosIds.map((id, index) => { const moved = item.servicosRealocados?.[id]; const target = moved && item.relatedAgendas?.[moved.destinoAgendaId]; return <p key={id}>{item.servicosNomes?.[index] || id}{moved ? ` · Realocado para ${target?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra agenda'}` : ''}</p>; }) : <p>Serviço não informado</p>}{item.origemRealocacao && <p className="text-indigo-600">Origem: agenda de {item.relatedAgendas?.[item.origemRealocacao.agendaId]?.data?.toDate?.().toLocaleDateString('pt-BR') || 'data indisponível'}</p>}{item.status === 'Reagendado' && <p className="text-indigo-700">Reagendado para {item.relatedAgendas?.[item.reagendadoParaAgendaId]?.data?.toDate?.().toLocaleDateString('pt-BR') || 'outra data'}</p>}</div>
-        {(item.horaChegada || item.horaSaida) && <p className="text-[10px] text-gray-500 mt-2">
-          {item.horaChegada && `Chegada: ${formatTime(item.horaChegada)}`}
-          {item.horaChegada && item.horaSaida && ' • '}
-          {item.horaSaida && `Saída: ${formatTime(item.horaSaida)}`}
-        </p>}
-      </div>)}
+    <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+      <div className="flex gap-2 overflow-x-auto pb-1">{PERSON_HISTORY_FILTERS.map(([value, label]) => <button key={value} type="button" onClick={() => setFilter(value)} className={`whitespace-nowrap rounded-xl px-3 py-2 text-xs font-black ${filter === value ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}>{label}</button>)}</div>
+      {!canViewAudit && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800">Seu perfil permite consultar atendimentos, mas não eventos administrativos.</p>}
+      {loading && <p className="py-8 text-center text-sm text-gray-400">Carregando histórico...</p>}
+      {!loading && timeline.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Nenhum evento encontrado neste filtro.</p>}
+      <div className="space-y-3">{timeline.map(item => <article key={`${item.category}-${item.id}`} className="rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
+        <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-black text-gray-900">{item.category === 'comunicacao' ? <Mail size={15}/> : item.category === 'atendimento' ? <CalendarClock size={15}/> : item.category === 'acesso' ? <ShieldCheck size={15}/> : <History size={15}/>} {item.title}</p><p className="mt-1 text-xs text-gray-500">{formatDate(item.timestamp)}{item.responsavel ? ` · ${item.responsavel}` : ''}</p></div>{item.category === 'atendimento' && <span className={`h-fit rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${getStatusColor(item.status)}`}>{item.status}</span>}{item.category === 'comunicacao' && <span className={`h-fit rounded-full px-2 py-1 text-[9px] font-black uppercase ${item.status === 'enviado' ? 'bg-emerald-100 text-emerald-800' : item.status === 'erro' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>{item.status}</span>}</div>
+        {item.details && <p className="mt-2 text-sm text-gray-700">{item.details}</p>}{item.motivo && <p className="mt-2 text-sm text-gray-700"><strong>Motivo:</strong> {item.motivo}</p>}
+        {item.category === 'comunicacao' && <p className="mt-2 break-all text-xs text-gray-500">{item.destinatario}</p>}{item.category === 'comunicacao' && item.status === 'erro' && <Button variant="secondary" disabled={resending === item.id.replace('mail-', '')} onClick={() => resend(item)} className="mt-3"><RotateCcw size={15}/>{resending === item.id.replace('mail-', '') ? 'Reenviando...' : 'Reenviar'}</Button>}
+        {item.category === 'atendimento' && <div className="mt-3 space-y-1 text-[11px] font-bold text-purple-700">{(item.servicosNomes || []).map((name, index) => <p key={`${name}-${index}`}>{name}</p>)}{(item.horaChegada || item.horaSaida) && <p className="text-gray-500">{item.horaChegada && `Chegada: ${formatTime(item.horaChegada)}`}{item.horaChegada && item.horaSaida && ' • '}{item.horaSaida && `Saída: ${formatTime(item.horaSaida)}`}</p>}</div>}
+      </article>)}</div>
     </div>
   </Modal>;
 };

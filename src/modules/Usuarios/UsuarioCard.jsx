@@ -4,11 +4,11 @@ import { Button } from '../../components/ui/Button';
 import { ROLES, ROLE_LABELS } from '../../constants/roles';
 import { getPessoaFuncoesCasa } from '../../utils/domain';
 import { getMemberFunctionLabels } from '../../utils/pessoaForm';
-import { History, KeyRound, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
+import { KeyRound, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
 
 const formatTimestamp = timestamp => timestamp?.toDate?.().toLocaleString('pt-BR') || 'Não disponível';
 
-export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, busy = false, onAuthorize, onLink, onEditRole, onToggleStatus, onResetPassword, onHistory }) => {
+export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, busy = false, onAuthorize, onLink, onEditRole, onToggleStatus, onResetPassword }) => {
   const isOwnAccount = usuario.uid === currentUid;
   const isPending = usuario.role === ROLES.PENDENTE;
   const hasBrokenLink = Boolean(usuario.pessoaBaseId) && !pessoa;
@@ -45,7 +45,6 @@ export const UsuarioCard = ({ usuario, pessoa, memberFunctions, currentUid, busy
           {usuario.ativo === false ? <><UserRoundCheck size={16} /> Reativar acesso</> : <><UserRoundX size={16} /> Revogar acesso</>}
         </Button>
       </div>
-      {!isPending && <Button variant="ghost" onClick={() => onHistory(usuario)} className="mt-2 w-full"><History size={16}/> Histórico</Button>}
       {!isPending && usuario.email && <Button variant="ghost" onClick={() => onResetPassword(usuario)} disabled={busy} className="mt-2 w-full"><KeyRound size={16}/> Enviar redefinição de senha</Button>}
     </Card>
   );

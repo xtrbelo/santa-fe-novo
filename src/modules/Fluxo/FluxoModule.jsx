@@ -10,7 +10,7 @@ import { AtendimentoDiaCard } from './AtendimentoDiaCard';
 import { AlertCircle } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 
-export const FluxoModule = ({ user, profile }) => {
+export const FluxoModule = ({ user, profile, onScheduleReturn }) => {
   const [agendasHoje, setAgendasHoje] = useState([]);
   const [servicos, setServicos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -100,6 +100,7 @@ export const FluxoModule = ({ user, profile }) => {
               user={user} 
               profile={profile}
               servicosCatalogo={servicos} 
+              onScheduleReturn={onScheduleReturn}
             />
           ))
         )}

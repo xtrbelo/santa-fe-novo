@@ -384,6 +384,8 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/auditoria/{id} {
       allow read: if canManageUsers(appId);
+      allow read: if isInternal(appId)
+        && resource.data.tipo == 'ATENDIMENTO_SERVICOS_ALTERADOS';
       allow create: if isAdmin(appId)
         && request.resource.data.keys().hasOnly(['tipo', 'agendaId', 'vagasAntes', 'vagasDepois', 'executadoPor', 'criadoEm'])
         && request.resource.data.tipo == 'VAGAS_RECONCILIADAS'
@@ -407,7 +409,7 @@ service cloud.firestore {
         && getAfter(activeLockPath(appId, request.resource.data.destinoAgendaId, getAfter(appointmentPath(appId, request.resource.data.origemAgendamentoId)).data.pessoaBaseId)).data.agendamentoId == request.resource.data.destinoAgendamentoId;
       allow create: if request.resource.data.executadoPor == request.auth.uid
         && ((isInternal(appId) && ((currentUser(appId).role == 'admin' && request.resource.data.tipo in ['USUARIO_AUTORIZADO', 'USUARIO_VINCULADO', 'USUARIO_ROLE_ALTERADO', 'USUARIO_STATUS_ALTERADO', 'USUARIO_ACESSO_PREAUTORIZADO', 'USUARIO_ACESSO_AUTORIZACAO_CANCELADA'])
-          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
+          || request.resource.data.tipo in ['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'ATENDIMENTO_SERVICOS_ALTERADOS', 'AGENDA_CONCLUIDA', 'AGENDA_EDITADA', 'AGENDA_CANCELADA', 'AGENDA_EXCLUIDA', 'SERVICO_AGENDA_CANCELADO']
           || (currentUser(appId).role == 'admin' && request.resource.data.tipo == 'CPF_INDEX_RECONSTRUIDO')
           || (currentUser(appId).role == 'admin' && request.resource.data.tipo == 'STATUS_ATENDIMENTO_CORRIGIDO')
           || (currentUser(appId).role in ['admin', 'gestor']
@@ -425,6 +427,11 @@ service cloud.firestore {
             && id == 'usuario_ativado_' + request.auth.uid + '_' + request.resource.data.pessoaBaseId
             && validAccessClaim(appId, request.auth.uid, request.resource.data.pessoaBaseId)));
       allow update, delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/auditoria_arquivada/{id} {
+      allow read: if isAdmin(appId);
+      allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/pessoas/{id} {
@@ -880,7 +887,7 @@ service cloud.firestore {
       allow update: if request.resource.data.agendaId == resource.data.agendaId
         && ((isInternal(appId)
           && !(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/agendas/$(resource.data.agendaId)).data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'prioridade', 'horaChegada', 'horaSaida', 'canceladoEm', 'canceladoPor', 'motivoCancelamento', 'atualizadoEm', 'atualizadoPor'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'prioridade', 'servicosIds', 'servicosNomes', 'horaChegada', 'horaSaida', 'canceladoEm', 'canceladoPor', 'motivoCancelamento', 'atualizadoEm', 'atualizadoPor'])
           && (request.resource.data.status == resource.data.status
             || (resource.data.status == 'Agendado' && request.resource.data.status in ['Presente', 'Faltou', 'Cancelado'])
             || (resource.data.status == 'Presente' && request.resource.data.status in ['Concluído', 'Cancelado'])))
