@@ -4,7 +4,6 @@ import {
   onSnapshot, 
   createAgendamento,
   cancelAgendamento,
-  concluirAgenda,
   editarAgenda,
   cancelarServicoAgenda,
   cancelarAgenda,
@@ -19,12 +18,13 @@ import {
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
-import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoOperacional, servicoAtivoNaAgenda, servicoControlaVagas } from '../../utils/domain';
+import { agendaAceitaServico, agendaExigeCpf, getAgendaPublicosPermitidos, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoOperacional, isEventoServicos, servicoAtivoNaAgenda, servicoControlaVagas } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { RealocacaoModal } from './RealocacaoModal';
+import { EditAppointmentModal } from './EditAppointmentModal';
 import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
@@ -48,7 +48,6 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
   const [newPersonName, setNewPersonName] = useState(null);
   const [selSrvs, setSelSrvs] = useState({});
   const [cancelTarget, setCancelTarget] = useState(null);
-  const [confirmClose, setConfirmClose] = useState(false);
   const [confirmCancelAgenda, setConfirmCancelAgenda] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [serviceToCancel, setServiceToCancel] = useState(null);
@@ -60,6 +59,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
   const [relocationTarget, setRelocationTarget] = useState(null);
   const [relocationServiceId, setRelocationServiceId] = useState(null);
   const [affectedServiceId, setAffectedServiceId] = useState(null);
+  const [appointmentToEdit, setAppointmentToEdit] = useState(null);
 
   const toast = useToast();
   const isClosed = ['Concluída', 'Cancelada'].includes(agenda.status);
@@ -93,21 +93,10 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
     }
   };
 
-  const handleClose = async () => {
-    try {
-      await concluirAgenda({ agendaId: agenda.id, userId: user.uid });
-      toast.success('Agenda concluída. Novas alterações foram bloqueadas.');
-      setConfirmClose(false);
-    } catch (err) {
-      console.error(err);
-      toast.error('Não foi possível concluir a agenda.');
-    }
-  };
-
   const startEdit = () => {
     setEditDraft({
       data: agenda.data?.toDate().toISOString().slice(0, 10) || '', horario: agenda.horario || '12:00',
-      tipoTrabalhoId: agenda.tipoTrabalhoId || '', publicosPermitidos: getAgendaPublicosPermitidos(agenda),
+      tipoTrabalhoId: agenda.tipoTrabalhoId || '', publicosPermitidos: getAgendaPublicosPermitidos(agenda), cpfObrigatorio: agenda.cpfObrigatorio === true,
       servicosIds: agenda.servicosIds || agendaServices.map(item => item.id), vagasTotais: { ...(agenda.vagasTotais || {}) }
     });
     setEditing(true);
@@ -118,8 +107,8 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
     try {
       await editarAgenda({ agendaId: agenda.id, userId: user.uid, changes: {
         data: Timestamp.fromDate(new Date(`${editDraft.data}T${editDraft.horario}:00`)), horario: editDraft.horario,
-        tipoTrabalhoId: work?.id || agenda.tipoTrabalhoId, tipoTrabalhoNome: work?.nome || agenda.tipo, tipo: work?.nome || agenda.tipo,
-        publicosPermitidos: editDraft.publicosPermitidos, servicosIds: editDraft.servicosIds,
+        tipoTrabalhoId: work?.id || agenda.tipoTrabalhoId, tipoTrabalhoNome: work?.nome || agenda.tipo, tipoTrabalhoNatureza: work?.natureza || agenda.tipoTrabalhoNatureza || (String(work?.nome || agenda.tipo || '').trim().toLowerCase() === 'atendimento' ? 'atendimento_publico' : 'interno'), tipo: work?.nome || agenda.tipo,
+        publicosPermitidos: editDraft.publicosPermitidos, cpfObrigatorio: (work?.natureza || agenda.tipoTrabalhoNatureza) === 'evento_servicos' && editDraft.cpfObrigatorio === true, servicosIds: editDraft.servicosIds,
         servicosNomes: Object.fromEntries(selected.map(item => [item.id, item.nome])),
         servicosStatus: Object.fromEntries(selected.map(item => [item.id, agenda.servicosStatus?.[item.id] || 'Ativo'])),
         vagasTotais: editDraft.vagasTotais
@@ -201,6 +190,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
     } catch (err) {
       console.error(err);
       if (err.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já possui um atendimento nesta agenda.');
+      else if (err.message === 'CPF_OBRIGATORIO_EVENTO') toast.error('Esta programação exige CPF do participante.');
       else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
       else if (err.message === 'AGENDA_INDISPONIVEL') toast.error('Esta agenda está concluída ou cancelada.');
       else if (err.code === 'permission-denied' || err.code === 'firestore/permission-denied') toast.error('A operação foi bloqueada pelas regras de segurança.');
@@ -281,6 +271,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
                   <div className="flex items-center gap-2">
                     <span className={`text-[9px] font-black px-2.5 py-1 rounded-full uppercase shrink-0 ${getStatusColor(c.status)}`}>{c.status}</span>
                     {['Agendado', 'Presente'].includes(c.status) && !isClosed && <button onClick={() => setCancelTarget(c)} className="text-rose-500 hover:text-rose-700" title="Cancelar agendamento"><XCircle size={18} /></button>}
+                    {canManageAgenda && c.status === 'Agendado' && !isClosed && <button onClick={() => setAppointmentToEdit(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900">Editar agendamento</button>}
                     {hasPermission(profile, PERMISSIONS.ATTENDANCE_STATUS_CORRECT) && agenda.status !== 'Cancelada' && correctionOptions(c.status).length > 0 && <button onClick={() => openCorrection(c)} className="text-xs font-bold text-amber-700 hover:text-amber-900" title="Correção administrativa auditada">Corrigir Status</button>}
                     {canRelocate && c.status === 'Agendado' && <button onClick={() => { setRelocationTarget(c); setRelocationServiceId(null); }} className="text-xs font-bold text-indigo-700 hover:text-indigo-900">Reagendar / Realocar</button>}
                   </div>
@@ -289,7 +280,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
             )}
           </div>
 
-          {!isClosed && canManageAgenda ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="secondary" onClick={() => setConfirmClose(true)}><LockKeyhole size={16}/> Concluir</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{hasPermission(profile, PERMISSIONS.AGENDA_DELETE) && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.</p>}</div> : isClosed ? <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div> : null}
+          {!isClosed && canManageAgenda ? <div className="grid grid-cols-2 gap-2"><Button variant="secondary" onClick={startEdit}>Editar</Button><Button variant="danger" disabled={hasExecutedAppointment} onClick={() => setConfirmCancelAgenda(true)} title={hasExecutedAppointment ? 'Esta agenda possui atendimento iniciado ou concluído e não pode mais ser cancelada.' : 'Cancelar agenda'}>Cancelar Agenda</Button>{hasPermission(profile, PERMISSIONS.AGENDA_DELETE) && <Button variant="danger" onClick={() => setConfirmDelete(true)}>Excluir Agenda</Button>}{hasExecutedAppointment && <p className="col-span-2 text-xs text-amber-700 font-bold text-center">O fechamento deve ser realizado no Fluxo do Dia após encerrar todos os atendimentos.</p>}</div> : isClosed ? <div className="text-center text-xs font-black uppercase text-emerald-700 bg-emerald-50 rounded-xl py-3"><LockKeyhole size={14} className="inline mr-1" /> Agenda {agenda.status.toLowerCase()} e protegida</div> : null}
         </div>
       )}
 
@@ -341,14 +332,13 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
           </div>
         )}
       </Modal>
-      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' ? ['consulente'] : ['consulente', 'membro']} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
+      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' || isEventoServicos(agenda) ? ['consulente'] : ['consulente', 'membro']} cpfRequired={agendaExigeCpf(agenda)} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
 
       <Modal isOpen={editing} onClose={() => setEditing(false)} title="Editar Agenda">
-        {editDraft && <div className="space-y-4"><div className="grid grid-cols-2 gap-2"><input type="date" value={editDraft.data} onChange={e => setEditDraft({ ...editDraft, data: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/><input type="time" value={editDraft.horario} onChange={e => setEditDraft({ ...editDraft, horario: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/></div><select value={editDraft.tipoTrabalhoId} onChange={e => setEditDraft({ ...editDraft, tipoTrabalhoId: e.target.value })} className="w-full bg-gray-50 p-3 rounded-xl"><option value="">Legado: {agenda.tipo}</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select><div>{['consulente', 'membro'].map(id => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={editDraft.publicosPermitidos.includes(id)} onChange={() => setEditDraft({ ...editDraft, publicosPermitidos: editDraft.publicosPermitidos.includes(id) ? editDraft.publicosPermitidos.filter(x => x !== id) : [...editDraft.publicosPermitidos, id] })}/> {id}</label>)}</div>{servicosCatalogo.filter(s => !editDraft.tipoTrabalhoId || !s.tipoTrabalhoIds?.length || s.tipoTrabalhoIds.includes(editDraft.tipoTrabalhoId)).map(s => <div key={s.id} className="bg-gray-50 p-3 rounded-xl"><label className="text-sm font-bold"><input type="checkbox" checked={editDraft.servicosIds.includes(s.id)} onChange={() => setEditDraft({ ...editDraft, servicosIds: editDraft.servicosIds.includes(s.id) ? editDraft.servicosIds.filter(x => x !== s.id) : [...editDraft.servicosIds, s.id] })}/> {s.nome}</label>{editDraft.servicosIds.includes(s.id) && servicoControlaVagas(s) && <input type="number" min={agenda.vagasOcupadas?.[s.id] || 0} value={editDraft.vagasTotais[s.id] || ''} onChange={e => setEditDraft({ ...editDraft, vagasTotais: { ...editDraft.vagasTotais, [s.id]: Number(e.target.value) } })} className="w-full bg-white p-2 mt-2 rounded-lg"/>}</div>)}<Button onClick={saveEdit} variant="warning" className="w-full">Salvar Alterações</Button></div>}
+        {editDraft && <div className="space-y-4"><div className="grid grid-cols-2 gap-2"><input type="date" value={editDraft.data} onChange={e => setEditDraft({ ...editDraft, data: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/><input type="time" value={editDraft.horario} onChange={e => setEditDraft({ ...editDraft, horario: e.target.value })} className="bg-gray-50 p-3 rounded-xl"/></div><select value={editDraft.tipoTrabalhoId} onChange={e => setEditDraft({ ...editDraft, tipoTrabalhoId: e.target.value })} className="w-full bg-gray-50 p-3 rounded-xl"><option value="">Legado: {agenda.tipo}</option>{trabalhos.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select><div>{['consulente', 'membro'].map(id => <label key={id} className="mr-4 text-sm font-bold"><input type="checkbox" checked={editDraft.publicosPermitidos.includes(id)} onChange={() => setEditDraft({ ...editDraft, publicosPermitidos: editDraft.publicosPermitidos.includes(id) ? editDraft.publicosPermitidos.filter(x => x !== id) : [...editDraft.publicosPermitidos, id] })}/> {id}</label>)}</div>{(trabalhos.find(item => item.id === editDraft.tipoTrabalhoId)?.natureza || agenda.tipoTrabalhoNatureza) === 'evento_servicos' && <label className="flex gap-2 rounded-xl bg-amber-50 p-3 text-sm font-bold"><input type="checkbox" checked={editDraft.cpfObrigatorio} onChange={e => setEditDraft({ ...editDraft, cpfObrigatorio: e.target.checked })}/> Exigir CPF dos participantes</label>}{servicosCatalogo.filter(s => !editDraft.tipoTrabalhoId || !s.tipoTrabalhoIds?.length || s.tipoTrabalhoIds.includes(editDraft.tipoTrabalhoId)).map(s => <div key={s.id} className="bg-gray-50 p-3 rounded-xl"><label className="text-sm font-bold"><input type="checkbox" checked={editDraft.servicosIds.includes(s.id)} onChange={() => setEditDraft({ ...editDraft, servicosIds: editDraft.servicosIds.includes(s.id) ? editDraft.servicosIds.filter(x => x !== s.id) : [...editDraft.servicosIds, s.id] })}/> {s.nome}</label>{editDraft.servicosIds.includes(s.id) && servicoControlaVagas(s) && <input type="number" min={agenda.vagasOcupadas?.[s.id] || 0} value={editDraft.vagasTotais[s.id] || ''} onChange={e => setEditDraft({ ...editDraft, vagasTotais: { ...editDraft.vagasTotais, [s.id]: Number(e.target.value) } })} className="w-full bg-white p-2 mt-2 rounded-lg"/>}</div>)}<Button onClick={saveEdit} variant="warning" className="w-full">Salvar Alterações</Button></div>}
       </Modal>
 
       <ConfirmDialog isOpen={!!cancelTarget} onClose={() => setCancelTarget(null)} onConfirm={handleCancel} title="Cancelar Agendamento" message={`Cancelar o agendamento de "${cancelTarget?.nome}"? A vaga será devolvida automaticamente.`} confirmText="Sim, Cancelar" />
-      <ConfirmDialog isOpen={confirmClose} onClose={() => setConfirmClose(false)} onConfirm={handleClose} title="Concluir Agenda" message={`Concluir esta agenda? Existem ${(summary.Agendado || 0) + (summary.Presente || 0)} atendimentos ainda abertos. Após concluir, nenhuma alteração será permitida.`} confirmText="Sim, Concluir" />
       <ConfirmDialog isOpen={!!serviceToCancel} onClose={() => setServiceToCancel(null)} onConfirm={handleCancelService} title="Cancelar Serviço" message={`Cancelar "${serviceToCancel?.nome}" nesta data? Atendimentos serão preservados para futura realocação.`} confirmText="Cancelar Serviço" />
       <ConfirmDialog isOpen={confirmCancelAgenda} onClose={() => setConfirmCancelAgenda(false)} onConfirm={handleCancelAgenda} title="Cancelar Agenda" message="A agenda ficará no histórico e não aceitará novas operações." confirmText="Cancelar Agenda" />
       <ConfirmDialog isOpen={confirmDelete} onClose={() => setConfirmDelete(false)} onConfirm={handleDelete} title="Excluir Agenda" message="Esta agenda somente será excluída definitivamente se não possuir nenhum atendimento vinculado." confirmText="Excluir Definitivamente" />
@@ -363,6 +353,7 @@ export const AgendaAdminCard = ({ agenda, agendas, user, profile, servicosCatalo
         </div>
       </Modal>
       <RealocacaoModal atendimento={relocationTarget} origemAgenda={agenda} agendas={agendas} servicosCatalogo={servicosCatalogo} user={user} profile={profile} initialServiceId={relocationServiceId} onClose={() => { setRelocationTarget(null); setRelocationServiceId(null); }} />
+      <EditAppointmentModal appointment={appointmentToEdit} originAgenda={agenda} agendas={agendas} services={servicosCatalogo} onClose={() => setAppointmentToEdit(null)} />
     </Card>
   );
 };

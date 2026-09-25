@@ -6,7 +6,6 @@ import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/fi
 import {
   appId,
   cancelAgendamento,
-  concluirAgenda,
   createAgendamento,
   createConsulenteQuick,
   createProgramacaoLote,
@@ -47,7 +46,7 @@ import {
   setUserAccessLifecycle
 } from '../src/services/firebase.js';
 import { sortQueue } from '../src/utils/formatters.js';
-import { getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
+import { agendaExigeCpf, getAgendaPublicosPermitidos, getNomePessoaAtendimento, getNomeServicoAtendimento, getPessoaFuncoesCasa, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, isAtendimentoOperacional, isAtendimentoCasa, isEventoServicos, isTipoTrabalhoAtendimento, servicoControlaVagas, servicoPertenceAoTrabalho } from '../src/utils/domain.js';
 
 const PROJECT_ID = 'santa-fe-business-test';
 const root = `artifacts/${appId}/public/data`;
@@ -95,15 +94,32 @@ before(async () => {
 });
 
 describe('Fase 10A - programação em lote', () => {
-  test('cria documentos independentes e bloqueia repetição da mesma programação', async () => {
+  test('cria documentos independentes e permite mais de uma agenda com a mesma programação', async () => {
     const db = adminDb();
-    const params = { trabalho: { id: 'trabalho-10a', nome: 'Atendimento 10A' }, servicos: [service], horario: '19:00', publicosPermitidos: ['consulente'], vagasTotais: { [service.id]: 3 }, dates: ['2035-06-10', '2035-06-11'], userId: USER_ID };
+    const params = { trabalho: { id: 'trabalho-10a', nome: 'Atendimento 10A', natureza: 'atendimento_publico' }, servicos: [service], horario: '19:00', publicosPermitidos: ['consulente'], vagasTotais: { [service.id]: 3 }, dates: ['2035-06-10', '2035-06-11'], userId: USER_ID };
     const ids = await createProgramacaoLote(params, db);
     assert.equal(ids.length, 2); assert.notEqual(ids[0], ids[1]);
     const stored = await Promise.all(ids.map(id => getDoc(agendaRef(db, id))));
     assert.equal(stored.every(snapshot => snapshot.exists()), true);
     assert.equal(stored[0].data().vagasOcupadas[service.id], 0);
-    await assert.rejects(createProgramacaoLote(params, db), error => error.message === 'PROGRAMACAO_DUPLICADA:2035-06-10,2035-06-11');
+    assert.equal(stored[0].data().tipoTrabalhoNatureza, 'atendimento_publico');
+    const repeatedIds = await createProgramacaoLote(params, db);
+    assert.equal(repeatedIds.length, 2);
+    assert.equal(repeatedIds.every(id => !ids.includes(id)), true);
+    assert.equal((await Promise.all(repeatedIds.map(id => getDoc(agendaRef(db, id))))).every(snapshot => snapshot.exists()), true);
+  });
+
+  test('evento salva a regra de CPF definida em cada programação', async () => {
+    const db = adminDb();
+    const params = { trabalho: { id: 'evento-25i', nome: 'Ação Social', natureza: 'evento_servicos' }, servicos: [service], horario: '09:00', publicosPermitidos: ['consulente'], cpfObrigatorio: true, vagasTotais: { [service.id]: 20 }, dates: ['2035-12-20'], userId: USER_ID };
+    const [id] = await createProgramacaoLote(params, db);
+    const stored = (await getDoc(agendaRef(db, id))).data();
+    assert.equal(stored.tipoTrabalhoNatureza, 'evento_servicos');
+    assert.equal(stored.cpfObrigatorio, true);
+    assert.equal(isEventoServicos(stored), true);
+    assert.equal(isTipoTrabalhoAtendimento(stored), true);
+    assert.equal(isAtendimentoCasa(stored), false);
+    assert.equal(agendaExigeCpf(stored), true);
   });
 });
 
@@ -640,6 +656,10 @@ describe('transações do fluxo operacional', () => {
       assert.equal(isAtendimentoFluxoDia({ status }), false, `${status} deve ficar oculto`);
     }
     assert.equal(isAtendimentoOperacional({ status: 'Cancelado' }), true, 'Cancelado permanece na Agenda administrativa');
+    assert.equal(isTipoTrabalhoAtendimento({ tipoTrabalhoNome: 'Atendimento' }), true);
+    assert.equal(isTipoTrabalhoAtendimento({ tipo: 'Desenvolvimento' }), false);
+    assert.equal(isTipoTrabalhoAtendimento({ tipoTrabalhoNome: 'Desenvolvimento', tipoTrabalhoNatureza: 'atendimento_publico' }), true);
+    assert.equal(isTipoTrabalhoAtendimento({ tipoTrabalhoNome: 'Atendimento', tipoTrabalhoNatureza: 'interno' }), false);
   });
   test('reserva vagas até o limite e falha atomicamente com SEM_VAGA', async () => {
     const db = adminDb();
@@ -761,22 +781,11 @@ describe('transações do fluxo operacional', () => {
     assert.equal((await getDocs(collection(db, `${root}/auditoria`))).size, 0);
   });
 
-  test('conclui agenda, audita e bloqueia reserva, cancelamento e prioridade', async () => {
+  test('bloqueia fechamento direto da agenda pelo cliente', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-fechada');
-    const appointmentId = await book(db, agenda, person('1'));
-    await concluirAgenda({ agendaId: agenda.id, userId: USER_ID }, db);
-    const closed = (await getDoc(agendaRef(db, agenda.id))).data();
-    assert.equal(closed.status, 'Concluída');
-    assert.ok(closed.concluidaEm);
-    assert.equal(closed.concluidaPor, USER_ID);
-    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().status, 'Agendado');
-    await assert.rejects(book(db, { ...agenda, status: 'Concluída' }, person('2')), /AGENDA_INDISPONIVEL/);
-    await assert.rejects(cancelAgendamento({ agendaId: agenda.id, agendamentoId: appointmentId, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
-    await assert.rejects(setAgendamentoPrioridade({ agendaId: agenda.id, agendamentoId: appointmentId, prioridade: true, userId: USER_ID }, db), /AGENDA_INDISPONIVEL/);
-    const audit = (await getDocs(collection(db, `${root}/auditoria`))).docs.map(item => item.data()).find(item => item.tipo === 'AGENDA_CONCLUIDA');
-    assert.equal(audit.executadoPor, USER_ID);
-    assert.ok(audit.criadoEm);
+    await assert.rejects(updateDoc(agendaRef(db, agenda.id), { status: 'Concluída', trabalhadoresDia: [] }), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
+    assert.equal((await getDoc(agendaRef(db, agenda.id))).data().status, 'Aberta');
   });
 
   test('altera prioridade somente para Agendado e Presente e gera auditoria', async () => {
@@ -878,16 +887,16 @@ describe('transações do fluxo operacional', () => {
     assert.equal((await getDoc(appointmentById(db, appointmentId))).data().horaChegada.toMillis(), original);
   });
 
-  test('registra saída uma vez e protege atendimento concluído', async () => {
+  test('registra a conclusão individual antes do fechamento do dia', async () => {
     const db = adminDb();
     const agenda = await seedAgenda('agenda-saida');
     const appointmentId = await book(db, agenda, person('1'));
     await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: appointmentId, status: 'Presente', userId: USER_ID }, db);
     const params = { agendaId: agenda.id, agendamentoId: appointmentId, status: 'Concluído', userId: USER_ID };
     await updateAtendimentoStatus(params, db);
-    const original = (await getDoc(appointmentById(db, appointmentId))).data().horaSaida.toMillis();
-    await assert.rejects(updateAtendimentoStatus(params, db), /TRANSICAO_INVALIDA/);
-    assert.equal((await getDoc(appointmentById(db, appointmentId))).data().horaSaida.toMillis(), original);
+    const current = (await getDoc(appointmentById(db, appointmentId))).data();
+    assert.equal(current.status, 'Concluído');
+    assert.ok(current.horaSaida);
   });
 
   test('ignora cancelado e considera Faltou na reconciliação de vagas', async () => {
@@ -931,7 +940,7 @@ describe('transações do fluxo operacional', () => {
     await seedDocuments([['consulentes', 'reconciliar-gestor', { agendaId: agenda.id, status: 'Agendado', servicosIds: [service.id] }]]);
     await assert.rejects(reconcileAgendaVacancies({ agendaId: agenda.id, userId: 'gestor-business' }, gestorDb()), error => error.code === 'permission-denied' || error.code === 'firestore/permission-denied');
     assert.equal((await getDoc(agendaRef(adminDb(), agenda.id))).data().vagasOcupadas[service.id], 0);
-    await updateDoc(agendaRef(adminDb(), agenda.id), { status: 'Concluída' });
+    await environment.withSecurityRulesDisabled(async context => updateDoc(agendaRef(context.firestore(), agenda.id), { status: 'Concluída' }));
     const inspection = await inspectVacancyCounters({ pageSize: 25 }, adminDb());
     assert.equal(inspection.divergences.length, 0);
     assert.equal(inspection.skippedClosed, 1);

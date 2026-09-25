@@ -2,8 +2,8 @@ const LABELS = Object.freeze({
   PESSOA_CRIADA: 'Pessoa cadastrada', PESSOA_ATUALIZADA: 'Cadastro de Pessoa atualizado', MEU_CADASTRO_ATUALIZADO: 'Cadastro atualizado pelo membro',
   MEMBRO_INATIVADO: 'Membro inativado', MEMBRO_REATIVADO: 'Membro reativado', AUTOCADASTRO_MEMBRO_APROVADO: 'Cadastro de Membro aprovado', AUTOCADASTRO_MEMBRO_REJEITADO: 'Cadastro de Membro rejeitado',
   USUARIO_AUTORIZADO: 'Usuário autorizado', USUARIO_VINCULADO: 'Usuário vinculado', USUARIO_VINCULO_REPARADO: 'Vínculo de usuário reparado', USUARIO_ROLE_ALTERADO: 'Perfil de acesso alterado', USUARIO_STATUS_ALTERADO: 'Situação do usuário alterada', USUARIO_ACESSO_PREAUTORIZADO: 'Acesso pré-autorizado', USUARIO_ACESSO_ATIVADO: 'Acesso ativado', USUARIO_ACESSO_REVOGADO: 'Acesso revogado', USUARIO_ACESSO_REATIVADO: 'Acesso reativado', USUARIO_ACESSO_AUTORIZACAO_CANCELADA: 'Autorização de acesso cancelada',
-  AGENDAMENTO_CANCELADO: 'Agendamento cancelado', PRIORIDADE_ALTERADA: 'Prioridade alterada', ATENDIMENTO_SERVICOS_ALTERADOS: 'Serviços do atendimento alterados', STATUS_ATENDIMENTO_CORRIGIDO: 'Status do atendimento corrigido', ATENDIMENTO_REAGENDADO: 'Atendimento reagendado', SERVICO_REALOCADO: 'Serviço realocado',
-  AGENDA_CONCLUIDA: 'Agenda concluída', AGENDA_EDITADA: 'Agenda atualizada', AGENDA_CANCELADA: 'Agenda cancelada', AGENDA_EXCLUIDA: 'Agenda excluída', SERVICO_AGENDA_CANCELADO: 'Serviço cancelado na agenda', VAGAS_RECONCILIADAS: 'Vagas reconciliadas', CPF_INDEX_RECONSTRUIDO: 'Índice de CPF reparado',
+  AGENDAMENTO_CANCELADO: 'Agendamento cancelado', AGENDAMENTO_EDITADO: 'Agendamento editado', PRIORIDADE_ALTERADA: 'Prioridade alterada', ATENDIMENTO_SERVICOS_ALTERADOS: 'Serviços do atendimento alterados', STATUS_ATENDIMENTO_CORRIGIDO: 'Status do atendimento corrigido', ATENDIMENTO_REAGENDADO: 'Atendimento reagendado', SERVICO_REALOCADO: 'Serviço realocado',
+  AGENDA_CONCLUIDA: 'Atendimento do dia fechado', AGENDA_EDITADA: 'Agenda atualizada', AGENDA_CANCELADA: 'Agenda cancelada', AGENDA_EXCLUIDA: 'Agenda excluída', SERVICO_AGENDA_CANCELADO: 'Serviço cancelado na agenda', VAGAS_RECONCILIADAS: 'Vagas reconciliadas', CPF_INDEX_RECONSTRUIDO: 'Índice de CPF reparado',
 });
 
 const FIELD_LABELS = Object.freeze({
@@ -12,14 +12,38 @@ const FIELD_LABELS = Object.freeze({
 
 export const getAuditOrigin = type => {
   const value = String(type || '');
+  if (value === 'AGENDA_CONCLUIDA') return 'Fluxo do Dia';
   if (value === 'MEU_CADASTRO_ATUALIZADO') return 'Meu Cadastro';
   if (value.startsWith('AUTOCADASTRO_')) return 'Solicitações de cadastro';
   if (value.startsWith('USUARIO_')) return 'Usuários e acessos';
   if (value.startsWith('PESSOA_') || value.startsWith('MEMBRO_') || value === 'CPF_INDEX_RECONSTRUIDO') return 'Pessoas';
   if (value.startsWith('AGENDA_') || value === 'SERVICO_AGENDA_CANCELADO' || value === 'VAGAS_RECONCILIADAS') return 'Programação';
-  if (['AGENDAMENTO_CANCELADO', 'ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO'].includes(value)) return 'Agendamentos';
+  if (['AGENDAMENTO_CANCELADO', 'AGENDAMENTO_EDITADO', 'ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO'].includes(value)) return 'Agendamentos';
   if (['PRIORIDADE_ALTERADA', 'ATENDIMENTO_SERVICOS_ALTERADOS', 'STATUS_ATENDIMENTO_CORRIGIDO'].includes(value)) return 'Fluxo do Dia';
   return 'Sistema';
+};
+
+export const getClosureDetails = ({ event, agenda, appointments = [] }) => {
+  if (event?.tipo !== 'AGENDA_CONCLUIDA') return null;
+  const type = event.tipoFechamento || agenda?.tipoFechamento || (agenda?.trabalhadoresDia?.length ? 'atendimento' : 'lista_presenca');
+  const workers = agenda?.trabalhadoresDia || [];
+  const regular = role => workers.filter(item => item.funcao === role && !item.substituto).map(item => item.nome);
+  const substitutes = workers.filter(item => item.substituto).map(item => `${item.nome} (${item.funcao === 'medium' ? 'Médium' : 'Cambone'})`);
+  const eventTeam = (agenda?.equipeEventoDia || event.equipeEvento || []).map(item => `${item.nome} (${item.funcao})`);
+  const bookResponsible = agenda?.dirigenteResponsavelDia || event.dirigenteResponsavel || null;
+  const calculatedPresence = appointments.filter(item => !['Cancelado', 'Reagendado', 'Faltou'].includes(item.status)).length;
+  return {
+    type,
+    typeLabel: type === 'atendimento' ? 'Atendimento da Casa' : type === 'evento_servicos' ? 'Evento com serviços' : 'Lista de presença — trabalho interno',
+    workName: agenda?.tipoTrabalhoNome || agenda?.tipo || 'Trabalho não informado',
+    groups: (agenda?.gruposTrabalhoDia || []).map(item => item.nome || item.id).filter(Boolean),
+    mediuns: regular('medium'),
+    cambones: regular('cambone'),
+    substitutes,
+    eventTeam,
+    bookResponsible: bookResponsible ? `${bookResponsible.nome} (${bookResponsible.papel === 'titular' ? 'Dirigente titular' : 'Responsável substituta'})` : null,
+    presenceCount: event.quantidadePresencas ?? agenda?.quantidadePresencasFechamento ?? calculatedPresence,
+  };
 };
 
 export const getAuditFieldDetails = event => (event.camposAlterados || []).map(field => ({

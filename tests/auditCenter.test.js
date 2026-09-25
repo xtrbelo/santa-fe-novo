@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAuditCsv, describeAuditEvent, filterAuditEvents, getAuditCategory, getAuditChanges, getAuditFieldDetails, getAuditOrigin, getAuditReferences, paginateAuditEvents } from '../src/utils/auditCenter.js';
+import { buildAuditCsv, describeAuditEvent, filterAuditEvents, getAuditCategory, getAuditChanges, getAuditFieldDetails, getAuditOrigin, getAuditReferences, getClosureDetails, paginateAuditEvents } from '../src/utils/auditCenter.js';
 
 test('classifica e descreve os principais eventos de auditoria', () => {
   assert.equal(getAuditCategory('USUARIO_ROLE_ALTERADO'), 'acesso');
@@ -53,4 +53,35 @@ test('detalha origem, campos e registros relacionados sem inventar valores', () 
   assert.deepEqual(getAuditReferences({ personId: 'p-1', agendaId: 'a-1', agendamentoId: 'at-1' }), [
     { label: 'Pessoa', value: 'p-1' }, { label: 'Agenda', value: 'a-1' }, { label: 'Atendimento', value: 'at-1' },
   ]);
+});
+
+test('classifica edição de agendamento na origem correta', () => {
+  assert.equal(getAuditOrigin('AGENDAMENTO_EDITADO'), 'Agendamentos');
+  assert.equal(describeAuditEvent({ tipo: 'AGENDAMENTO_EDITADO', motivo: 'Correção solicitada' }).title, 'Agendamento editado');
+});
+
+test('resume fechamento de atendimento com turma, equipe e substitutos', () => {
+  const details = getClosureDetails({
+    event: { tipo: 'AGENDA_CONCLUIDA', tipoFechamento: 'atendimento' },
+    agenda: { tipo: 'Atendimento', dirigenteResponsavelDia: { nome: 'Dora', papel: 'titular' }, gruposTrabalhoDia: [{ nome: 'Turma de Segunda' }], trabalhadoresDia: [{ nome: 'Ana', funcao: 'medium' }, { nome: 'Bia', funcao: 'cambone' }, { nome: 'Caio', funcao: 'medium', substituto: true }] },
+  });
+  assert.equal(details.typeLabel, 'Atendimento da Casa');
+  assert.deepEqual(details.groups, ['Turma de Segunda']);
+  assert.deepEqual(details.mediuns, ['Ana']);
+  assert.deepEqual(details.cambones, ['Bia']);
+  assert.deepEqual(details.substitutes, ['Caio (Médium)']);
+  assert.equal(details.bookResponsible, 'Dora (Dirigente titular)');
+  assert.equal(getAuditOrigin('AGENDA_CONCLUIDA'), 'Fluxo do Dia');
+});
+
+test('resume fechamento interno pela quantidade preservada de presenças', () => {
+  const details = getClosureDetails({ event: { tipo: 'AGENDA_CONCLUIDA', tipoFechamento: 'lista_presenca', quantidadePresencas: 12 }, agenda: { tipo: 'Desenvolvimento' }, appointments: [{ status: 'Presente' }] });
+  assert.equal(details.type, 'lista_presenca');
+  assert.equal(details.presenceCount, 12);
+});
+
+test('resume fechamento de evento com a equipe profissional', () => {
+  const details = getClosureDetails({ event: { tipo: 'AGENDA_CONCLUIDA', tipoFechamento: 'evento_servicos', equipeEvento: [{ nome: 'Ana', funcao: 'Médica' }, { nome: 'Bia', funcao: 'Fisioterapeuta' }] }, agenda: { tipo: 'Ação Social' } });
+  assert.equal(details.typeLabel, 'Evento com serviços');
+  assert.deepEqual(details.eventTeam, ['Ana (Médica)', 'Bia (Fisioterapeuta)']);
 });

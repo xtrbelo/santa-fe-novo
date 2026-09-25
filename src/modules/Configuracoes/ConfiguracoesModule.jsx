@@ -1,18 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, getAppCollection, getAppDoc, inspectCpfIndexes, inspectMemberEmailIndexes, inspectVacancyCounters, onSnapshot, rebuildCpfIndex, rebuildPessoaSearchIndex, reconcileAgendaVacancies, Timestamp, updateDoc } from '../../services/firebase';
-import { rebuildMemberEmailIndexOnServer } from '../../services/firebaseFunctions';
+import { rebuildMemberEmailIndexOnServer, updateWorkTypeOnServer } from '../../services/firebaseFunctions';
 import { getPublicosPermitidosTrabalho, servicoControlaVagas } from '../../utils/domain';
 import { getEffectiveMemberFunctions } from '../../utils/pessoaForm';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { DataLoadState } from '../../components/ui/DataLoadState';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { Modal } from '../../components/ui/Modal';
 import { Pagination, usePagination } from '../../components/ui/Pagination';
 import { useToast } from '../../components/ui/useToast';
 import { CalendarDays, DatabaseZap, Plus, Tag, Trash2, Users } from 'lucide-react';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { AccessIntegrityPanel } from './AccessIntegrityPanel';
 import { SystemHealthPanel } from './SystemHealthPanel';
+import { WorkGroupsPanel } from './WorkGroupsPanel';
+import { EventTeamPanel } from './EventTeamPanel';
+import { BookResponsiblesPanel } from './BookResponsiblesPanel';
+import { BookVolumesPanel } from './BookVolumesPanel';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 
@@ -22,8 +27,10 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
   const [trabalhos, setTrabalhos] = useState([]);
   const [servicos, setServicos] = useState([]);
   const [novaFuncao, setNovaFuncao] = useState({ codigo: '', nome: '' });
-  const [novoTrabalho, setNovoTrabalho] = useState({ nome: '', publicosPermitidos: ['consulente', 'membro'] });
+  const [novoTrabalho, setNovoTrabalho] = useState({ nome: '', natureza: 'atendimento_publico', publicosPermitidos: ['consulente', 'membro'] });
   const [novoServico, setNovoServico] = useState({ nome: '', tipoTrabalhoIds: [], controlaVagas: false });
+  const [editingWork, setEditingWork] = useState(null);
+  const [savingWork, setSavingWork] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildReport, setRebuildReport] = useState(null);
@@ -64,13 +71,25 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
   };
   const addWork = async () => {
     if (!novoTrabalho.nome.trim()) return;
-    await addDoc(getAppCollection('config_eventos'), { nome: novoTrabalho.nome.trim(), publicosPermitidos: novoTrabalho.publicosPermitidos, ...metadata() });
-    setNovoTrabalho({ nome: '', publicosPermitidos: ['consulente', 'membro'] }); toast.success('Tipo de trabalho cadastrado.');
+    await addDoc(getAppCollection('config_eventos'), { nome: novoTrabalho.nome.trim(), natureza: novoTrabalho.natureza, publicosPermitidos: novoTrabalho.natureza === 'interno' ? ['membro'] : novoTrabalho.publicosPermitidos, ...metadata() });
+    setNovoTrabalho({ nome: '', natureza: 'atendimento_publico', publicosPermitidos: ['consulente', 'membro'] }); toast.success('Tipo de trabalho cadastrado.');
   };
   const addService = async () => {
     if (!novoServico.nome.trim() || !novoServico.tipoTrabalhoIds.length) { toast.error('Selecione ao menos um tipo de trabalho.'); return; }
     await addDoc(getAppCollection('config_servicos'), { ...novoServico, nome: novoServico.nome.trim(), requerVagas: novoServico.controlaVagas, ...metadata() });
     setNovoServico({ nome: '', tipoTrabalhoIds: [], controlaVagas: false }); toast.success('Serviço cadastrado.');
+  };
+  const startWorkEdit = work => setEditingWork({ id: work.id, nome: work.nome || '', natureza: work.natureza || (work.nome?.trim().toLowerCase() === 'atendimento' ? 'atendimento_publico' : 'interno'), publicosPermitidos: work.natureza === 'interno' ? ['membro'] : getPublicosPermitidosTrabalho(work) });
+  const saveWorkEdit = async () => {
+    if (!editingWork?.nome.trim()) return;
+    setSavingWork(true);
+    try {
+      await updateWorkTypeOnServer({ workTypeId: editingWork.id, nome: editingWork.nome.trim(), natureza: editingWork.natureza, publicosPermitidos: editingWork.natureza === 'interno' ? ['membro'] : editingWork.publicosPermitidos });
+      toast.success('Tipo de trabalho atualizado.'); setEditingWork(null);
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message?.includes('AGENDA_EM_ANDAMENTO') ? 'A natureza não pode ser alterada enquanto houver agenda em andamento.' : 'Não foi possível atualizar o tipo de trabalho.');
+    } finally { setSavingWork(false); }
   };
   const deactivate = async () => {
     if (!itemToDelete) return;
@@ -218,9 +237,10 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
     </Card>
     <Card className="space-y-4"><h3 className="font-black uppercase text-amber-600 flex gap-2"><CalendarDays size={18}/> 2. Tipos de Trabalho</h3>
       <input value={novoTrabalho.nome} onChange={e => setNovoTrabalho({ ...novoTrabalho, nome: e.target.value })} placeholder="Ex: Atendimento" className="w-full bg-gray-50 p-3 rounded-xl"/>
-      <div className="flex gap-2">{publics.map(p => <label key={p.id} className="text-xs font-bold"><input type="checkbox" checked={novoTrabalho.publicosPermitidos.includes(p.id)} onChange={() => setNovoTrabalho({ ...novoTrabalho, publicosPermitidos: toggle(novoTrabalho.publicosPermitidos, p.id) })}/> {p.nome}</label>)}</div>
+      <div className="grid gap-2 sm:grid-cols-3"><label className={`rounded-xl border p-3 text-sm font-bold ${novoTrabalho.natureza === 'atendimento_publico' ? 'border-amber-400 bg-amber-50' : 'border-gray-100'}`}><input type="radio" name="naturezaTrabalho" checked={novoTrabalho.natureza === 'atendimento_publico'} onChange={() => setNovoTrabalho({ ...novoTrabalho, natureza: 'atendimento_publico', publicosPermitidos: ['consulente', 'membro'] })}/> Atendimento da Casa<span className="mt-1 block text-xs font-normal text-gray-500">Serviços, retorno e equipe de médiuns/cambones.</span></label><label className={`rounded-xl border p-3 text-sm font-bold ${novoTrabalho.natureza === 'evento_servicos' ? 'border-amber-400 bg-amber-50' : 'border-gray-100'}`}><input type="radio" name="naturezaTrabalho" checked={novoTrabalho.natureza === 'evento_servicos'} onChange={() => setNovoTrabalho({ ...novoTrabalho, natureza: 'evento_servicos', publicosPermitidos: ['consulente', 'membro'] })}/> Evento com serviços<span className="mt-1 block text-xs font-normal text-gray-500">Vários serviços e público externo, sem turma da Casa.</span></label><label className={`rounded-xl border p-3 text-sm font-bold ${novoTrabalho.natureza === 'interno' ? 'border-amber-400 bg-amber-50' : 'border-gray-100'}`}><input type="radio" name="naturezaTrabalho" checked={novoTrabalho.natureza === 'interno'} onChange={() => setNovoTrabalho({ ...novoTrabalho, natureza: 'interno', publicosPermitidos: ['membro'] })}/> Trabalho interno<span className="mt-1 block text-xs font-normal text-gray-500">Somente presença dos membros da Casa.</span></label></div>
+      {novoTrabalho.natureza !== 'interno' && <div className="flex gap-2">{publics.map(p => <label key={p.id} className="text-xs font-bold"><input type="checkbox" checked={novoTrabalho.publicosPermitidos.includes(p.id)} onChange={() => setNovoTrabalho({ ...novoTrabalho, publicosPermitidos: toggle(novoTrabalho.publicosPermitidos, p.id) })}/> {p.nome}</label>)}</div>}
       <Button onClick={addWork} variant="warning" className="w-full"><Plus size={16}/> Salvar Trabalho</Button>
-      {worksPagination.items.map(t => <div key={t.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{t.nome}</strong><p className="text-[10px] text-gray-500">Público: {getPublicosPermitidosTrabalho(t).join(', ') || 'sem restrição'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_eventos', id: t.id })}><Trash2 size={16}/></button></div>)}
+      {worksPagination.items.map(t => <div key={t.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{t.nome}</strong><p className="text-[10px] font-bold text-amber-700">{(t.natureza || (t.nome?.toLowerCase() === 'atendimento' ? 'atendimento_publico' : 'interno')) === 'atendimento_publico' ? 'Atendimento ao público' : 'Trabalho interno'}</p><p className="text-[10px] text-gray-500">Público: {getPublicosPermitidosTrabalho(t).join(', ') || 'sem restrição'}</p></div><div className="flex items-center gap-3"><button className="text-xs font-bold text-amber-700" onClick={() => startWorkEdit(t)}>Editar</button><button onClick={() => setItemToDelete({ collection: 'config_eventos', id: t.id })}><Trash2 size={16}/></button></div></div>)}
       <Pagination pagination={worksPagination} label="tipo(s) de trabalho" />
     </Card>
     <Card className="space-y-4"><h3 className="font-black uppercase text-emerald-700 flex gap-2"><Tag size={18}/> 3. Catálogo de Serviços</h3>
@@ -231,6 +251,10 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
       {servicesPagination.items.map(s => <div key={s.id} className="flex justify-between bg-gray-50 p-3 rounded-xl"><div><strong className="text-sm">{s.nome}</strong><p className="text-[10px] text-gray-500">{servicoControlaVagas(s) ? 'Controla vagas' : 'Sem limite'} · {(s.tipoTrabalhoIds || []).map(id => trabalhos.find(t => t.id === id)?.nome).filter(Boolean).join(', ') || 'Legado/global'}</p></div><button onClick={() => setItemToDelete({ collection: 'config_servicos', id: s.id })}><Trash2 size={16}/></button></div>)}
       <Pagination pagination={servicesPagination} label="serviço(s)" />
     </Card>
+    {canManageConfig && <Card className="space-y-4"><WorkGroupsPanel user={user} functions={effectiveFunctions}/></Card>}
+    {canManageConfig && <Card className="space-y-4"><EventTeamPanel user={user}/></Card>}
+    {canManageConfig && <Card className="space-y-4"><BookResponsiblesPanel user={user}/></Card>}
+    {canManageConfig && <Card className="space-y-4"><BookVolumesPanel /></Card>}
     {canManageConfig && <Card className="space-y-4">
       <h3 className="font-black uppercase text-blue-700 flex gap-2"><DatabaseZap size={18}/> Manutenção</h3>
       <SystemHealthPanel />
@@ -258,5 +282,6 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
       <div className="border-t border-gray-100 pt-4 space-y-3"><p className="text-sm text-gray-600">Localiza Pessoas antigas com CPF válido e sem índice. A verificação não altera dados.</p><Button variant="secondary" onClick={checkCpfIndexes} disabled={checkingCpf || rebuildingCpf} className="w-full">{checkingCpf ? 'Verificando CPFs...' : 'Verificar índices de CPF'}</Button>{cpfReport && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs"><p><strong>{cpfReport.analyzed}</strong> pessoa(s) analisada(s) · <strong>{cpfReport.missing.length}</strong> ausente(s) · <strong>{cpfReport.conflicts.length}</strong> conflito(s) · <strong>{cpfReport.invalid}</strong> CPF(s) inválido(s) · <strong>{cpfReport.withoutCpf}</strong> sem CPF</p>{cpfReport.updated !== undefined && <p className="font-bold text-emerald-700">Última correção: {cpfReport.updated} criado(s) · {cpfReport.errors} erro(s).</p>}{cpfReport.conflicts.length > 0 && <p className="font-bold text-rose-700">Conflitos preservados para análise manual; nenhum índice existente será sobrescrito.</p>}{cpfReport.missing.length > 0 && <Button variant="warning" onClick={repairCpfIndexes} disabled={rebuildingCpf} className="w-full">{rebuildingCpf ? 'Criando índices...' : 'Criar índices ausentes'}</Button>}</div>}</div>
     </Card>}
     <ConfirmDialog isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={deactivate} title="Desativar configuração" message="Registros existentes serão preservados." confirmText="Desativar"/>
+    <Modal isOpen={!!editingWork} onClose={() => !savingWork && setEditingWork(null)} title="Editar tipo de trabalho">{editingWork && <div className="space-y-4"><input value={editingWork.nome} onChange={event => setEditingWork({ ...editingWork, nome: event.target.value })} className="w-full rounded-xl bg-gray-50 p-3" placeholder="Nome do trabalho"/><div className="grid gap-2 sm:grid-cols-3">{[['atendimento_publico', 'Atendimento da Casa'], ['evento_servicos', 'Evento com serviços'], ['interno', 'Trabalho interno']].map(([value, label]) => <label key={value} className={`rounded-xl border p-3 text-sm font-bold ${editingWork.natureza === value ? 'border-amber-400 bg-amber-50' : 'border-gray-100'}`}><input type="radio" name="editarNaturezaTrabalho" checked={editingWork.natureza === value} onChange={() => setEditingWork({ ...editingWork, natureza: value, publicosPermitidos: value === 'interno' ? ['membro'] : ['consulente', 'membro'] })}/> {label}</label>)}</div>{editingWork.natureza !== 'interno' && <div className="flex gap-3">{publics.map(item => <label key={item.id} className="text-xs font-bold"><input type="checkbox" checked={editingWork.publicosPermitidos.includes(item.id)} onChange={() => setEditingWork({ ...editingWork, publicosPermitidos: toggle(editingWork.publicosPermitidos, item.id) })}/> {item.nome}</label>)}</div>}<div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={savingWork} onClick={() => setEditingWork(null)}>Cancelar</Button><Button variant="warning" disabled={savingWork || !editingWork.nome.trim()} onClick={saveWorkEdit}>{savingWork ? 'Salvando...' : 'Salvar alterações'}</Button></div></div>}</Modal>
   </div>;
 };

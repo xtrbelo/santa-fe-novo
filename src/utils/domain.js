@@ -23,6 +23,11 @@ export const servicoControlaVagas = servico => servico?.controlaVagas ?? servico
 export const servicoPertenceAoTrabalho = (servico, tipoTrabalhoId) => !Array.isArray(servico?.tipoTrabalhoIds) || servico.tipoTrabalhoIds.length === 0 || servico.tipoTrabalhoIds.includes(tipoTrabalhoId);
 export const agendaAceitaServico = (agenda, serviceId) => !Array.isArray(agenda?.servicosIds) || agenda.servicosIds.includes(serviceId);
 export const servicoAtivoNaAgenda = (agenda, serviceId) => agenda?.servicosStatus?.[serviceId] !== 'Cancelado';
+export const getTipoTrabalhoNatureza = trabalho => trabalho?.tipoTrabalhoNatureza || trabalho?.natureza || (normalize(trabalho?.tipoTrabalhoNome || trabalho?.nome || trabalho?.tipo).trim() === 'atendimento' ? 'atendimento_publico' : 'interno');
+export const isTipoTrabalhoAtendimento = agenda => ['atendimento_publico', 'evento_servicos'].includes(getTipoTrabalhoNatureza(agenda));
+export const isAtendimentoCasa = agenda => getTipoTrabalhoNatureza(agenda) === 'atendimento_publico';
+export const isEventoServicos = agenda => getTipoTrabalhoNatureza(agenda) === 'evento_servicos';
+export const agendaExigeCpf = agenda => isEventoServicos(agenda) && agenda?.cpfObrigatorio === true;
 
 export const getServicosAtivosAtendimento = atendimento => {
   const realocados = atendimento?.servicosRealocados || {};

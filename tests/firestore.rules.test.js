@@ -367,7 +367,7 @@ describe('D. admin', () => {
     batch.set(ref(db, `${root}/agendamentos_ativos/agenda-1_pessoa-nova`), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-nova', agendamentoId: 'nova', criadoEm: new Date(), criadoPor: 'admin-a' });
     batch.set(ref(db, `${root}/agenda_historico_index/agenda-1`), { agendaId: 'agenda-1', primeiroAgendamentoId: 'nova', criadoEm: new Date(), criadoPor: 'admin-a' });
     await assertSucceeds(batch.commit());
-    await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
+    await assertFails(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
     await assertFails(deleteDoc(ref(db, paths.appointments)));
   });
   test('administra configurações sem excluir fisicamente', async () => {
@@ -375,6 +375,18 @@ describe('D. admin', () => {
     await assertSucceeds(setDoc(ref(db, `${root}/config_servicos/novo`), { nome: 'Novo' }));
     await assertSucceeds(updateDoc(ref(db, paths.config), { ativo: false }));
     await assertFails(deleteDoc(ref(db, paths.config)));
+    await assertSucceeds(setDoc(ref(db, `${root}/config_grupos_trabalho/segunda`), { nome: 'Turma de Segunda', diasSemana: [1], mediunsIds: ['membro-admin-a'], cambonesIds: [] }));
+    await assertFails(setDoc(ref(authDb('gestor'), `${root}/config_grupos_trabalho/terca`), { nome: 'Turma de Terça', diasSemana: [2] }));
+    await assertSucceeds(setDoc(ref(db, `${root}/config_equipe_eventos/medica`), { nome: 'Dra. Ana', funcao: 'Médica', ativo: true }));
+    await assertFails(setDoc(ref(authDb('gestor'), `${root}/config_equipe_eventos/fisio`), { nome: 'Bia', funcao: 'Fisioterapeuta', ativo: true }));
+    await assertSucceeds(setDoc(ref(db, `${root}/config_livro_mediunico/responsaveis`), { titularPessoaId: 'membro-admin-a', substitutaPessoaId: 'membro-gestor' }));
+    await assertFails(setDoc(ref(authDb('gestor'), `${root}/config_livro_mediunico/responsaveis-2`), { titularPessoaId: 'membro-admin-a' }));
+    await assertFails(setDoc(ref(db, `${root}/livro_mediunico_registros/agenda-1`), { status: 'fechado' }));
+    await assertFails(setDoc(ref(db, `${root}/livro_mediunico_volumes/volume-1`), { numero: 1, status: 'aberto' }));
+    const workRef = ref(db, `${root}/config_eventos/trabalho-editavel`);
+    await assertSucceeds(setDoc(workRef, { nome: 'Desenvolvimento', natureza: 'interno', ativo: true }));
+    await assertFails(updateDoc(workRef, { nome: 'Alteração sem servidor' }));
+    await assertSucceeds(updateDoc(workRef, { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' }));
   });
   test('lista usuários e altera outro usuário', async () => {
     const db = authDb('admin-a');
@@ -574,7 +586,7 @@ describe('I. integridade operacional', () => {
   });
   test('agenda concluída bloqueia novos agendamentos e alterações', async () => {
     const db = authDb('admin-a');
-    await assertSucceeds(updateDoc(ref(db, paths.agendas), { status: 'Concluída' }));
+    await environment.withSecurityRulesDisabled(async context => updateDoc(ref(context.firestore(), paths.agendas), { status: 'Concluída' }));
     await assertFails(setDoc(ref(db, `${root}/consulentes/nova`), { agendaId: 'agenda-1', status: 'Agendado' }));
     await assertFails(updateDoc(ref(db, paths.appointments), { status: 'Presente' }));
     await assertFails(updateDoc(ref(db, paths.agendas), { tipo: 'Alteração tardia' }));
@@ -619,6 +631,17 @@ describe('J. modelo operacional da Casa', () => {
 });
 
 describe('K. correção administrativa de status', () => {
+  test('conclusão individual continua permitida e o fechamento da agenda exige o servidor', async () => {
+    await environment.withSecurityRulesDisabled(async context => {
+      await setDoc(ref(context.firestore(), paths.agendas), { tipo: 'Agenda', status: 'Aberta' });
+      await setDoc(ref(context.firestore(), paths.appointments), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Presente', horaChegada: new Date() });
+    });
+    for (const uid of ['admin-a', 'gestor', 'atendimento']) {
+      await assertSucceeds(updateDoc(ref(authDb(uid), paths.appointments), { status: 'Concluído', horaSaida: new Date(), atualizadoEm: new Date(), atualizadoPor: uid }));
+      await environment.withSecurityRulesDisabled(async context => updateDoc(ref(context.firestore(), paths.appointments), { status: 'Presente', horaSaida: deleteField() }));
+      await assertFails(updateDoc(ref(authDb(uid), paths.agendas), { status: 'Concluída', trabalhadoresDia: [], atualizadoEm: new Date(), atualizadoPor: uid }));
+    }
+  });
   test('somente admin corrige transição permitida com campos restritos, inclusive em agenda concluída', async () => {
     await environment.withSecurityRulesDisabled(async context => {
       await setDoc(ref(context.firestore(), paths.agendas), { tipo: 'Agenda', status: 'Concluída' });

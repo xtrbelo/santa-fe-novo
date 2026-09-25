@@ -825,6 +825,7 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
   if (['Concluída', 'Cancelada'].includes(agenda.status)) throw new Error('AGENDA_INDISPONIVEL');
   const permittedTypes = getAgendaPublicosPermitidos(agenda);
   if (permittedTypes.length && !permittedTypes.includes(getPessoaVinculo(pessoa))) throw new Error('PUBLICO_NAO_PERMITIDO');
+  if (agenda.cpfObrigatorio === true && !/^\d{11}$/.test(String(pessoa?.cpf || '').replace(/\D/g, ''))) throw new Error('CPF_OBRIGATORIO_EVENTO');
   servicos.forEach(service => {
     if (!agendaAceitaServico(agenda, service.id)) throw new Error(`SERVICO_NAO_DISPONIVEL:${service.nome}`);
     if (!servicoAtivoNaAgenda(agenda, service.id)) throw new Error(`SERVICO_CANCELADO:${service.nome}`);
@@ -850,6 +851,7 @@ export const createAgendamento = async ({ agenda, pessoa, servicos, userId, stat
     if (agendaData.ativo === false || (requireFuture && agendaData.data?.toDate?.().getTime() < Date.now())) throw new Error('AGENDA_INDISPONIVEL');
     const transactionPermittedTypes = getAgendaPublicosPermitidos(agendaData);
     if (transactionPermittedTypes.length && !transactionPermittedTypes.includes(getPessoaVinculo(pessoa))) throw new Error('PUBLICO_NAO_PERMITIDO');
+    if (agendaData.cpfObrigatorio === true && !/^\d{11}$/.test(String(pessoa?.cpf || '').replace(/\D/g, ''))) throw new Error('CPF_OBRIGATORIO_EVENTO');
     servicos.forEach(service => {
       if (!agendaAceitaServico(agendaData, service.id)) throw new Error(`SERVICO_NAO_DISPONIVEL:${service.nome}`);
       if (!servicoAtivoNaAgenda(agendaData, service.id)) throw new Error(`SERVICO_CANCELADO:${service.nome}`);
@@ -892,30 +894,26 @@ export const getPessoaByCpf = async (cpf, firestore = db) => {
   return getPessoaById(indexSnapshot.data().pessoaId, firestore);
 };
 
-export const createProgramacaoLote = async ({ trabalho, servicos, horario, publicosPermitidos, vagasTotais, dates, userId }, firestore = db) => {
+export const createProgramacaoLote = async ({ trabalho, servicos, horario, publicosPermitidos, cpfObrigatorio = false, vagasTotais, dates, userId }, firestore = db) => {
   const uniqueDates = [...new Set((dates || []).filter(Boolean))].sort();
   if (!trabalho?.id || !servicos?.length || !horario || !uniqueDates.length) throw new Error('PROGRAMACAO_INVALIDA');
   if (uniqueDates.length > 400) throw new Error('LIMITE_PROGRAMACAO_EXCEDIDO');
   const today = new Date(); today.setHours(0, 0, 0, 0);
   if (uniqueDates.some(date => new Date(`${date}T12:00:00`) < today)) throw new Error('PROGRAMACAO_DATA_PASSADA');
-  const refs = uniqueDates.map(date => getDataDoc(firestore, 'agendas', getAgendaSchedulingKey({
-    tipoTrabalhoId: trabalho.id, date, horario, servicosIds: servicos.map(item => item.id), publicosPermitidos
-  })));
+  const refs = uniqueDates.map(() => doc(getDataCollection(firestore, 'agendas')));
   await runTransaction(firestore, async transaction => {
-    const snapshots = await Promise.all(refs.map(ref => transaction.get(ref)));
-    const conflicts = snapshots.flatMap((snapshot, index) => snapshot.exists() ? [uniqueDates[index]] : []);
-    if (conflicts.length) throw new Error(`PROGRAMACAO_DUPLICADA:${conflicts.join(',')}`);
     const now = Timestamp.now();
     const names = Object.fromEntries(servicos.map(item => [item.id, item.nome]));
     const statuses = Object.fromEntries(servicos.map(item => [item.id, 'Ativo']));
     const totals = Object.fromEntries(servicos.filter(servicoControlaVagas).map(item => [item.id, Number(vagasTotais?.[item.id] || 0)]));
     refs.forEach((ref, index) => transaction.set(ref, {
-      tipoTrabalhoId: trabalho.id, tipoTrabalhoNome: trabalho.nome, tipo: trabalho.nome,
+      tipoTrabalhoId: trabalho.id, tipoTrabalhoNome: trabalho.nome, tipoTrabalhoNatureza: trabalho.natureza || (String(trabalho.nome || '').trim().toLowerCase() === 'atendimento' ? 'atendimento_publico' : 'interno'), tipo: trabalho.nome,
       data: Timestamp.fromDate(new Date(`${uniqueDates[index]}T${horario}:00`)), horario,
       publicosPermitidos, servicosIds: servicos.map(item => item.id), servicosNomes: names,
+      cpfObrigatorio: trabalho.natureza === 'evento_servicos' && cpfObrigatorio === true,
       servicosStatus: statuses, vagasTotais: totals,
       vagasOcupadas: Object.fromEntries(Object.keys(totals).map(id => [id, 0])),
-      programacaoChave: ref.id, status: 'Agendada', ativo: true,
+      programacaoChave: getAgendaSchedulingKey({ tipoTrabalhoId: trabalho.id, date: uniqueDates[index], horario, servicosIds: servicos.map(item => item.id), publicosPermitidos }), status: 'Agendada', ativo: true,
       criadoEm: now, criadoPor: userId, atualizadoEm: now, atualizadoPor: userId
     }));
   });
