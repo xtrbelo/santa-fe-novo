@@ -3,7 +3,7 @@ import { Card } from '../../components/ui/Card';
 import { getAppCollection, getCountFromServer, onSnapshot, query, where } from '../../services/firebase';
 import { canAccessModule, hasPermission, MODULES, PERMISSIONS } from '../../constants/permissions';
 import { ROLES } from '../../constants/roles';
-import { buildOperationalAlerts, isRegistrationOverdue } from '../../utils/operationalAlerts';
+import { buildOperationalAlerts, isRegistrationOverdue, summarizeBookPendingItems } from '../../utils/operationalAlerts';
 import { CalendarDays, BookOpenCheck, ClipboardCheck, Users, Sparkles, UserRoundCog, UserRoundX, ShieldAlert, BellRing, ChevronRight } from 'lucide-react';
 
 export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers, onOpenPendingRegistrations, onOpenCommunications }) => {
@@ -13,7 +13,9 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers, onOpenPend
   const [registrationCounts, setRegistrationCounts] = useState({ membro: 0, consulente: 0 });
   const [overdueRegistrations, setOverdueRegistrations] = useState(0);
   const [communicationFailures, setCommunicationFailures] = useState(0);
+  const [bookPending, setBookPending] = useState({ unsignedCount: 0, oldestUnsignedCompetence: '', incompleteCount: 0, automaticClosureFailures: 0 });
   const canViewUsers = hasPermission(profile, PERMISSIONS.USERS_VIEW);
+  const canManageBook = hasPermission(profile, PERMISSIONS.CONFIG_MANAGE);
 
   useEffect(() => {
     if (!canViewUsers) { setPendingCount(null); return undefined; }
@@ -52,8 +54,24 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers, onOpenPend
     return () => { unsubInvites(); unsubLinks(); unsubCommunications(); };
   }, [profile]);
 
-  const operationalAlerts = buildOperationalAlerts({ overdueRegistrations, communicationFailures, pendingUsers: pendingCount || 0 });
-  const openAlert = action => action === 'communications' ? onOpenCommunications() : action === 'registrations' ? onOpenPendingRegistrations() : onOpenUsers('pendentes');
+  useEffect(() => {
+    if (!canManageBook) { setBookPending({ unsignedCount: 0, oldestUnsignedCompetence: '', incompleteCount: 0, automaticClosureFailures: 0 }); return undefined; }
+    let volumes = []; let records = [];
+    const sync = () => setBookPending(summarizeBookPendingItems(volumes, records));
+    const unsubVolumes = onSnapshot(getAppCollection('livro_mediunico_volumes'), snapshot => { volumes = snapshot.docs.map(item => ({ id: item.id, ...item.data() })); sync(); });
+    const unsubRecords = onSnapshot(getAppCollection('livro_mediunico_registros'), snapshot => { records = snapshot.docs.map(item => ({ id: item.id, ...item.data() })); sync(); });
+    return () => { unsubVolumes(); unsubRecords(); };
+  }, [canManageBook]);
+
+  const operationalAlerts = buildOperationalAlerts({ overdueRegistrations, communicationFailures, pendingUsers: pendingCount || 0, bookUnsignedVolumes: bookPending.unsignedCount, bookOldestUnsignedCompetence: bookPending.oldestUnsignedCompetence, bookIncompleteRecords: bookPending.incompleteCount, bookAutomaticClosureFailures: bookPending.automaticClosureFailures });
+  const openAlert = action => {
+    if (action === 'book') {
+      onSelectTab(MODULES.CONFIG);
+      window.setTimeout(() => document.getElementById('livro-mediunico')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+      return;
+    }
+    if (action === 'communications') onOpenCommunications(); else if (action === 'registrations') onOpenPendingRegistrations(); else onOpenUsers('pendentes');
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">

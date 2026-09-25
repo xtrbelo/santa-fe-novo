@@ -46,6 +46,32 @@ export const archiveAuditHistoryOnServer = async action => {
   return response.data;
 };
 
+export const closeDayWithWorkersOnServer = async payload => {
+  const response = await httpsCallable(getFunctionsClient(), 'closeDayWithWorkers')(payload);
+  return response.data;
+};
+
+export const manageBookVolumeOnServer = async action => {
+  const response = await httpsCallable(getFunctionsClient(), 'manageBookVolume')({ action });
+  return response.data;
+};
+
+export const archiveBookVolumeOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'archiveBookVolume')(payload)).data;
+export const getBookVolumeDownloadOnServer = async volumeId => (await httpsCallable(getFunctionsClient(), 'getBookVolumeDownload')({ volumeId })).data;
+export const refreshBookRecordOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'refreshBookRecord')(payload)).data;
+export const verifyBookVolumeIntegrityOnServer = async volumeId => (await httpsCallable(getFunctionsClient(), 'verifyBookVolumeIntegrity')({ volumeId })).data;
+export const checkBookVolumeAuthenticityOnServer = async verificationCode => (await httpsCallable(getFunctionsClient(), 'checkBookVolumeAuthenticity')({ verificationCode })).data;
+
+export const updateWorkTypeOnServer = async payload => {
+  const response = await httpsCallable(getFunctionsClient(), 'updateWorkType')(payload);
+  return response.data;
+};
+
+export const updateAppointmentOnServer = async payload => {
+  const response = await httpsCallable(getFunctionsClient(), 'updateAppointment')(payload);
+  return response.data;
+};
+
 const callEmailFunction = async (name, payload = {}) => (await httpsCallable(getEmailFunctionsClient(), name)(payload)).data;
 export const sendAccessActivationOnServer = pessoaBaseId => callEmailFunction('sendAccessActivationMailjet', { pessoaBaseId });
 export const sendEmailVerificationOnServer = () => callEmailFunction('sendEmailVerificationMailjet');

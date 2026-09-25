@@ -864,6 +864,7 @@ service cloud.firestore {
       allow read: if isInternal(appId);
       allow create: if isAdmin(appId) || isGestor(appId);
       allow update: if !(resource.data.get('status', 'Aberta') in ['Concluída', 'Cancelada'])
+        && request.resource.data.get('status', 'Aberta') != 'Concluída'
         && (isAdmin(appId) || isGestor(appId)
           || (isAtendimento(appId) && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['vagasOcupadas', 'atualizadoEm', 'atualizadoPor'])));
@@ -947,9 +948,28 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{id} {
-      allow read: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_eventos', 'config_servicos'] && isInternal(appId);
-      allow create, update: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_eventos', 'config_servicos'] && isAdmin(appId);
+      allow read: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_eventos', 'config_servicos', 'config_grupos_trabalho', 'config_equipe_eventos', 'config_livro_mediunico'] && isInternal(appId);
+      allow create: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_eventos', 'config_servicos', 'config_grupos_trabalho', 'config_equipe_eventos', 'config_livro_mediunico'] && isAdmin(appId);
+      allow update: if collectionName in ['config_tipos_pessoa', 'config_funcoes_membro', 'config_servicos', 'config_grupos_trabalho', 'config_equipe_eventos', 'config_livro_mediunico'] && isAdmin(appId);
       allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/config_eventos/{id} {
+      allow read: if isInternal(appId);
+      allow create: if isAdmin(appId);
+      allow update: if isAdmin(appId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ativo', 'atualizadoEm', 'atualizadoPor']);
+      allow delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/livro_mediunico_registros/{id} {
+      allow read: if isAdmin(appId) || isGestor(appId);
+      allow create, update, delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/livro_mediunico_volumes/{id} {
+      allow read: if isAdmin(appId) || isGestor(appId);
+      allow create, update, delete: if false;
     }
 
     match /{document=**} { allow read, write: if false; }

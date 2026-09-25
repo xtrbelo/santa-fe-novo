@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   getAppCollection, 
+  getAppDoc,
   onSnapshot,
   query,
   Timestamp,
@@ -9,10 +10,17 @@ import {
 import { AtendimentoDiaCard } from './AtendimentoDiaCard';
 import { AlertCircle } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
+import { buildAttendanceWorkerGroups } from '../../utils/attendanceWorkers';
+import { getScheduledWorkerGroups } from '../../utils/workGroups';
 
 export const FluxoModule = ({ user, profile, onScheduleReturn }) => {
   const [agendasHoje, setAgendasHoje] = useState([]);
   const [servicos, setServicos] = useState([]);
+  const [pessoas, setPessoas] = useState([]);
+  const [funcoesMembro, setFuncoesMembro] = useState([]);
+  const [gruposTrabalho, setGruposTrabalho] = useState([]);
+  const [equipeEventos, setEquipeEventos] = useState([]);
+  const [responsaveisLivro, setResponsaveisLivro] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [reloadVersion, setReloadVersion] = useState(0);
@@ -23,7 +31,9 @@ export const FluxoModule = ({ user, profile, onScheduleReturn }) => {
     setLoadError('');
     let agendasReady = false;
     let servicesReady = false;
-    const markReady = () => { if (agendasReady && servicesReady) setLoading(false); };
+    let peopleReady = false;
+    let functionsReady = false; let groupsReady = false; let eventTeamReady = false; let bookReady = false;
+    const markReady = () => { if (agendasReady && servicesReady && peopleReady && functionsReady && groupsReady && eventTeamReady && bookReady) setLoading(false); };
     const handleLoadError = error => {
       console.error(error);
       setLoadError('Não foi possível acompanhar o fluxo em tempo real.');
@@ -55,10 +65,20 @@ export const FluxoModule = ({ user, profile, onScheduleReturn }) => {
       servicesReady = true;
       markReady();
     }, handleLoadError);
+    const unsubP = onSnapshot(getAppCollection('pessoas'), snapshot => { setPessoas(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))); peopleReady = true; markReady(); }, handleLoadError);
+    const unsubF = onSnapshot(getAppCollection('config_funcoes_membro'), snapshot => { setFuncoesMembro(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))); functionsReady = true; markReady(); }, handleLoadError);
+    const unsubG = onSnapshot(getAppCollection('config_grupos_trabalho'), snapshot => { setGruposTrabalho(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))); groupsReady = true; markReady(); }, handleLoadError);
+    const unsubE = onSnapshot(getAppCollection('config_equipe_eventos'), snapshot => { setEquipeEventos(snapshot.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.ativo !== false)); eventTeamReady = true; markReady(); }, handleLoadError);
+    const unsubB = onSnapshot(getAppDoc('config_livro_mediunico', 'responsaveis'), snapshot => { setResponsaveisLivro(snapshot.exists() ? snapshot.data() : null); bookReady = true; markReady(); }, handleLoadError);
 
     return () => {
       unsubA();
       unsubS();
+      unsubP();
+      unsubF();
+      unsubG();
+      unsubE();
+      unsubB();
     };
   }, [user, reloadVersion]);
 
@@ -93,16 +113,26 @@ export const FluxoModule = ({ user, profile, onScheduleReturn }) => {
             </p>
           </div>
         ) : (
-          agendasHoje.map(a => (
+          agendasHoje.map(a => {
+            const allWorkers = buildAttendanceWorkerGroups(pessoas, funcoesMembro);
+            const scheduledWorkers = getScheduledWorkerGroups({ agendaDate: a.data, groups: gruposTrabalho, workers: allWorkers });
+            return (
             <AtendimentoDiaCard 
               key={a.id} 
               agenda={a} 
               user={user} 
               profile={profile}
               servicosCatalogo={servicos} 
+              workerGroups={scheduledWorkers}
+              substituteWorkerGroups={allWorkers}
+              eventTeam={equipeEventos}
+              bookResponsibles={responsaveisLivro ? [
+                { ...pessoas.find(item => item.id === responsaveisLivro.titularPessoaId), id: responsaveisLivro.titularPessoaId, papel: 'titular' },
+                { ...pessoas.find(item => item.id === responsaveisLivro.substitutaPessoaId), id: responsaveisLivro.substitutaPessoaId, papel: 'substituta' },
+              ].filter(item => item.nome && item.ativo !== false) : []}
               onScheduleReturn={onScheduleReturn}
             />
-          ))
+          );})
         )}
       </div>
     </div>

@@ -1,0 +1,22 @@
+import React, { useState } from 'react';
+import { BookCheck, CircleAlert, LoaderCircle, Search, ShieldCheck, ShieldX } from 'lucide-react';
+import { Button } from '../../components/ui/Button';
+import { checkBookVolumeAuthenticityOnServer } from '../../services/firebaseFunctions';
+
+const formatCompetence = value => { const match = /^(\d{4})-(\d{2})$/.exec(String(value || '')); return match ? new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : 'Não informada'; };
+
+export const BookAuthenticityPage = () => {
+  const queryCode = new URLSearchParams(window.location.search).get('codigo') || '';
+  const [code, setCode] = useState(queryCode.toUpperCase().replace(/[^A-F0-9]/g, '').slice(0, 12));
+  const [state, setState] = useState({ loading: false, result: null, error: '' });
+  const check = async event => {
+    event.preventDefault(); if (!/^[A-F0-9]{12}$/.test(code)) { setState({ loading: false, result: null, error: 'Informe um código válido com 12 caracteres.' }); return; }
+    setState({ loading: true, result: null, error: '' });
+    try { const result = await checkBookVolumeAuthenticityOnServer(code); setState({ loading: false, result, error: '' }); }
+    catch (error) { console.error(error); setState({ loading: false, result: null, error: 'Não foi possível consultar o documento agora.' }); }
+  };
+  const result = state.result;
+  const presentation = !result?.found ? { icon: CircleAlert, className: 'border-amber-200 bg-amber-50 text-amber-900', title: 'Documento não localizado', text: 'Confira o código informado no relatório.' } : result.status === 'autentico_assinado' ? { icon: ShieldCheck, className: 'border-emerald-200 bg-emerald-50 text-emerald-900', title: 'Documento autêntico e assinado', text: 'A integridade do volume foi confirmada e o documento está arquivado.' } : result.status === 'autentico_nao_assinado' ? { icon: CircleAlert, className: 'border-amber-200 bg-amber-50 text-amber-900', title: 'Documento íntegro, ainda não assinado', text: 'O conteúdo confere, mas o volume ainda aguarda assinatura e arquivamento.' } : { icon: ShieldX, className: 'border-rose-200 bg-rose-50 text-rose-900', title: 'Documento com divergência', text: 'A integridade não pôde ser confirmada. Procure a Administração da Casa.' };
+  const ResultIcon = presentation.icon;
+  return <main className="flex min-h-screen items-center justify-center bg-indigo-50/50 p-4"><section className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-xl sm:p-9"><div className="text-center"><img src="/logo_santa_fe.png" alt="Casa de Auxílio Santa Fé" className="mx-auto h-20 w-20 object-contain"/><BookCheck className="mx-auto mt-4 text-indigo-700" size={34}/><h1 className="mt-2 text-2xl font-black text-gray-950">Verificar Livro Mediúnico</h1><p className="mt-2 text-sm text-gray-600">Consulte a autenticidade sem acessar dados pessoais.</p></div><form onSubmit={check} className="mt-7 space-y-3"><label className="block text-xs font-black uppercase text-gray-600">Código de verificação<input value={code} onChange={event => setCode(event.target.value.toUpperCase().replace(/[^A-F0-9]/g, '').slice(0, 12))} placeholder="Ex.: A1B2C3D4E5F6" autoComplete="off" className="mt-2 w-full rounded-xl border border-gray-200 p-3 text-center font-mono text-lg font-bold tracking-widest outline-none focus:border-indigo-500"/></label><Button type="submit" className="w-full" disabled={state.loading}>{state.loading ? <LoaderCircle className="animate-spin" size={18}/> : <Search size={18}/>} Verificar documento</Button></form>{state.error && <p className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-bold text-rose-700">{state.error}</p>}{result && <div className={`mt-6 rounded-2xl border p-5 text-center ${presentation.className}`}><ResultIcon className="mx-auto" size={42}/><h2 className="mt-3 text-lg font-black">{presentation.title}</h2><p className="mt-1 text-sm">{presentation.text}</p>{result.found && <dl className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-white/70 p-3 text-left text-sm"><div><dt className="text-xs font-bold text-gray-500">Volume</dt><dd className="font-black">{result.volumeNumber}</dd></div><div><dt className="text-xs font-bold text-gray-500">Competência</dt><dd className="font-black capitalize">{formatCompetence(result.competence)}</dd></div><div className="col-span-2"><dt className="text-xs font-bold text-gray-500">Código</dt><dd className="font-mono font-black">{result.verificationCode}</dd></div></dl>}</div>}</section></main>;
+};

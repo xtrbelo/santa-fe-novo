@@ -17,7 +17,7 @@ import {
   sortQueue, 
   getStatusColor 
 } from '../../utils/formatters';
-import { agendaAceitaServico, getAgendaPublicosPermitidos, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoFluxoDia, servicoAtivoNaAgenda } from '../../utils/domain';
+import { agendaAceitaServico, agendaExigeCpf, getAgendaPublicosPermitidos, getNomeServicoAtendimento, getPessoaVinculo, getServicosAtivosAtendimento, isAtendimentoCasa, isAtendimentoFluxoDia, isEventoServicos, isTipoTrabalhoAtendimento, servicoAtivoNaAgenda } from '../../utils/domain';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
@@ -26,6 +26,7 @@ import { useToast } from '../../components/ui/useToast';
 import { PessoaSearchSelector } from '../../components/pessoas/PessoaSearchSelector';
 import { PessoaFormModal } from '../../components/pessoas/PessoaFormModal';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
+import { closeDayWithWorkersOnServer } from '../../services/firebaseFunctions';
 import { 
   BookOpenCheck, 
   Plus, 
@@ -39,7 +40,7 @@ import {
 
 const correctionOptions = status => ({ 'Concluído': ['Presente', 'Agendado'], Presente: ['Agendado'], Faltou: ['Agendado'] }[status] || []);
 
-export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, onScheduleReturn }) => {
+export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, workerGroups, substituteWorkerGroups, eventTeam = [], bookResponsibles = [], onScheduleReturn }) => {
   const [fila, setFila] = useState([]);
   const [modalWiz, setModalWiz] = useState(false);
   const [selCons, setSelCons] = useState(null);
@@ -55,8 +56,20 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
   const [correctionReason, setCorrectionReason] = useState('');
   const [correctingStatus, setCorrectingStatus] = useState(false);
   const [returnTarget, setReturnTarget] = useState(null);
+  const [dayClosingOpen, setDayClosingOpen] = useState(false);
+  const [selectedWorkers, setSelectedWorkers] = useState({ medium: {}, cambone: {} });
+  const [selectedSubstitutes, setSelectedSubstitutes] = useState({ medium: {}, cambone: {} });
+  const [showSubstitutes, setShowSubstitutes] = useState(false);
+  const [workerSearch, setWorkerSearch] = useState('');
+  const [savingFinal, setSavingFinal] = useState(false);
+  const [eventClosingOpen, setEventClosingOpen] = useState(false);
+  const [selectedEventTeam, setSelectedEventTeam] = useState({});
+  const [bookResponsibleId, setBookResponsibleId] = useState('');
 
   const toast = useToast();
+  const isAttendanceWork = isTipoTrabalhoAtendimento(agenda);
+  const requiresWorkers = isAtendimentoCasa(agenda);
+  const isServiceEvent = isEventoServicos(agenda);
   const agendaServices = servicosCatalogo.filter(service => agendaAceitaServico(agenda, service.id) && servicoAtivoNaAgenda(agenda, service.id));
 
   useEffect(() => {
@@ -76,11 +89,32 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
     try {
       await updateAtendimentoStatus({ agendaId: agenda.id, agendamentoId: appointment.id, status: st, userId: user.uid });
       toast.success(`Status alterado para ${st}`);
-      if (st === 'Concluído') setReturnTarget(appointment);
+      return true;
     } catch (err) {
       console.error(err);
       toast.error('Erro ao atualizar status.');
+      return false;
     }
+  };
+
+  const startDayClosing = () => { setDayClosingOpen(true); setSelectedWorkers({ medium: {}, cambone: {} }); setSelectedSubstitutes({ medium: {}, cambone: {} }); setBookResponsibleId(''); setShowSubstitutes(false); setWorkerSearch(''); };
+  const toggleWorker = (role, id) => setSelectedWorkers(current => { const other = role === 'medium' ? 'cambone' : 'medium'; return { ...current, [role]: { ...current[role], [id]: !current[role][id] }, [other]: { ...current[other], [id]: false } }; });
+  const toggleSubstitute = (role, id) => setSelectedSubstitutes(current => { const other = role === 'medium' ? 'cambone' : 'medium'; return { ...current, [role]: { ...current[role], [id]: !current[role][id] }, [other]: { ...current[other], [id]: false } }; });
+  const confirmCompletion = async () => {
+    const mediunsIds = Object.keys(selectedWorkers.medium).filter(id => selectedWorkers.medium[id]);
+    const cambonesIds = Object.keys(selectedWorkers.cambone).filter(id => selectedWorkers.cambone[id]);
+    const substituteMediunsIds = Object.keys(selectedSubstitutes.medium).filter(id => selectedSubstitutes.medium[id]);
+    const substituteCambonesIds = Object.keys(selectedSubstitutes.cambone).filter(id => selectedSubstitutes.cambone[id]);
+    if (requiresWorkers && !mediunsIds.length && !cambonesIds.length && !substituteMediunsIds.length && !substituteCambonesIds.length) { toast.error('Informe pelo menos um trabalhador participante.'); return; }
+    if (requiresWorkers && !bookResponsibleId) { toast.error('Informe a dirigente responsável pelo atendimento.'); return; }
+    setSavingFinal(true);
+    try {
+      const eventTeamIds = Object.keys(selectedEventTeam).filter(id => selectedEventTeam[id]);
+      if (isServiceEvent && !eventTeamIds.length) { toast.error('Informe pelo menos um profissional ou voluntário do evento.'); setSavingFinal(false); return; }
+      await closeDayWithWorkersOnServer({ agendaId: agenda.id, mediunsIds, cambonesIds, substituteMediunsIds, substituteCambonesIds, eventTeamIds, dirigenteResponsavelId: requiresWorkers ? bookResponsibleId : '' });
+      setDayClosingOpen(false); setEventClosingOpen(false); toast.success(requiresWorkers ? 'Atendimento do dia fechado com a equipe registrada.' : isServiceEvent ? 'Evento encerrado com a equipe registrada.' : 'Lista de presença fechada.');
+    } catch (error) { console.error(error); toast.error(error?.message?.includes('ATENDIMENTOS_PENDENTES') ? 'Ainda existem atendimentos pendentes.' : 'Não foi possível fechar o atendimento do dia.'); }
+    finally { setSavingFinal(false); }
   };
 
   const togglePriority = async (appointment) => {
@@ -117,6 +151,7 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
       toast.error('O vínculo desta pessoa não é permitido nesta agenda.');
       return;
     }
+    if (agendaExigeCpf(agenda) && !selCons?.cpf) { toast.error('Esta programação exige CPF do participante.'); return; }
 
     try {
       await createAgendamento({ agenda, pessoa: selCons, servicos: srvs, userId: user.uid, status: 'Presente', horaChegada: Timestamp.now() });
@@ -131,6 +166,18 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
       else if (err.message.startsWith('SEM_VAGA:')) toast.error(`Não há vagas disponíveis para ${err.message.split(':')[1]}.`);
       else if (err.code === 'permission-denied' || err.code === 'firestore/permission-denied') toast.error('A operação foi bloqueada pelas regras de segurança.');
       else toast.error('Erro ao marcar presença.');
+    }
+  };
+
+  const registerMemberPresence = async pessoa => {
+    try {
+      await createAgendamento({ agenda, pessoa, servicos: [], userId: user.uid, status: 'Presente', horaChegada: Timestamp.now() });
+      toast.success(`Presença registrada para ${pessoa.nome}.`);
+      setModalWiz(false); setSelCons(null);
+    } catch (error) {
+      console.error(error);
+      if (error.message === 'AGENDAMENTO_DUPLICADO') toast.error('Esta pessoa já está registrada nesta atividade.');
+      else toast.error('Não foi possível registrar a presença.');
     }
   };
 
@@ -187,7 +234,7 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
               {agenda.tipo}
             </h4>
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-              Atendimentos de Hoje
+              {isAttendanceWork ? 'Atendimentos de Hoje' : 'Presenças de Hoje'}
             </p>
           </div>
         </div>
@@ -201,7 +248,7 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
           variant="secondary" 
           className="px-3.5 py-2 text-xs h-auto rounded-xl"
         >
-          <Plus size={14} /> Marcação Rápida
+          <Plus size={14} /> {isAttendanceWork ? 'Marcação Rápida' : 'Registrar presença'}
         </Button>
       </div>
 
@@ -240,7 +287,7 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
                 <span className={`text-[10px] font-black uppercase px-2.5 py-1.5 rounded-lg shadow-sm ${getStatusColor(c.status)}`}>{c.status}</span>
               </div>
 
-              {['Agendado', 'Presente'].includes(c.status) && <div className="flex flex-wrap gap-2 mt-3">
+              {isAttendanceWork && ['Agendado', 'Presente'].includes(c.status) && <div className="flex flex-wrap gap-2 mt-3">
                 <Button onClick={() => startServiceEdit(c)} variant="secondary" className="px-3 h-10"><Pencil size={16}/> Alterar serviços</Button>
                 <Button onClick={() => togglePriority(c)} variant="secondary" className={`px-3 h-10 ${c.prioridade ? 'text-amber-600 bg-amber-50' : ''}`} title="Alternar prioridade">
                   <Star size={16} fill={c.prioridade ? 'currentColor' : 'none'} /> Prioridade
@@ -250,21 +297,24 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
                   <Button onClick={() => updateSt(c, 'Faltou')} variant="secondary" className="px-3 h-10"><UserX size={16} /> Faltou</Button>
                   <Button onClick={() => updateSt(c, 'Presente')} className="flex-1 min-w-48 h-10 bg-blue-600 hover:bg-blue-700 text-white"><UserCheck size={16} /> Dar Entrada</Button>
                 </>}
-                {c.status === 'Presente' && <Button onClick={() => updateSt(c, 'Concluído')} variant="success" className="flex-1 min-w-48 h-10"><CheckCircle2 size={16} /> Finalizar Atendimento</Button>}
+                {c.status === 'Presente' && <Button onClick={async () => { if (await updateSt(c, 'Concluído')) setReturnTarget(c); }} variant="success" className="flex-1 min-w-48 h-10"><CheckCircle2 size={16} /> Finalizar Atendimento</Button>}
               </div>}
-              {hasPermission(profile, PERMISSIONS.ATTENDANCE_STATUS_CORRECT) && correctionOptions(c.status).length > 0 && <Button onClick={() => startStatusCorrection(c)} variant="ghost" className="mt-2 h-9 px-3 text-xs text-amber-700"><RotateCcw size={15}/> Corrigir status</Button>}
+              {!isAttendanceWork && c.status === 'Agendado' && <Button onClick={() => updateSt(c, 'Presente')} className="mt-3 w-full h-10 bg-blue-600 hover:bg-blue-700 text-white"><UserCheck size={16}/> Registrar presença</Button>}
+              {isAttendanceWork && hasPermission(profile, PERMISSIONS.ATTENDANCE_STATUS_CORRECT) && correctionOptions(c.status).length > 0 && <Button onClick={() => startStatusCorrection(c)} variant="ghost" className="mt-2 h-9 px-3 text-xs text-amber-700"><RotateCcw size={15}/> Corrigir status</Button>}
             </div>
           ))
         )}
       </div>
 
+      {fila.length > 0 && fila.every(item => !(isAttendanceWork ? ['Agendado', 'Presente'] : ['Agendado']).includes(item.status)) && <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-sm font-black text-emerald-950">{isAttendanceWork ? 'Todos os atendimentos foram encerrados.' : 'As presenças do trabalho foram registradas.'}</p>{requiresWorkers ? workerGroups?.groups?.length ? <><p className="mb-3 text-xs text-emerald-700">Turma(s): {workerGroups.groups.map(group => group.nome).join(', ')}. Informe quem realmente trabalhou hoje.</p><Button variant="success" className="w-full" onClick={startDayClosing}><CheckCircle2 size={18}/> Fechar atendimento do dia</Button></> : <p className="mt-1 text-xs font-bold text-rose-700">Nenhuma turma está configurada para este dia. Cadastre a turma em Configurações para realizar o fechamento.</p> : <><p className="mb-3 text-xs text-emerald-700">{isServiceEvent ? 'Este evento não utiliza turma de médiuns e cambones.' : 'Este trabalho interno não utiliza turma de atendimento.'}</p><Button variant="success" className="w-full" onClick={isServiceEvent ? () => { setSelectedEventTeam({}); setEventClosingOpen(true); } : confirmCompletion} disabled={savingFinal}><CheckCircle2 size={18}/> {savingFinal ? 'Fechando...' : isServiceEvent ? 'Fechar evento' : 'Fechar lista de presença'}</Button></>}</div>}
+
       <Modal 
         isOpen={modalWiz} 
         onClose={() => setModalWiz(false)} 
-        title="Marcação Rápida de Atendimento"
+        title={isAttendanceWork ? 'Marcação Rápida de Atendimento' : 'Registrar presença'}
       >
         {step === 'search' ? (
-          <PessoaSearchSelector value={selCons} onChange={setSelCons} onContinue={() => setStep('services')} onCreateNew={setNewPersonName} accent="emerald" />
+          <PessoaSearchSelector value={selCons} onChange={isAttendanceWork ? setSelCons : registerMemberPresence} onContinue={isAttendanceWork ? () => setStep('services') : null} onCreateNew={isAttendanceWork ? setNewPersonName : null} allowedVinculos={isAttendanceWork ? null : ['membro']} accent="emerald" />
         ) : (
           <div className="space-y-6">
             <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center gap-3">
@@ -309,10 +359,17 @@ export const AtendimentoDiaCard = ({ agenda, user, profile, servicosCatalogo, on
       <Modal isOpen={!!serviceTarget} onClose={() => !savingServices && setServiceTarget(null)} title="Alterar serviços do atendimento">
         <div className="space-y-5"><div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><p className="text-sm font-black text-emerald-950">{serviceTarget?.nome}</p><p className="mt-1 text-xs text-emerald-700">O atendimento continuará único para esta pessoa.</p></div><div className="space-y-2"><p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Serviços deste atendimento</p>{agendaServices.map(service => <label key={service.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${editSrvs[service.id] ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 bg-white'}`}><input type="checkbox" checked={editSrvs[service.id] || false} onChange={() => setEditSrvs(current => ({ ...current, [service.id]: !current[service.id] }))} className="h-4 w-4 rounded text-emerald-600"/><span className="text-sm font-bold text-gray-700">{service.nome}</span></label>)}</div><div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={savingServices} onClick={() => setServiceTarget(null)}>Cancelar</Button><Button variant="success" disabled={savingServices} onClick={confirmServiceEdit}>{savingServices ? 'Salvando...' : 'Salvar serviços'}</Button></div></div>
       </Modal>
+      <Modal isOpen={eventClosingOpen} onClose={() => !savingFinal && setEventClosingOpen(false)} title="Fechar evento">
+        <div className="space-y-4"><div className="rounded-xl bg-cyan-50 p-3"><p className="text-sm font-black text-cyan-950">Equipe que trabalhou no evento</p><p className="text-xs text-cyan-800">Marque todos os profissionais e voluntários participantes.</p></div><div className="max-h-80 space-y-2 overflow-y-auto">{eventTeam.map(member => <label key={member.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${selectedEventTeam[member.id] ? 'border-cyan-300 bg-cyan-50' : 'border-gray-100'}`}><input type="checkbox" checked={selectedEventTeam[member.id] || false} onChange={() => setSelectedEventTeam(current => ({ ...current, [member.id]: !current[member.id] }))} className="h-4 w-4 rounded text-cyan-700"/><span><strong className="block text-sm">{member.nome}</strong><span className="text-xs text-cyan-800">{member.funcao}</span></span></label>)}{!eventTeam.length && <p className="rounded-xl bg-rose-50 p-3 text-xs font-bold text-rose-700">Cadastre a equipe em Configurações antes de fechar o evento.</p>}</div><div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={savingFinal} onClick={() => setEventClosingOpen(false)}>Cancelar</Button><Button variant="success" disabled={savingFinal || !eventTeam.length} onClick={confirmCompletion}>{savingFinal ? 'Fechando...' : 'Confirmar fechamento'}</Button></div></div>
+      </Modal>
+
+      <Modal isOpen={dayClosingOpen} onClose={() => !savingFinal && setDayClosingOpen(false)} title="Fechar atendimento do dia">
+        <div className="space-y-4"><div className="rounded-xl bg-emerald-50 p-3"><p className="text-sm font-black text-emerald-950">Equipe do dia</p><p className="text-xs text-emerald-700">Turma(s): {workerGroups?.groups?.map(group => group.nome).join(', ')}</p></div><input value={workerSearch} onChange={event => setWorkerSearch(event.target.value)} placeholder="Buscar trabalhador pelo nome" className="w-full rounded-xl bg-gray-50 p-3 text-sm"/>{[['medium', 'Médiuns', workerGroups?.mediuns || []], ['cambone', 'Cambones', workerGroups?.cambones || []]].map(([role, label, workers]) => { const visibleWorkers = workers.filter(item => String(item.nome || '').toLowerCase().includes(workerSearch.trim().toLowerCase())); return <section key={role}><p className="mb-2 text-xs font-black uppercase text-gray-500">{label} da turma</p><div className="max-h-44 space-y-2 overflow-y-auto">{visibleWorkers.map(worker => <label key={worker.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${selectedWorkers[role][worker.id] ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100'}`}><input type="checkbox" checked={selectedWorkers[role][worker.id] || false} onChange={() => toggleWorker(role, worker.id)} className="h-4 w-4 rounded text-emerald-600"/><span className="text-sm font-bold">{worker.nome}</span></label>)}{!visibleWorkers.length && <p className="rounded-xl bg-gray-50 p-3 text-xs text-gray-500">Nenhum trabalhador disponível nesta função.</p>}</div></section>; })}<button className="text-sm font-bold text-indigo-700" onClick={() => setShowSubstitutes(value => !value)}>{showSubstitutes ? 'Ocultar substitutos' : '+ Adicionar substituto'}</button>{showSubstitutes && [['medium', 'Médiuns substitutos', substituteWorkerGroups?.mediuns || []], ['cambone', 'Cambones substitutos', substituteWorkerGroups?.cambones || []]].map(([role, label, workers]) => { const regularIds = new Set([...(workerGroups?.mediuns || []), ...(workerGroups?.cambones || [])].map(item => item.id)); const visible = workers.filter(item => !regularIds.has(item.id) && String(item.nome || '').toLowerCase().includes(workerSearch.trim().toLowerCase())); return <section key={`sub-${role}`}><p className="mb-2 text-xs font-black uppercase text-indigo-600">{label}</p><div className="max-h-36 space-y-2 overflow-y-auto">{visible.map(worker => <label key={worker.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${selectedSubstitutes[role][worker.id] ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100'}`}><input type="checkbox" checked={selectedSubstitutes[role][worker.id] || false} onChange={() => toggleSubstitute(role, worker.id)} className="h-4 w-4 rounded text-indigo-600"/><span className="text-sm font-bold">{worker.nome}</span></label>)}{!visible.length && <p className="text-xs text-gray-500">Nenhum substituto disponível.</p>}</div></section>; })}<p className="text-xs text-gray-500">É obrigatório informar pelo menos um participante. Substitutos serão identificados no histórico.</p><label className="block text-xs font-black uppercase text-gray-500">Dirigente responsável pelo trabalho *<select value={bookResponsibleId} onChange={event => setBookResponsibleId(event.target.value)} className="mt-1 w-full rounded-xl bg-violet-50 p-3 text-sm"><option value="">Selecione</option>{bookResponsibles.map(item => <option key={item.id} value={item.id}>{item.nome} · {item.papel === 'titular' ? 'Dirigente titular' : 'Responsável substituta'}</option>)}</select></label>{!bookResponsibles.length && <p className="rounded-xl bg-rose-50 p-3 text-xs font-bold text-rose-700">Configure as responsáveis pelo Livro Mediúnico antes do fechamento.</p>}<div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={savingFinal} onClick={() => setDayClosingOpen(false)}>Cancelar</Button><Button variant="success" disabled={savingFinal} onClick={confirmCompletion}>{savingFinal ? 'Fechando...' : 'Fechar o dia'}</Button></div></div>
+      </Modal>
       <Modal isOpen={!!correctionTarget} onClose={() => !correctingStatus && setCorrectionTarget(null)} title="Corrigir status do atendimento">
         <div className="space-y-4"><div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Use esta opção somente para desfazer uma marcação incorreta. A correção ficará registrada na auditoria.</div><p className="text-sm"><strong>Pessoa:</strong> {correctionTarget?.nome}</p><p className="text-sm"><strong>Status atual:</strong> {correctionTarget?.status}</p><label className="block text-sm font-bold">Novo status<select value={correctionStatus} onChange={event => setCorrectionStatus(event.target.value)} className="mt-1 w-full rounded-xl bg-gray-50 p-3">{correctionOptions(correctionTarget?.status).map(status => <option key={status}>{status}</option>)}</select></label><label className="block text-sm font-bold">Motivo<textarea value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Ex.: Finalizado por engano; a pessoa ainda aguarda atendimento." className="mt-1 min-h-24 w-full rounded-xl bg-gray-50 p-3"/></label><div className="grid grid-cols-2 gap-3"><Button variant="secondary" disabled={correctingStatus} onClick={() => setCorrectionTarget(null)}>Cancelar</Button><Button variant="warning" disabled={correctingStatus || !correctionReason.trim()} onClick={confirmStatusCorrection}>{correctingStatus ? 'Corrigindo...' : 'Confirmar correção'}</Button></div></div>
       </Modal>
-      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' ? ['consulente'] : ['consulente', 'membro']} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
+      <PessoaFormModal key={newPersonName || 'closed'} isOpen={newPersonName !== null} initialName={newPersonName || ''} user={user} allowedVinculos={profile?.role === 'atendimento' || isServiceEvent ? ['consulente'] : ['consulente', 'membro']} cpfRequired={agendaExigeCpf(agenda)} onClose={() => setNewPersonName(null)} onSaved={pessoa => { setSelCons(pessoa); setStep('services'); }} />
 
       <ConfirmDialog
         isOpen={!!returnTarget}

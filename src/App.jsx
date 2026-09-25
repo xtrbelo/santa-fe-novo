@@ -32,6 +32,7 @@ const AutocadastroMembroPage = lazyNamed(() => import('./modules/Autocadastro/Au
 const AtivacaoAcessoPage = lazyNamed(() => import('./modules/AtivacaoAcesso/AtivacaoAcessoPage'), 'AtivacaoAcessoPage');
 const MeuCadastroModule = lazyNamed(() => import('./modules/MeuCadastro/MeuCadastroModule'), 'MeuCadastroModule');
 const AuditoriaModule = lazyNamed(() => import('./modules/Auditoria/AuditoriaModule'), 'AuditoriaModule');
+const BookAuthenticityPage = lazyNamed(() => import('./modules/Livro/BookAuthenticityPage'), 'BookAuthenticityPage');
 
 const ModuleLoading = () => <div className="min-h-40 flex items-center justify-center"><p className="font-bold text-gray-500">Carregando módulo...</p></div>;
 
@@ -314,11 +315,12 @@ function AppContent() {
 export default function App() {
   const isPublicSelfRegistration = window.location.pathname === '/autocadastro';
   const isAccessActivation = window.location.pathname === '/ativar-acesso';
+  const isBookAuthenticity = window.location.pathname === '/verificar-livro';
   useEffect(() => {
-    if (!isPublicSelfRegistration && !isAccessActivation) return;
-    const page = isPublicSelfRegistration ? 'Autocadastro' : isAccessActivation ? 'Ativação de acesso' : 'Sistema';
+    if (!isPublicSelfRegistration && !isAccessActivation && !isBookAuthenticity) return;
+    const page = isPublicSelfRegistration ? 'Autocadastro' : isAccessActivation ? 'Ativação de acesso' : 'Verificar Livro Mediúnico';
     const environment = import.meta.env.MODE === 'hml' ? ' • HML' : '';
     document.title = `${page} • Santa Fé${environment}`;
-  }, [isAccessActivation, isPublicSelfRegistration]);
-  return <ToastProvider><ConnectionStatus/><div className="flex min-h-screen flex-col"><div className="flex-1"><Suspense fallback={<ModuleLoading />}>{isPublicSelfRegistration ? <AutocadastroMembroPage /> : isAccessActivation ? <AtivacaoAcessoPage /> : <AppContent />}</Suspense></div><AppFooter /></div></ToastProvider>;
+  }, [isAccessActivation, isBookAuthenticity, isPublicSelfRegistration]);
+  return <ToastProvider><ConnectionStatus/><div className="flex min-h-screen flex-col"><div className="flex-1"><Suspense fallback={<ModuleLoading />}>{isPublicSelfRegistration ? <AutocadastroMembroPage /> : isAccessActivation ? <AtivacaoAcessoPage /> : isBookAuthenticity ? <BookAuthenticityPage /> : <AppContent />}</Suspense></div><AppFooter /></div></ToastProvider>;
 }
