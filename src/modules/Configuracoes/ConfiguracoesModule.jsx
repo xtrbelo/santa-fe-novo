@@ -18,6 +18,7 @@ import { WorkGroupsPanel } from './WorkGroupsPanel';
 import { EventTeamPanel } from './EventTeamPanel';
 import { BookResponsiblesPanel } from './BookResponsiblesPanel';
 import { BookVolumesPanel } from './BookVolumesPanel';
+import { SystemBackupPanel } from './SystemBackupPanel';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 
@@ -255,6 +256,7 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
     {canManageConfig && <Card className="space-y-4"><EventTeamPanel user={user}/></Card>}
     {canManageConfig && <Card className="space-y-4"><BookResponsiblesPanel user={user}/></Card>}
     {canManageConfig && <Card className="space-y-4"><BookVolumesPanel /></Card>}
+    {canManageConfig && <Card className="space-y-4"><SystemBackupPanel /></Card>}
     {canManageConfig && <Card className="space-y-4">
       <h3 className="font-black uppercase text-blue-700 flex gap-2"><DatabaseZap size={18}/> Manutenção</h3>
       <SystemHealthPanel />

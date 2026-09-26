@@ -542,7 +542,7 @@ service cloud.firestore {
             || request.resource.data.status != 'ativo'
             || request.resource.data.expiraEm == null
             || request.resource.data.expiraEm > request.time))
-        || (request.auth == null
+        || (false && request.auth == null
           && resource.data.status == 'ativo'
           && (resource.data.expiraEm == null || resource.data.expiraEm > request.time)
           && request.resource.data.status == resource.data.status
@@ -571,7 +571,7 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/solicitacoes_cadastro/{requestId} {
       allow get, list: if canManageMemberIntake(appId);
-      allow create: if request.auth == null
+      allow create: if false && request.auth == null
         && requestId.matches('^[A-Za-z0-9]{20}$')
         && request.resource.data.keys().hasOnly([
           'linkId', 'tipoCadastro', 'nome', 'cpf', 'contato', 'email', 'dataNascimento',
@@ -657,7 +657,7 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/verificacoes_email_cadastro/{verificationId} {
       allow read, create, delete: if false;
-      allow update: if request.auth == null
+      allow update: if false && request.auth == null
         && verificationId.matches('^[A-Za-z0-9]{20}$')
         && resource.data.status == 'confirmado'
         && resource.data.expiraEm > request.time
@@ -944,6 +944,11 @@ service cloud.firestore {
 
     match /artifacts/{appId}/public/data/comunicacoes_email/{id} {
       allow read: if canManageMemberIntake(appId);
+      allow create, update, delete: if false;
+    }
+
+    match /artifacts/{appId}/public/data/sistema_operacional/{id} {
+      allow read: if isAdmin(appId) || isGestor(appId);
       allow create, update, delete: if false;
     }
 

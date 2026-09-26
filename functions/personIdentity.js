@@ -1,3 +1,5 @@
+import { isValidCpf } from './cpfValidation.js';
+
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const memberType = person => String(person?.vinculo || person?.tipoPessoa || '').trim().toLowerCase();
 
@@ -24,8 +26,9 @@ export const validateSecurePersonPayload = data => {
   const vinculo = data?.vinculo;
   const nome = String(data?.nome || '').trim();
   if (!['membro', 'consulente'].includes(vinculo) || !nome) throw new Error('PESSOA_INVALIDA');
+  if (data.cpf && !isValidCpf(data.cpf)) throw new Error('CPF_INVALIDO');
   if (vinculo === 'membro') {
-    if (!/^\d{11}$/.test(String(data.cpf || ''))) throw new Error('CPF_MEMBRO_INVALIDO');
+    if (!isValidCpf(data.cpf)) throw new Error('CPF_MEMBRO_INVALIDO');
     if (!/^[^\s/@]+@[^\s/@]+\.[^\s/@]+$/.test(normalizeEmail(data.email))) throw new Error('EMAIL_MEMBRO_INVALIDO');
   }
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../../components/ui/Card';
-import { getAppCollection, getCountFromServer, onSnapshot, query, where } from '../../services/firebase';
+import { getAppCollection, getAppDoc, getCountFromServer, onSnapshot, query, where } from '../../services/firebase';
 import { canAccessModule, hasPermission, MODULES, PERMISSIONS } from '../../constants/permissions';
 import { ROLES } from '../../constants/roles';
 import { buildOperationalAlerts, isRegistrationOverdue, summarizeBookPendingItems } from '../../utils/operationalAlerts';
@@ -14,6 +14,7 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers, onOpenPend
   const [overdueRegistrations, setOverdueRegistrations] = useState(0);
   const [communicationFailures, setCommunicationFailures] = useState(0);
   const [bookPending, setBookPending] = useState({ unsignedCount: 0, oldestUnsignedCompetence: '', incompleteCount: 0, automaticClosureFailures: 0 });
+  const [backupStatus, setBackupStatus] = useState(null);
   const canViewUsers = hasPermission(profile, PERMISSIONS.USERS_VIEW);
   const canManageBook = hasPermission(profile, PERMISSIONS.CONFIG_MANAGE);
 
@@ -63,13 +64,20 @@ export const HomeModule = ({ user, profile, onSelectTab, onOpenUsers, onOpenPend
     return () => { unsubVolumes(); unsubRecords(); };
   }, [canManageBook]);
 
-  const operationalAlerts = buildOperationalAlerts({ overdueRegistrations, communicationFailures, pendingUsers: pendingCount || 0, bookUnsignedVolumes: bookPending.unsignedCount, bookOldestUnsignedCompetence: bookPending.oldestUnsignedCompetence, bookIncompleteRecords: bookPending.incompleteCount, bookAutomaticClosureFailures: bookPending.automaticClosureFailures });
+  useEffect(() => {
+    if (!canManageBook) { setBackupStatus(null); return undefined; }
+    return onSnapshot(getAppDoc('sistema_operacional', 'backup'), snapshot => setBackupStatus(snapshot.exists() ? snapshot.data() : null), error => console.error(error));
+  }, [canManageBook]);
+
+  const backupLastSuccess = backupStatus?.ultimoSucessoEm?.toMillis?.() || 0;
+  const operationalAlerts = buildOperationalAlerts({ overdueRegistrations, communicationFailures, pendingUsers: pendingCount || 0, bookUnsignedVolumes: bookPending.unsignedCount, bookOldestUnsignedCompetence: bookPending.oldestUnsignedCompetence, bookIncompleteRecords: bookPending.incompleteCount, bookAutomaticClosureFailures: bookPending.automaticClosureFailures, backupFailed: backupStatus?.status === 'erro', backupStale: Boolean(backupStatus && backupStatus.status !== 'executando' && (!backupLastSuccess || Date.now() - backupLastSuccess > 36 * 60 * 60 * 1000)) });
   const openAlert = action => {
     if (action === 'book') {
       onSelectTab(MODULES.CONFIG);
       window.setTimeout(() => document.getElementById('livro-mediunico')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
       return;
     }
+    if (action === 'backup') { onSelectTab(MODULES.CONFIG); window.setTimeout(() => document.getElementById('backup-sistema')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150); return; }
     if (action === 'communications') onOpenCommunications(); else if (action === 'registrations') onOpenPendingRegistrations(); else onOpenUsers('pendentes');
   };
 

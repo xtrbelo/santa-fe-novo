@@ -24,7 +24,8 @@ export const summarizeBookPendingItems = (volumes = [], records = []) => {
   return { unsignedCount: unsigned.length, oldestUnsignedCompetence: competenceOf(unsigned[0]), incompleteCount: incomplete.length, automaticClosureFailures: activeVolumes.filter(volume => volume.status === 'aberto' && volume.fechamentoAutomaticoErro).length };
 };
 
-export const buildOperationalAlerts = ({ overdueRegistrations = 0, communicationFailures = 0, pendingUsers = 0, bookUnsignedVolumes = 0, bookOldestUnsignedCompetence = '', bookIncompleteRecords = 0, bookAutomaticClosureFailures = 0 }) => [
+export const buildOperationalAlerts = ({ overdueRegistrations = 0, communicationFailures = 0, pendingUsers = 0, bookUnsignedVolumes = 0, bookOldestUnsignedCompetence = '', bookIncompleteRecords = 0, bookAutomaticClosureFailures = 0, backupFailed = false, backupStale = false }) => [
+  (backupFailed || backupStale) && { id: 'system-backup-failure', priority: 5, tone: 'rose', title: backupFailed ? 'Falha no backup automático' : 'Backup automático atrasado', description: 'Execute o backup manual e confira o resultado', action: 'backup' },
   communicationFailures > 0 && { id: 'communication-failures', priority: 3, tone: 'rose', title: 'Falhas de comunicação', description: `${communicationFailures} mensagem(ns) precisam de verificação`, action: 'communications' },
   bookAutomaticClosureFailures > 0 && { id: 'book-automatic-closure-failures', priority: 4, tone: 'rose', title: 'Falha no fechamento mensal', description: `${bookAutomaticClosureFailures} volume(s) precisam ser fechados manualmente`, action: 'book' },
   bookIncompleteRecords > 0 && { id: 'book-incomplete-records', priority: 3, tone: 'rose', title: 'Livro Mediúnico com registros incompletos', description: `${bookIncompleteRecords} fechamento(s) precisam de conferência`, action: 'book' },

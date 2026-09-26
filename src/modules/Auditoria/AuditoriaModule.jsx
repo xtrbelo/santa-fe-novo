@@ -6,7 +6,7 @@ import { DataLoadState } from '../../components/ui/DataLoadState';
 import { buildAuditCsv, describeAuditEvent, filterAuditEvents, getAuditChanges, getAuditFieldDetails, getAuditOrigin, getAuditReferences, getClosureDetails, paginateAuditEvents } from '../../utils/auditCenter';
 import { Button } from '../../components/ui/Button';
 import { ROLE_LABELS } from '../../constants/roles';
-import { archiveAuditHistoryOnServer } from '../../services/firebaseFunctions';
+import { archiveAuditHistoryOnServer, recordDataExportOnServer } from '../../services/firebaseFunctions';
 import { useToast } from '../../components/ui/useToast';
 
 const categoryLabels = { todos: 'Todas as categorias', cadastro: 'Cadastros', acesso: 'Acessos', agenda: 'Agendas', atendimento: 'Atendimentos', outros: 'Outros' };
@@ -69,10 +69,14 @@ export const AuditoriaModule = ({ onOpenPerson }) => {
   const filtered = useMemo(() => filterAuditEvents(enriched, { category, type, period, responsible, startDate, endDate, search }), [enriched, category, type, period, responsible, startDate, endDate, search]);
   const pagination = useMemo(() => paginateAuditEvents(filtered, page, pageSize), [filtered, page, pageSize]);
   useEffect(() => setPage(1), [category, type, period, responsible, startDate, endDate, search, pageSize]);
-  const exportCsv = () => {
+  const exportCsv = async () => {
+    if (!window.confirm(`Exportar ${filtered.length} registro(s) da Auditoria? A própria exportação será registrada.`)) return;
+    try { await recordDataExportOnServer({ module: 'auditoria', rowCount: filtered.length, filters: `origem=${archiveMode};categoria=${category};tipo=${type};periodo=${period};responsavel=${responsible};busca=${search ? 'informada' : 'vazia'}` }); }
+    catch (exportError) { console.error(exportError); toast.error('Não foi possível autorizar a exportação.'); return; }
     const blob = new Blob([buildAuditCsv(filtered)], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
     anchor.href = url; anchor.download = `auditoria-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);
+    toast.success('Exportação registrada na Auditoria.');
   };
   const changeArchiveMode = mode => { setArchiveMode(mode); setPeriod(mode === 'archived' ? 'todos' : '30'); setEligibleCount(null); };
   const inspectArchive = async () => { setArchiving(true); try { const result = await archiveAuditHistoryOnServer('preview'); setEligibleCount(result.eligible); if (!result.eligible) toast.success('Nenhum registro ultrapassou o prazo de 24 meses.'); } catch (archiveError) { console.error(archiveError); toast.error('Não foi possível verificar o histórico elegível.'); } finally { setArchiving(false); } };

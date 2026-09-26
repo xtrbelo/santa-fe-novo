@@ -13,6 +13,7 @@ import { useToast } from '../../components/ui/useToast';
 import { hasPermission, PERMISSIONS } from '../../constants/permissions';
 import { APPOINTMENT_EXPORT_COLUMNS, exportFilteredCsv } from '../../utils/dataExport';
 import { EditAppointmentModal } from './EditAppointmentModal';
+import { recordDataExportOnServer } from '../../services/firebaseFunctions';
 
 const filters = [{ id: 'proximos', label: 'Próximos' }, { id: 'hoje', label: 'Hoje' }, { id: 'realizados', label: 'Realizados/Concluídos' }, { id: 'cancelados', label: 'Cancelados' }, { id: 'todos', label: 'Todos' }];
 const historicalFilters = new Set(['realizados', 'cancelados', 'todos']);
@@ -69,7 +70,11 @@ export const AgendasModule = ({ user, profile, returnRequest = null, onReturnCon
   const agendasById = useMemo(() => Object.fromEntries(agendas.map(item => [item.id, item])), [agendas]);
   const visible = useMemo(() => filterAppointments(appointments, agendasById, filter).sort((a, b) => (agendasById[a.agendaId]?.data?.toMillis?.() || 0) - (agendasById[b.agendaId]?.data?.toMillis?.() || 0)), [appointments, agendasById, filter]);
   const pagination = usePagination(visible, [filter]);
-  const exportAppointments = () => exportFilteredCsv({ filename: `agendamentos-${filter}.csv`, columns: APPOINTMENT_EXPORT_COLUMNS, rows: visible.map(item => ({ ...item, exportAgenda: agendasById[item.agendaId], exportServices: getServicosAtivosAtendimento(item).map(id => getNomeServicoAtendimento(item, id)).join(', ') })) });
+  const exportAppointments = async () => {
+    if (!window.confirm(`Exportar ${visible.length} agendamento(s) com dados pessoais? Esta ação ficará registrada na Auditoria.`)) return;
+    try { await recordDataExportOnServer({ module: 'agendamentos', rowCount: visible.length, filters: `situacao=${filter}` }); exportFilteredCsv({ filename: `agendamentos-${filter}.csv`, columns: APPOINTMENT_EXPORT_COLUMNS, rows: visible.map(item => ({ ...item, exportAgenda: agendasById[item.agendaId], exportServices: getServicosAtivosAtendimento(item).map(id => getNomeServicoAtendimento(item, id)).join(', ') })) }); toast.success('Exportação registrada na Auditoria.'); }
+    catch (error) { console.error(error); toast.error('Você não possui autorização para exportar dados pessoais.'); }
+  };
   useEffect(() => {
     if (!returnRequest?.pessoaBaseId || loadingData) return undefined;
     let active = true;

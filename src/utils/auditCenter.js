@@ -4,6 +4,7 @@ const LABELS = Object.freeze({
   USUARIO_AUTORIZADO: 'Usuário autorizado', USUARIO_VINCULADO: 'Usuário vinculado', USUARIO_VINCULO_REPARADO: 'Vínculo de usuário reparado', USUARIO_ROLE_ALTERADO: 'Perfil de acesso alterado', USUARIO_STATUS_ALTERADO: 'Situação do usuário alterada', USUARIO_ACESSO_PREAUTORIZADO: 'Acesso pré-autorizado', USUARIO_ACESSO_ATIVADO: 'Acesso ativado', USUARIO_ACESSO_REVOGADO: 'Acesso revogado', USUARIO_ACESSO_REATIVADO: 'Acesso reativado', USUARIO_ACESSO_AUTORIZACAO_CANCELADA: 'Autorização de acesso cancelada',
   AGENDAMENTO_CANCELADO: 'Agendamento cancelado', AGENDAMENTO_EDITADO: 'Agendamento editado', PRIORIDADE_ALTERADA: 'Prioridade alterada', ATENDIMENTO_SERVICOS_ALTERADOS: 'Serviços do atendimento alterados', STATUS_ATENDIMENTO_CORRIGIDO: 'Status do atendimento corrigido', ATENDIMENTO_REAGENDADO: 'Atendimento reagendado', SERVICO_REALOCADO: 'Serviço realocado',
   AGENDA_CONCLUIDA: 'Atendimento do dia fechado', AGENDA_EDITADA: 'Agenda atualizada', AGENDA_CANCELADA: 'Agenda cancelada', AGENDA_EXCLUIDA: 'Agenda excluída', SERVICO_AGENDA_CANCELADO: 'Serviço cancelado na agenda', VAGAS_RECONCILIADAS: 'Vagas reconciliadas', CPF_INDEX_RECONSTRUIDO: 'Índice de CPF reparado',
+  DADOS_PESSOAIS_EXPORTADOS: 'Dados pessoais exportados',
 });
 
 const FIELD_LABELS = Object.freeze({
@@ -74,7 +75,7 @@ export const getAuditCategory = type => {
 export const describeAuditEvent = event => ({
   category: getAuditCategory(event.tipo),
   title: LABELS[event.tipo] || String(event.tipo || 'Alteração no sistema').replaceAll('_', ' '),
-  detail: event.motivo ? `Motivo: ${event.motivo}` : event.camposAlterados?.length ? `Campos: ${event.camposAlterados.join(', ')}` : event.statusAnterior || event.statusNovo ? `${event.statusAnterior || 'Não informado'} → ${event.statusNovo || 'Não informado'}` : event.servicosAnteriores || event.servicosNovos ? `Serviços: ${(event.servicosAnteriores || []).join(', ') || 'nenhum'} → ${(event.servicosNovos || []).join(', ') || 'nenhum'}` : null,
+  detail: event.tipo === 'DADOS_PESSOAIS_EXPORTADOS' ? `${event.quantidadeRegistros || 0} registro(s) · módulo ${event.modulo || event.alvoId || 'não informado'}` : event.motivo ? `Motivo: ${event.motivo}` : event.camposAlterados?.length ? `Campos: ${event.camposAlterados.join(', ')}` : event.statusAnterior || event.statusNovo ? `${event.statusAnterior || 'Não informado'} → ${event.statusNovo || 'Não informado'}` : event.servicosAnteriores || event.servicosNovos ? `Serviços: ${(event.servicosAnteriores || []).join(', ') || 'nenhum'} → ${(event.servicosNovos || []).join(', ') || 'nenhum'}` : null,
 });
 
 const auditValue = value => {

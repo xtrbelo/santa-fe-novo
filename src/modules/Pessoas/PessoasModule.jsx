@@ -10,7 +10,7 @@ import {
   findPessoaByCpf,
   withPessoaSearchIndex
 } from '../../services/firebase';
-import { savePersonWithUniqueEmailOnServer, updateMemberLifecycleOnServer } from '../../services/firebaseFunctions';
+import { recordDataExportOnServer, savePersonWithUniqueEmailOnServer, updateMemberLifecycleOnServer } from '../../services/firebaseFunctions';
 import { 
   calcularIdade, 
   isMenor, 
@@ -312,7 +312,11 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
   const advancedFiltersActive = funcaoFiltro !== 'todas' || completudeFiltro !== 'todos';
   const pagination = usePagination(filtradas, [abaAtiva, situacao, buscaTexto, funcaoFiltro, completudeFiltro]);
   const clearAdvancedFilters = () => { setFuncaoFiltro('todas'); setCompletudeFiltro('todos'); };
-  const exportPeople = () => exportFilteredCsv({ filename: 'pessoas-filtradas.csv', columns: PEOPLE_EXPORT_COLUMNS, rows: filtradas });
+  const exportPeople = async () => {
+    if (!window.confirm(`Exportar ${filtradas.length} cadastro(s) com dados pessoais? Esta ação ficará registrada na Auditoria.`)) return;
+    try { await recordDataExportOnServer({ module: 'pessoas', rowCount: filtradas.length, filters: `vinculo=${abaAtiva};situacao=${situacao};funcao=${funcaoFiltro};completude=${completudeFiltro};busca=${buscaTexto ? 'informada' : 'vazia'}` }); exportFilteredCsv({ filename: 'pessoas-filtradas.csv', columns: PEOPLE_EXPORT_COLUMNS, rows: filtradas }); toast.success('Exportação registrada na Auditoria.'); }
+    catch (error) { console.error(error); toast.error('Você não possui autorização para exportar dados pessoais.'); }
+  };
   const updateMemberDetails = (field, value) => field === 'funcoesCasa' ? setEFuncoes(value) : setEMemberDetails(current => ({ ...current, [field]: value }));
 
   if (loadingData || loadError) return <DataLoadState loading={loadingData} error={loadError} subject="as pessoas" onRetry={() => setReloadVersion(value => value + 1)} />;

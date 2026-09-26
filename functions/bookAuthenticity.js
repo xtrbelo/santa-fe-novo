@@ -7,4 +7,11 @@ export const buildPublicBookAuthenticity = ({ volume, integrityIntact }) => ({
   signed: volume.status === 'arquivado',
   verificationCode: String(volume.codigoVerificacao || ''),
   signedAt: volume.assinadoEm?.toDate?.()?.toISOString?.() || null,
+  signatureType: volume.status === 'arquivado' ? String(volume.assinatura?.tipo || 'assinatura_eletronica_institucional_legada') : null,
+  signatureEvidence: volume.status !== 'arquivado' ? 'ausente' : volume.assinatura?.evidenciaHash ? 'reforcada' : 'legada',
+  evidenceCode: volume.assinatura?.codigoEvidencia || null,
+  evidenceVersion: Number(volume.assinatura?.versaoEvidencia || 0),
+  signatureMethod: volume.assinatura?.metodo || null,
+  embeddedDigitalSignatureDetected: volume.assinatura?.assinaturaDigitalDetectada === true,
+  certificateValidatedBySystem: false,
 });
