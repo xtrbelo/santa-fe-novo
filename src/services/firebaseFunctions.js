@@ -21,6 +21,11 @@ export const updateUserAccessOnServer = async payload => {
   return response.data;
 };
 
+export const removeOrphanAccessIndexOnServer = async pessoaBaseId => {
+  const response = await httpsCallable(getFunctionsClient(), 'removeOrphanAccessIndex')({ pessoaBaseId });
+  return response.data;
+};
+
 export const createAccessAuthorizationOnServer = async payload => {
   const response = await httpsCallable(getFunctionsClient(), 'createAccessAuthorizationSecure')(payload);
   return response.data;

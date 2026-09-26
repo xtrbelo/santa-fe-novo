@@ -28,6 +28,7 @@ import { isValidCpf, normalizeCpf } from './cpfValidation.js';
 import { buildBackupArchive, getBackupBucket } from './systemBackup.js';
 import { buildSecureRegistrationPayload, hashPublicIdentity, isRateLimitExceeded } from './publicRegistration.js';
 import { validateDataExportRequest } from './dataExportPolicy.js';
+import { getOrphanAccessIndexReason } from './accessIndexCleanup.js';
 
 if (!getApps().length) initializeApp();
 
@@ -377,6 +378,46 @@ export const verifyBookStorageHealth = onCall(async request => {
     console.error('verifyBookStorageHealth failed', { code: error.code, message: error.message });
     fail('failed-precondition', 'LIVRO_STORAGE_INDISPONIVEL');
   }
+});
+
+export const removeOrphanAccessIndex = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const pessoaBaseId = String(request.data?.pessoaBaseId || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(pessoaBaseId)) fail('invalid-argument', 'INDICE_INVALIDO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executorRef = root.collection('usuarios').doc(request.auth.uid);
+  const indexRef = root.collection('usuario_pessoa_index').doc(pessoaBaseId);
+  return firestore.runTransaction(async transaction => {
+    const [executor, index, person] = await Promise.all([
+      transaction.get(executorRef),
+      transaction.get(indexRef),
+      transaction.get(root.collection('pessoas').doc(pessoaBaseId)),
+    ]);
+    if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+    if (!index.exists) return { removed: false, reason: 'INDICE_JA_REMOVIDO' };
+    const uid = String(index.data().uid || '').trim();
+    const user = uid ? await transaction.get(root.collection('usuarios').doc(uid)) : null;
+    const reason = getOrphanAccessIndexReason({
+      personExists: person.exists,
+      userExists: Boolean(user?.exists),
+      userPessoaBaseId: user?.data()?.pessoaBaseId || null,
+      pessoaBaseId,
+    });
+    if (!reason) fail('failed-precondition', 'INDICE_NAO_E_ORFAO');
+    transaction.delete(indexRef);
+    transaction.set(root.collection('auditoria').doc(), {
+      tipo: 'INDICE_ACESSO_ORFAO_REMOVIDO',
+      alvoId: pessoaBaseId,
+      pessoaBaseId,
+      uid: uid || null,
+      motivo: reason,
+      executadoPor: request.auth.uid,
+      criadoEm: FieldValue.serverTimestamp(),
+    });
+    return { removed: true, reason };
+  });
 });
 
 export const checkBookVolumeAuthenticity = onCall(async request => {
