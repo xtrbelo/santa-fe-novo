@@ -82,7 +82,7 @@ test('versão do ambiente permanece visível no rodapé e na navegação', () =>
   const footerSource = readSource('../src/components/layout/AppFooter.jsx');
   const appSource = readSource('../src/App.jsx');
   const sidebarSource = readSource('../src/components/layout/Sidebar.jsx');
-  assert.match(versionSource, /APP_VERSION = '26H'/);
+  assert.match(versionSource, /APP_VERSION = '26I'/);
   assert.match(footerSource, /fixed inset-x-0 bottom-0/);
   assert.match(appSource, /APP_VERSION_LABEL/);
   assert.match(sidebarSource, /APP_VERSION_LABEL/);

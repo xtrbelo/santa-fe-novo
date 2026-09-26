@@ -76,6 +76,10 @@ export const inspectAccessIntegrityData = ({ users = [], people = [], indexes = 
     uid: index.uid || null,
     personExists: peopleById.has(index.id || index.pessoaBaseId),
     userExists: usersByUid.has(index.uid),
+    personName: peopleById.get(index.id || index.pessoaBaseId)?.nome || null,
+    userName: usersByUid.get(index.uid)?.nome || null,
+    userEmail: normalizeEmail(usersByUid.get(index.uid)?.email),
+    userPessoaBaseId: usersByUid.get(index.uid)?.pessoaBaseId || null,
   }));
 
   const emailConflicts = [...activeMembersByEmail.entries()]

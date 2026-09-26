@@ -28,6 +28,16 @@ test('identifica Pessoa inexistente e sugere reparo apenas com um Membro compat�
   assert.equal(report.issues[0].suggestedPessoaId, 'p1');
   assert.equal(report.issues[0].repairable, true);
   assert.equal(report.orphanIndexes.length, 1);
+  assert.deepEqual(report.orphanIndexes[0], {
+    pessoaBaseId: 'excluida',
+    uid: 'u1',
+    personExists: false,
+    userExists: true,
+    personName: null,
+    userName: null,
+    userEmail: 'membro@example.test',
+    userPessoaBaseId: 'excluida',
+  });
 });
 
 test('não sugere reparo ambíguo, inativo ou ocupado por outra conta', () => {

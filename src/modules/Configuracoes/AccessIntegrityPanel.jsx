@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { inspectAccessIntegrity } from '../../services/firebase';
-import { updateUserAccessOnServer } from '../../services/firebaseFunctions';
+import { removeOrphanAccessIndexOnServer, updateUserAccessOnServer } from '../../services/firebaseFunctions';
 import { ACCESS_INTEGRITY_LABELS } from '../../utils/accessIntegrity';
 import { maskCPF, maskPhone } from '../../utils/formatters';
 import { getFriendlyErrorMessage } from '../../utils/firebaseErrorMessages';
@@ -12,6 +12,7 @@ export const AccessIntegrityPanel = ({ onOpenPerson }) => {
   const [report, setReport] = useState(null);
   const [checking, setChecking] = useState(false);
   const [repairingUid, setRepairingUid] = useState(null);
+  const [removingIndexId, setRemovingIndexId] = useState(null);
   const toast = useToast();
 
   const loadReport = async ({ notify = true } = {}) => {
@@ -19,6 +20,22 @@ export const AccessIntegrityPanel = ({ onOpenPerson }) => {
     setReport(next);
     if (notify) toast.success(next.issues.length || next.orphanIndexes.length || next.emailConflicts.length ? `${next.issues.length} acesso(s), ${next.orphanIndexes.length} índice(s) e ${next.emailConflicts.length} e-mail(s) duplicado(s) requerem atenção.` : 'Vínculos de acesso conferidos. Nenhuma inconsistência encontrada.');
     return next;
+  };
+
+  const removeOrphanIndex = async item => {
+    if (!window.confirm(`Remover somente o índice órfão vinculado à Pessoa ${item.pessoaBaseId}?\n\nNenhum cadastro de Pessoa ou Usuário será excluído. A operação ficará registrada na Auditoria.`)) return;
+    setRemovingIndexId(item.pessoaBaseId);
+    try {
+      await removeOrphanAccessIndexOnServer(item.pessoaBaseId);
+      await loadReport({ notify: false });
+      toast.success('Índice órfão removido e operação registrada na Auditoria.');
+    } catch (error) {
+      console.error(error);
+      toast.error(getFriendlyErrorMessage(error, { fallback: 'Não foi possível remover o índice órfão.', businessMessages: {
+        INDICE_NAO_E_ORFAO: 'O vínculo voltou a ser válido e foi preservado.',
+        INDICE_INVALIDO: 'O identificador do índice é inválido.',
+      } }));
+    } finally { setRemovingIndexId(null); }
   };
 
   const check = async () => {
@@ -53,7 +70,16 @@ export const AccessIntegrityPanel = ({ onOpenPerson }) => {
     <Button variant="secondary" onClick={check} disabled={checking || Boolean(repairingUid)} className="w-full">{checking ? 'Verificando acessos...' : 'Verificar integridade dos acessos'}</Button>
     {report && <div className="space-y-3 rounded-xl bg-gray-50 p-3 text-xs">
       <p><strong>{report.analyzed}</strong> usuário(s) analisado(s) · <strong>{report.correct}</strong> correto(s) · <strong>{report.issues.length}</strong> inconsistência(s) · <strong>{report.repairable}</strong> reparável(is) · <strong>{report.emailConflicts.length}</strong> e-mail(s) duplicado(s)</p>
-      {report.orphanIndexes.length > 0 && <p className="font-bold text-amber-800">{report.orphanIndexes.length} índice(s) órfão(s) preservado(s) para análise; nada foi excluído automaticamente.</p>}
+      {report.orphanIndexes.length > 0 && <div className="space-y-2">
+        <p className="font-bold text-amber-800">{report.orphanIndexes.length} índice(s) órfão(s) preservado(s) para análise; nada foi excluído automaticamente.</p>
+        {report.orphanIndexes.map(item => <div key={item.pessoaBaseId} className="rounded-lg border border-amber-100 bg-amber-50 p-3">
+          <p className="font-black text-amber-950">Índice órfão</p>
+          <p className="mt-1">Pessoa: {item.personExists ? `${item.personName || 'Sem nome'} (${item.pessoaBaseId})` : `não encontrada (${item.pessoaBaseId})`}</p>
+          <p>Usuário: {item.userExists ? `${item.userName || item.userEmail || 'Sem nome'} (${item.uid})` : `não encontrado (${item.uid || 'sem UID'})`}</p>
+          {item.personExists && item.userExists && item.userPessoaBaseId !== item.pessoaBaseId && <p className="mt-1 font-bold text-amber-800">O Usuário está vinculado a outra Pessoa.</p>}
+          <Button variant="warning" onClick={() => removeOrphanIndex(item)} disabled={Boolean(removingIndexId || repairingUid)} className="mt-2 w-full">{removingIndexId === item.pessoaBaseId ? 'Removendo índice...' : 'Remover somente o índice órfão'}</Button>
+        </div>)}
+      </div>}
       {report.emailConflicts.map(conflict => <div key={conflict.email} className="rounded-lg border border-rose-100 bg-rose-50 p-3">
         <p className="font-black text-rose-900">E-mail repetido entre Membros ativos</p>
         <p className="mt-1 break-all font-bold text-rose-800">{conflict.email}</p>
