@@ -1,13 +1,15 @@
 # Pendências futuras
 
-- Backup pré-deploy do Firestore pendente por decisão do responsável pelo projeto; criar bucket privado compatível e executar exportação em etapa futura autorizada.
+- Planejar e revisar uma migração opcional dos campos legados somente após autorização específica; o sistema usa adaptadores em tempo de execução e não exige essa migração.
+- Acompanhar avisos de segurança transitivos do `firebase-tools` e atualizar quando houver versão corrigida compatível.
+- Atualizar `firebase-functions` em uma fase técnica própria, com testes de compatibilidade.
 
-- Planejar e revisar uma migração opcional dos campos legados somente após backup autorizado; a Fase 6A usa adaptadores em tempo de execução e não altera produção.
-- Acompanhar avisos de segurança transitivos do `firebase-tools` (dependência somente de desenvolvimento) e atualizar quando houver versão corrigida compatível.
+## Melhorias futuras após a versão 26H
 
-## Melhorias planejadas após a versão 24C
+- 26I (opcional, sem prioridade atual): validação assistida do PDF assinado, com acesso ao VALIDAR/ITI, registro do resultado, data, responsável e histórico auditável. Não afirmar validação automática do certificado.
 
-- 24D: paginação e carregamento progressivo da Auditoria no Firebase.
-- 24E: detalhamento individual dos campos alterados e da origem de cada evento.
-- 24F: exportação filtrada de Pessoas, Agendamentos, Solicitações e Comunicações.
-- 25A: política de retenção e arquivamento do histórico, sem exclusão automática antes de aprovação.
+## Fechamento pendente da sequência homologada
+
+- Backup pré-deploy de produção concluído em 25/09/2026 no bucket privado de backups.
+- As alterações acumuladas até a versão 26H estão homologadas somente em HML.
+- Produção, commit, push, merge e tag permanecem sujeitos aos checkpoints do fechamento técnico.

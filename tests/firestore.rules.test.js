@@ -961,13 +961,12 @@ describe('Q. envio público por link reutilizável', () => {
 
   const seedLink = async () => setDoc(ref(authDb('admin-a'), linkPath), { tipoCadastro: 'consulente', nome: 'Cadastro de Consulentes', status: 'ativo', expiraEm: null, limiteUsos: 2, totalUsos: 0, criadoEm: new Date(), criadoPor: 'admin-a', atualizadoEm: new Date(), atualizadoPor: 'admin-a' });
 
-  test('envio cria solicitação e incrementa exatamente um uso no mesmo lote', async () => {
+  test('bloqueia envio direto e reserva a criação para a função protegida', async () => {
     await assertSucceeds(seedLink());
     const db = anonymousDb(); const batch = writeBatch(db);
     batch.set(ref(db, requestPath), requestData());
     batch.update(ref(db, linkPath), { totalUsos: 1, ultimaSolicitacaoId: requestId, atualizadoEm: serverTimestamp() });
-    await assertSucceeds(batch.commit());
-    await assertSucceeds(getDoc(ref(authDb('gestor'), requestPath)));
+    await assertFails(batch.commit());
   });
 
   test('nega solicitação isolada, tipo divergente e manipulação da contagem', async () => {
@@ -1001,7 +1000,7 @@ describe('Q. envio público por link reutilizável', () => {
     await assertFails(invalidBatch.commit());
     const db = anonymousDb(); const batch = writeBatch(db);
     batch.set(ref(db, memberRequestPath), memberData); batch.update(ref(db, memberLinkPath), { totalUsos: 1, ultimaSolicitacaoId: memberRequestId, atualizadoEm: serverTimestamp() }); batch.update(ref(db, verificationPath), { status: 'usado', solicitacaoId: memberRequestId, usadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
-    await assertSucceeds(batch.commit());
+    await assertFails(batch.commit());
     await assertFails(getDoc(ref(anonymousDb(), verificationPath)));
   });
 });

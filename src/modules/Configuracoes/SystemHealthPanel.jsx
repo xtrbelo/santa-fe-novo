@@ -4,6 +4,7 @@ import { inspectAccessIntegrity, inspectCpfIndexes, inspectMemberEmailIndexes, i
 import { buildSystemHealthSummary } from '../../utils/systemHealth';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/useToast';
+import { verifyBookStorageHealthOnServer } from '../../services/firebaseFunctions';
 
 const inspectAll = async (loader, initial, pageSize) => {
   let cursor = null;
@@ -28,13 +29,14 @@ export const SystemHealthPanel = () => {
   const check = async () => {
     setChecking(true);
     try {
-      const [access, memberEmail, cpf, vacancies] = await Promise.all([
+      const [access, memberEmail, cpf, vacancies, bookStorage] = await Promise.all([
         inspectAccessIntegrity(),
         inspectMemberEmailIndexes(),
         inspectAll(inspectCpfIndexes, { analyzed: 0, correct: 0, missing: [], conflicts: [], invalid: 0, withoutCpf: 0 }, 100),
         inspectAll(inspectVacancyCounters, { analyzed: 0, divergences: [], skippedClosed: 0 }, 25),
+        verifyBookStorageHealthOnServer().catch(error => ({ ready: false, error: error?.message || 'LIVRO_STORAGE_INDISPONIVEL' })),
       ]);
-      const next = buildSystemHealthSummary({ access, memberEmail, cpf, vacancies });
+      const next = buildSystemHealthSummary({ access, memberEmail, cpf, vacancies, bookStorage });
       setSummary(next);
       setCheckedAt(new Date());
       toast[next.healthy ? 'success' : 'error'](next.healthy ? 'Sistema verificado sem pendências.' : `${next.critical} situação(ões) crítica(s) e ${next.warning} aviso(s) encontrados.`);
@@ -47,7 +49,7 @@ export const SystemHealthPanel = () => {
   const openDetails = id => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
   return <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 space-y-4">
-    <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 shrink-0 text-blue-700" size={22}/><div><h4 className="font-black text-blue-950">Saúde do sistema</h4><p className="text-sm text-blue-900/70">Verifica acessos, e-mails, CPFs e vagas sem alterar nenhum dado.</p></div></div>
+    <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 shrink-0 text-blue-700" size={22}/><div><h4 className="font-black text-blue-950">Saúde do sistema</h4><p className="text-sm text-blue-900/70">Verifica acessos, e-mails, CPFs, vagas e o arquivo privado do Livro Mediúnico.</p></div></div>
     <Button onClick={check} disabled={checking} className="w-full"><Activity size={17}/>{checking ? 'Executando diagnóstico...' : 'Executar diagnóstico completo'}</Button>
     {summary && <div className="space-y-3" aria-live="polite">
       <div className={`rounded-xl p-3 text-sm font-bold ${summary.healthy ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-950'}`}>

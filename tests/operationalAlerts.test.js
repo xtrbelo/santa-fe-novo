@@ -39,3 +39,9 @@ test('prioriza falha do fechamento mensal automático', () => {
   const alerts = buildOperationalAlerts({ bookAutomaticClosureFailures: 1, bookUnsignedVolumes: 2 });
   assert.equal(alerts[0].id, 'book-automatic-closure-failures');
 });
+
+test('prioriza falha de backup acima das demais pendências', () => {
+  const alerts = buildOperationalAlerts({ backupFailed: true, bookAutomaticClosureFailures: 1 });
+  assert.equal(alerts[0].id, 'system-backup-failure');
+  assert.equal(alerts[0].action, 'backup');
+});

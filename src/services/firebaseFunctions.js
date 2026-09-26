@@ -57,10 +57,15 @@ export const manageBookVolumeOnServer = async action => {
 };
 
 export const archiveBookVolumeOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'archiveBookVolume')(payload)).data;
+export const resetArchivedBookVolumeForHmlOnServer = async volumeId => (await httpsCallable(getFunctionsClient(), 'resetArchivedBookVolumeForHml')({ volumeId })).data;
 export const getBookVolumeDownloadOnServer = async volumeId => (await httpsCallable(getFunctionsClient(), 'getBookVolumeDownload')({ volumeId })).data;
 export const refreshBookRecordOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'refreshBookRecord')(payload)).data;
 export const verifyBookVolumeIntegrityOnServer = async volumeId => (await httpsCallable(getFunctionsClient(), 'verifyBookVolumeIntegrity')({ volumeId })).data;
 export const checkBookVolumeAuthenticityOnServer = async verificationCode => (await httpsCallable(getFunctionsClient(), 'checkBookVolumeAuthenticity')({ verificationCode })).data;
+export const verifyBookStorageHealthOnServer = async () => (await httpsCallable(getFunctionsClient(), 'verifyBookStorageHealth')()).data;
+export const runSystemBackupOnServer = async () => (await httpsCallable(getFunctionsClient(), 'runSystemBackup')()).data;
+export const getSystemBackupDownloadOnServer = async () => (await httpsCallable(getFunctionsClient(), 'getSystemBackupDownload')()).data;
+export const recordDataExportOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'recordDataExport')(payload)).data;
 
 export const updateWorkTypeOnServer = async payload => {
   const response = await httpsCallable(getFunctionsClient(), 'updateWorkType')(payload);
@@ -79,3 +84,4 @@ export const sendPasswordResetOnServer = email => callEmailFunction('sendPasswor
 export const resendEmailCommunicationOnServer = communicationId => callEmailFunction('resendEmailCommunicationMailjet', { communicationId });
 export const requestRegistrationEmailCodeOnServer = (linkId, email) => callEmailFunction('requestRegistrationEmailCode', { linkId, email });
 export const confirmRegistrationEmailCodeOnServer = (verificationId, code) => callEmailFunction('confirmRegistrationEmailCode', { verificationId, code });
+export const submitReusableRegistrationOnServer = payload => callEmailFunction('submitReusableRegistrationSecure', payload);

@@ -25,5 +25,7 @@ test('bloqueia duplicidade encontrada nos cadastros ou no índice transacional',
 test('exige identidade mínima válida para Membro e aceita Consulente', () => {
   assert.doesNotThrow(() => validateSecurePersonPayload({ vinculo: 'membro', nome: 'Membro', cpf: '52998224725', email: 'membro@example.test' }));
   assert.doesNotThrow(() => validateSecurePersonPayload({ vinculo: 'consulente', nome: 'Consulente' }));
+  assert.throws(() => validateSecurePersonPayload({ vinculo: 'consulente', nome: 'Consulente', cpf: '12345678900' }), /CPF_INVALIDO/);
+  assert.throws(() => validateSecurePersonPayload({ vinculo: 'membro', nome: 'Membro', cpf: '12345678900', email: 'membro@example.test' }), /CPF_INVALIDO|CPF_MEMBRO_INVALIDO/);
   assert.throws(() => validateSecurePersonPayload({ vinculo: 'membro', nome: 'Membro', cpf: '52998224725', email: 'invalido' }), /EMAIL_MEMBRO_INVALIDO/);
 });

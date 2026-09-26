@@ -20,6 +20,14 @@ import { buildBookVolumeHash, verifyBookVolumeHash } from './bookVolume.js';
 import { buildBookAttendances } from './bookRecord.js';
 import { getBookCompetence, isPreviousOpenBookVolume } from './bookSchedule.js';
 import { buildPublicBookAuthenticity } from './bookAuthenticity.js';
+import { getBookBucket, verifyBookStorageAccess } from './bookStorage.js';
+import { buildBookSignatureEvidence, buildBookSignerIdentityHash } from './bookSignature.js';
+import { hasEmbeddedPdfDigitalSignature } from './pdfDigitalSignature.js';
+import { canResetArchivedBookInHml } from './hmlBookReset.js';
+import { isValidCpf, normalizeCpf } from './cpfValidation.js';
+import { buildBackupArchive, getBackupBucket } from './systemBackup.js';
+import { buildSecureRegistrationPayload, hashPublicIdentity, isRateLimitExceeded } from './publicRegistration.js';
+import { validateDataExportRequest } from './dataExportPolicy.js';
 
 if (!getApps().length) initializeApp();
 
@@ -67,6 +75,72 @@ const closePreviousBookVolumes = async () => {
 };
 
 export const closeMonthlyBookVolumes = onSchedule({ schedule: '0 6 1 * *', timeZone: 'America/Sao_Paulo', region: 'us-central1', retryCount: 3 }, closePreviousBookVolumes);
+
+const captureBackupCollections = async root => {
+  const collections = await root.listCollections();
+  return Promise.all(collections.map(async collection => {
+    const snapshot = await collection.get();
+    return { path: collection.path, documents: snapshot.docs.map(document => ({ id: document.id, data: document.data() })) };
+  }));
+};
+
+const executeSystemBackup = async ({ trigger = 'automatico', requestedBy = 'sistema' } = {}) => {
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore(); const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const statusRef = root.collection('sistema_operacional').doc('backup'); const startedAt = new Date();
+  await statusRef.set({ status: 'executando', inicioEm: FieldValue.serverTimestamp(), tipoExecucao: trigger, solicitadoPor: requestedBy }, { merge: true });
+  try {
+    const collections = await captureBackupCollections(root);
+    const createdAt = startedAt.toISOString(); const result = buildBackupArchive({ projectId, createdAt, collections });
+    const path = `backups/${projectId}/${createdAt.slice(0, 10)}/backup-${createdAt.replace(/[:.]/g, '-')}.json.gz`;
+    const bucket = getBackupBucket(getStorage(), projectId);
+    await bucket.file(path).save(result.archive, { resumable: false, contentType: 'application/gzip', metadata: { cacheControl: 'private, no-store', metadata: { sha256: result.sha256, projectId } } });
+    const completedAt = FieldValue.serverTimestamp();
+    await statusRef.set({ status: 'sucesso', ultimoSucessoEm: completedAt, ultimaExecucaoEm: completedAt, tipoExecucao: trigger, solicitadoPor: requestedBy, arquivo: { caminho: path, tamanho: result.archive.length, hashSha256: result.sha256 }, quantidadeColecoes: collections.length, quantidadeDocumentos: result.documentCount, erro: FieldValue.delete() }, { merge: true });
+    await root.collection('auditoria').add({ tipo: 'BACKUP_SISTEMA_CONCLUIDO', alvoId: 'backup', tipoExecucao: trigger, quantidadeColecoes: collections.length, quantidadeDocumentos: result.documentCount, hashArquivo: result.sha256, executadoPor: requestedBy, criadoEm: completedAt });
+    const [files] = await bucket.getFiles({ prefix: `backups/${projectId}/` }); const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
+    await Promise.all(files.filter(file => new Date(file.metadata?.timeCreated || 0).getTime() < cutoff).map(file => file.delete().catch(() => undefined)));
+    return { path, collections: collections.length, documents: result.documentCount, sha256: result.sha256 };
+  } catch (error) {
+    const reason = String(error?.message || 'ERRO_DESCONHECIDO').slice(0, 300); const failedAt = FieldValue.serverTimestamp();
+    await statusRef.set({ status: 'erro', ultimaExecucaoEm: failedAt, tipoExecucao: trigger, solicitadoPor: requestedBy, erro: { codigo: reason, ocorridoEm: failedAt } }, { merge: true });
+    await root.collection('auditoria').add({ tipo: 'BACKUP_SISTEMA_FALHOU', alvoId: 'backup', tipoExecucao: trigger, motivo: reason, executadoPor: requestedBy, criadoEm: failedAt });
+    throw error;
+  }
+};
+
+export const runDailySystemBackup = onSchedule({ schedule: '0 3 * * *', timeZone: 'America/Sao_Paulo', region: 'us-central1', retryCount: 3, timeoutSeconds: 540, memory: '1GiB' }, () => executeSystemBackup());
+
+export const runSystemBackup = onCall({ timeoutSeconds: 540, memory: '1GiB' }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data'); const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+  return executeSystemBackup({ trigger: 'manual', requestedBy: request.auth.uid });
+});
+
+export const getSystemBackupDownload = onCall(async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data');
+  const [executor, status] = await Promise.all([root.collection('usuarios').doc(request.auth.uid).get(), root.collection('sistema_operacional').doc('backup').get()]);
+  if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+  const path = status.data()?.arquivo?.caminho; if (!path) fail('not-found', 'BACKUP_NAO_ENCONTRADO');
+  const [url] = await getBackupBucket(getStorage(), projectId).file(path).getSignedUrl({ action: 'read', expires: Date.now() + 10 * 60 * 1000, responseDisposition: `attachment; filename="backup-${projectId}.json.gz"` });
+  return { url };
+});
+
+export const recordDataExport = onCall(async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  let exportRequest; try { exportRequest = validateDataExportRequest(request.data); } catch { fail('invalid-argument', 'EXPORTACAO_INVALIDA'); }
+  const { module, rowCount, filters } = exportRequest;
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data'); const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+  const ref = root.collection('auditoria').doc();
+  await ref.set({ tipo: 'DADOS_PESSOAIS_EXPORTADOS', alvoId: module, modulo: module, quantidadeRegistros: rowCount, filtros: filters || null, executadoPor: request.auth.uid, responsavelNome: executor.data().nome || executor.data().email || null, criadoEm: FieldValue.serverTimestamp() });
+  return { auditId: ref.id };
+});
 
 export const closeDayWithWorkers = onCall(async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
@@ -143,7 +217,7 @@ export const closeDayWithWorkers = onCall(async request => {
       if (!role) fail('failed-precondition', 'DIRIGENTE_RESPONSAVEL_INVALIDA');
       const responsibleSnapshot = await transaction.get(root.collection('pessoas').doc(dirigenteResponsavelId));
       const responsible = responsibleSnapshot.data();
-      if (!responsibleSnapshot.exists || responsible?.ativo === false || !isActiveMemberRecord(responsible) || !/^\d{11}$/.test(String(responsible.cpf || '').replace(/\D/g, ''))) fail('failed-precondition', 'DIRIGENTE_RESPONSAVEL_INVALIDA');
+      if (!responsibleSnapshot.exists || responsible?.ativo === false || !isActiveMemberRecord(responsible) || !isValidCpf(responsible.cpf)) fail('failed-precondition', 'DIRIGENTE_RESPONSAVEL_INVALIDA');
       bookResponsible = { pessoaBaseId: dirigenteResponsavelId, nome: String(responsible.nome || '').trim(), papel: role, cpfFinal: String(responsible.cpf).slice(-2) };
     } else if (dirigenteResponsavelId) fail('failed-precondition', 'DIRIGENTE_NAO_APLICAVEL');
     transaction.update(agendaRef, { status: 'Concluída', concluidaEm: now, concluidaPor: request.auth.uid, ...(attendanceOnly ? { tipoFechamento: closureType, quantidadePresencasFechamento: attendanceCount } : requiresWorkers ? { tipoFechamento: closureType, gruposTrabalhoDia: scheduled.groups.map(group => ({ id: group.id, nome: group.nome })), trabalhadoresDia: workers } : { tipoFechamento: closureType, equipeEventoDia: eventTeam }), atualizadoEm: now, atualizadoPor: request.auth.uid });
@@ -209,11 +283,13 @@ export const archiveBookVolume = onCall({ timeoutSeconds: 120, memory: '512MiB' 
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
   const volumeId = String(request.data?.volumeId || '').trim();
   const signerPersonId = String(request.data?.signerPersonId || '').trim();
-  const signerCpf = String(request.data?.signerCpf || '').replace(/\D/g, '');
+  const signerCpf = normalizeCpf(request.data?.signerCpf);
   const pdfBase64 = String(request.data?.pdfBase64 || '');
-  if (!volumeId || !signerPersonId || !/^\d{11}$/.test(signerCpf) || request.data?.confirmed !== true || !pdfBase64) fail('invalid-argument', 'ASSINATURA_INVALIDA');
+  const signatureMethod = String(request.data?.signatureMethod || '');
+  if (!volumeId || !signerPersonId || !isValidCpf(signerCpf) || request.data?.confirmed !== true || signatureMethod !== 'gov_br_manual' || !pdfBase64) fail('invalid-argument', 'ASSINATURA_INVALIDA');
   const pdf = Buffer.from(pdfBase64, 'base64');
   if (pdf.length < 5 || pdf.length > 8 * 1024 * 1024 || pdf.subarray(0, 5).toString() !== '%PDF-') fail('invalid-argument', 'PDF_INVALIDO');
+  if (!hasEmbeddedPdfDigitalSignature(pdf)) fail('failed-precondition', 'PDF_SEM_ASSINATURA_DIGITAL');
   const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
   const firestore = getFirestore(); const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
   const [executor, volume, config, signer] = await Promise.all([
@@ -229,19 +305,42 @@ export const archiveBookVolume = onCall({ timeoutSeconds: 120, memory: '512MiB' 
   const signerData = signer.data();
   if (!role || !signer.exists || !isActiveMemberRecord(signerData) || String(signerData.cpf || '').replace(/\D/g, '') !== signerCpf) fail('failed-precondition', 'IDENTIDADE_DIRIGENTE_INVALIDA');
   const fileHash = createHash('sha256').update(pdf).digest('hex');
+  const signedAtDate = new Date();
+  const signedAt = Timestamp.fromDate(signedAtDate);
+  const signerIdentityHash = buildBookSignerIdentityHash({ projectId, signerPersonId, signerCpf });
+  const evidence = buildBookSignatureEvidence({ projectId, volumeId, volumeNumber: volume.data().numero, competence: volume.data().competencia, integrityHash: integrity.calculatedHash, fileHash, signerIdentityHash, signerRole: role, signatureMethod, confirmedBy: request.auth.uid, signedAt: signedAtDate.toISOString() });
   const filePath = `livro-mediunico/${projectId}/volume-${Number(volume.data().numero)}-${volumeId}-${fileHash.slice(0, 12)}.pdf`;
-  const file = getStorage().bucket().file(filePath);
-  await file.save(pdf, { resumable: false, contentType: 'application/pdf', metadata: { cacheControl: 'private, no-store', metadata: { volumeId, sha256: fileHash } } });
-  const now = FieldValue.serverTimestamp();
+  const file = getBookBucket(getStorage(), projectId).file(filePath);
+  await file.save(pdf, { resumable: false, contentType: 'application/pdf', metadata: { cacheControl: 'private, no-store', metadata: { volumeId, sha256: fileHash, evidenceHash: evidence.evidenciaHash } } });
   await firestore.runTransaction(async transaction => {
     const freshVolume = await transaction.get(root.collection('livro_mediunico_volumes').doc(volumeId));
     if (!freshVolume.exists || freshVolume.data().status !== 'encerrado') fail('failed-precondition', 'VOLUME_NAO_ENCERRADO');
     if (freshVolume.data().hashIntegridade !== integrity.calculatedHash) fail('failed-precondition', 'VOLUME_INTEGRIDADE_DIVERGENTE');
-    const signature = { pessoaBaseId: signerPersonId, nome: String(signerData.nome || '').trim(), papel: role, cpfFinal: signerCpf.slice(-2), confirmadoPor: request.auth.uid };
-    transaction.update(freshVolume.ref, { status: 'arquivado', arquivo: { caminho: filePath, nome: `livro-mediunico-volume-${Number(volume.data().numero)}.pdf`, tamanho: pdf.length, mimeType: 'application/pdf', hashSha256: fileHash }, assinatura: signature, assinadoEm: now, arquivadoEm: now, arquivadoPor: request.auth.uid, atualizadoEm: now });
-    transaction.set(root.collection('auditoria').doc(), { tipo: 'LIVRO_VOLUME_ARQUIVADO', alvoId: volumeId, volumeId, volumeNumero: volume.data().numero, dirigenteResponsavel: signature, hashArquivo: fileHash, executadoPor: request.auth.uid, criadoEm: now });
+    const signature = { pessoaBaseId: signerPersonId, nome: String(signerData.nome || '').trim(), papel: role, cpfFinal: signerCpf.slice(-2), metodo: signatureMethod, assinaturaDigitalDetectada: true, certificadoValidadoPeloSistema: false, confirmadoPor: request.auth.uid, identidadeHash: signerIdentityHash, ...evidence };
+    transaction.update(freshVolume.ref, { status: 'arquivado', arquivo: { caminho: filePath, nome: `livro-mediunico-volume-${Number(volume.data().numero)}.pdf`, tamanho: pdf.length, mimeType: 'application/pdf', hashSha256: fileHash }, assinatura: signature, assinadoEm: signedAt, arquivadoEm: signedAt, arquivadoPor: request.auth.uid, atualizadoEm: signedAt });
+    transaction.set(root.collection('auditoria').doc(), { tipo: 'LIVRO_VOLUME_ARQUIVADO', alvoId: volumeId, volumeId, volumeNumero: volume.data().numero, dirigenteResponsavel: signature, hashArquivo: fileHash, hashEvidencia: evidence.evidenciaHash, codigoEvidencia: evidence.codigoEvidencia, executadoPor: request.auth.uid, criadoEm: signedAt });
   });
-  return { archived: true, fileHash };
+  return { archived: true, fileHash, evidenceCode: evidence.codigoEvidencia };
+});
+
+export const resetArchivedBookVolumeForHml = onCall(async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const volumeId = String(request.data?.volumeId || '').trim();
+  if (!volumeId) fail('invalid-argument', 'VOLUME_OBRIGATORIO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore(); const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  const volumeRef = root.collection('livro_mediunico_volumes').doc(volumeId);
+  await firestore.runTransaction(async transaction => {
+    const volume = await transaction.get(volumeRef);
+    const admin = executor.exists && isActiveAdmin(executor.data());
+    if (!volume.exists || !canResetArchivedBookInHml({ projectId, status: volume.data()?.status, isAdmin: admin })) fail('permission-denied', 'RESET_VOLUME_SOMENTE_HML_ADMIN');
+    const data = volume.data(); const historyRef = root.collection('livro_mediunico_reaberturas_hml').doc(); const now = FieldValue.serverTimestamp();
+    transaction.set(historyRef, { volumeId, volumeNumero: data.numero, competencia: data.competencia || null, motivo: 'Reset administrativo para simulação de assinatura no HML', estadoAnterior: { status: data.status, arquivo: data.arquivo || null, assinatura: data.assinatura || null, assinadoEm: data.assinadoEm || null, arquivadoEm: data.arquivadoEm || null, arquivadoPor: data.arquivadoPor || null }, criadoEm: now, executadoPor: request.auth.uid });
+    transaction.update(volumeRef, { status: 'encerrado', arquivo: FieldValue.delete(), assinatura: FieldValue.delete(), assinadoEm: FieldValue.delete(), arquivadoEm: FieldValue.delete(), arquivadoPor: FieldValue.delete(), reabertoParaTesteHml: true, reabertoEm: now, reabertoPor: request.auth.uid, reabertoMotivo: 'Reset administrativo para simulação de assinatura no HML', atualizadoEm: now });
+    transaction.set(root.collection('auditoria').doc(), { tipo: 'LIVRO_VOLUME_REABERTO_PARA_TESTE_HML', alvoId: volumeId, volumeId, volumeNumero: data.numero, competencia: data.competencia || null, motivo: 'Reset administrativo para simulação de assinatura no HML', historicoReaberturaId: historyRef.id, executadoPor: request.auth.uid, criadoEm: now });
+  });
+  return { reset: true, volumeId };
 });
 
 export const verifyBookVolumeIntegrity = onCall(async request => {
@@ -262,6 +361,22 @@ export const verifyBookVolumeIntegrity = onCall(async request => {
   await root.collection('auditoria').add({ tipo: 'LIVRO_VOLUME_INTEGRIDADE_VERIFICADA', alvoId: volumeId, volumeId, volumeNumero: volume.data().numero, resultado: result.intact ? 'integro' : 'divergente', codigoVerificacao: result.calculatedHash.slice(0, 12).toUpperCase(), executadoPor: request.auth.uid, criadoEm: now });
   await volume.ref.update({ ultimaVerificacaoIntegridade: { resultado: result.intact ? 'integro' : 'divergente', verificadoPor: request.auth.uid, verificadoEm: now }, atualizadoEm: now });
   return { intact: result.intact, verificationCode: result.calculatedHash.slice(0, 12).toUpperCase() };
+});
+
+export const verifyBookStorageHealth = onCall(async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore(); const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+  try {
+    const result = await verifyBookStorageAccess({ storage: getStorage(), projectId });
+    await root.collection('auditoria').add({ tipo: 'LIVRO_STORAGE_VERIFICADO', resultado: 'disponivel', executadoPor: request.auth.uid, criadoEm: FieldValue.serverTimestamp() });
+    return result;
+  } catch (error) {
+    console.error('verifyBookStorageHealth failed', { code: error.code, message: error.message });
+    fail('failed-precondition', 'LIVRO_STORAGE_INDISPONIVEL');
+  }
 });
 
 export const checkBookVolumeAuthenticity = onCall(async request => {
@@ -286,7 +401,7 @@ export const getBookVolumeDownload = onCall(async request => {
   const [executor, volume] = await Promise.all([root.collection('usuarios').doc(request.auth.uid).get(), root.collection('livro_mediunico_volumes').doc(volumeId).get()]);
   if (!executor.exists || executor.data().ativo === false || !['admin', 'gestor'].includes(executor.data().role)) fail('permission-denied', 'ACESSO_NEGADO');
   if (!volume.exists || volume.data().status !== 'arquivado' || !volume.data().arquivo?.caminho) fail('not-found', 'ARQUIVO_NAO_ENCONTRADO');
-  const [url] = await getStorage().bucket().file(volume.data().arquivo.caminho).getSignedUrl({ action: 'read', expires: Date.now() + 10 * 60 * 1000, responseDisposition: `attachment; filename="${volume.data().arquivo.nome}"` });
+  const [url] = await getBookBucket(getStorage(), projectId).file(volume.data().arquivo.caminho).getSignedUrl({ action: 'read', expires: Date.now() + 10 * 60 * 1000, responseDisposition: `attachment; filename="${volume.data().arquivo.nome}"` });
   return { url, expiresInSeconds: 600 };
 });
 
@@ -373,7 +488,7 @@ export const updateAppointment = onCall(async request => {
     const publicos = destinationAgenda.publicosPermitidos || [];
     const vinculo = String(person.vinculo || person.tipoPessoa || '').toLowerCase().includes('membro') ? 'membro' : 'consulente';
     if (publicos.length && !publicos.includes(vinculo)) fail('failed-precondition', 'PUBLICO_NAO_PERMITIDO');
-    if (destinationAgenda.cpfObrigatorio === true && !/^\d{11}$/.test(String(person.cpf || '').replace(/\D/g, ''))) fail('failed-precondition', 'CPF_OBRIGATORIO_EVENTO');
+    if (destinationAgenda.cpfObrigatorio === true && !isValidCpf(person.cpf)) fail('failed-precondition', 'CPF_OBRIGATORIO_EVENTO');
     if (serviceSnapshots.some(snapshot => !snapshot.exists || snapshot.data().ativo === false)) fail('failed-precondition', 'SERVICO_INVALIDO');
     if (serviceIds.some(id => !(destinationAgenda.servicosIds || []).includes(id) || destinationAgenda.servicosStatus?.[id] === 'Cancelado')) fail('failed-precondition', 'SERVICO_NAO_DISPONIVEL');
     const originAgendaRef = root.collection('agendas').doc(appointment.agendaId); const originAgendaSnapshot = appointment.agendaId === destinationAgendaId ? destinationAgendaSnapshot : await transaction.get(originAgendaRef);
@@ -502,6 +617,52 @@ const deliverTrackedAccountEmail = async ({ root, pessoaBaseId, tipo, email, nom
   return ref.id;
 };
 const mailjetCallableOptions = { region: 'southamerica-east1', maxInstances: 3, secrets: [mailjetApiKey, mailjetSecretKey, registrationEmailFrom] };
+
+const registerPublicBlock = async ({ root, linkId, identityHash, reason }) => {
+  const day = new Date().toISOString().slice(0, 10); const id = `seguranca_${day}_${hashPublicIdentity(`${linkId}|${identityHash}|${reason}`).slice(0, 32)}`;
+  await root.collection('auditoria').doc(id).set({ tipo: 'ENVIO_PUBLICO_BLOQUEADO', alvoId: linkId, linkId, motivo: reason, identidadeHash: identityHash, quantidade: FieldValue.increment(1), ultimaOcorrenciaEm: FieldValue.serverTimestamp(), executadoPor: 'sistema', criadoEm: FieldValue.serverTimestamp() }, { merge: true });
+};
+
+export const submitReusableRegistrationSecure = onCall({ region: 'southamerica-east1', maxInstances: 5 }, async request => {
+  const linkId = String(request.data?.linkId || '').trim(); const data = request.data?.data || {};
+  if (!/^[a-f0-9]{64}$/.test(linkId)) fail('invalid-argument', 'SOLICITACAO_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore(); const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const originHash = hashPublicIdentity(`${linkId}|${request.rawRequest?.ip || 'origem-desconhecida'}`);
+  if (String(request.data?.website || '').trim() || Date.now() - Number(request.data?.formStartedAt || 0) < 2000) {
+    await registerPublicBlock({ root, linkId, identityHash: originHash, reason: 'AUTOMACAO_DETECTADA' });
+    fail('resource-exhausted', 'ENVIO_BLOQUEADO');
+  }
+  const linkRef = root.collection('links_autocadastro').doc(linkId); const initialLink = await linkRef.get();
+  if (!initialLink.exists) fail('failed-precondition', 'LINK_INDISPONIVEL');
+  let payload;
+  try { payload = buildSecureRegistrationPayload({ linkId, link: initialLink.data(), data }); }
+  catch (error) { fail('invalid-argument', String(error?.message || 'SOLICITACAO_INVALIDA')); }
+  const requestRef = root.collection('solicitacoes_cadastro').doc(); const nowMillis = Date.now();
+  const originRateRef = root.collection('limites_envio_publico').doc(`origem_${originHash}`);
+  const cpfHash = hashPublicIdentity(`${linkId}|${payload.cpf}`); const cpfRateRef = root.collection('limites_envio_publico').doc(`cpf_${cpfHash}`);
+  const verificationRef = payload.verificacaoEmailId ? root.collection('verificacoes_email_cadastro').doc(payload.verificacaoEmailId) : null;
+  try {
+    await firestore.runTransaction(async transaction => {
+      const snapshots = await Promise.all([transaction.get(linkRef), transaction.get(originRateRef), transaction.get(cpfRateRef), ...(verificationRef ? [transaction.get(verificationRef)] : [])]);
+      const [link, originRate, cpfRate, verification] = snapshots; const linkData = link.data();
+      if (!link.exists || linkData.status !== 'ativo' || linkData.tipoCadastro !== payload.tipoCadastro || linkData.expiraEm?.toMillis?.() <= nowMillis || (linkData.limiteUsos && Number(linkData.totalUsos || 0) >= linkData.limiteUsos)) fail('failed-precondition', 'LINK_INDISPONIVEL');
+      const originStart = originRate.data()?.janelaInicio?.toMillis?.() || 0; const cpfStart = cpfRate.data()?.janelaInicio?.toMillis?.() || 0;
+      if (isRateLimitExceeded({ count: Number(originRate.data()?.quantidade || 0), windowStartedAt: originStart, now: nowMillis, windowMs: 3600000, maximum: 5 })) fail('resource-exhausted', 'LIMITE_ORIGEM');
+      if (isRateLimitExceeded({ count: Number(cpfRate.data()?.quantidade || 0), windowStartedAt: cpfStart, now: nowMillis, windowMs: 86400000, maximum: 3 })) fail('resource-exhausted', 'LIMITE_IDENTIDADE');
+      if (verificationRef && (!verification?.exists || verification.data().status !== 'confirmado' || verification.data().linkId !== linkId || verification.data().email !== payload.email || verification.data().expiraEm?.toMillis?.() <= nowMillis)) fail('failed-precondition', 'EMAIL_NAO_CONFIRMADO');
+      const now = Timestamp.fromMillis(nowMillis); const rateValue = (snapshot, start, windowMs) => nowMillis - start >= windowMs ? { janelaInicio: now, quantidade: 1, atualizadoEm: now } : { janelaInicio: snapshot.data()?.janelaInicio || now, quantidade: FieldValue.increment(1), atualizadoEm: now };
+      transaction.set(originRateRef, rateValue(originRate, originStart, 3600000), { merge: true }); transaction.set(cpfRateRef, rateValue(cpfRate, cpfStart, 86400000), { merge: true });
+      transaction.set(requestRef, { ...payload, aceite: { ...payload.aceite, aceitoEm: now, protocolo: requestRef.id }, enviadoEm: now, atualizadoEm: now });
+      transaction.update(linkRef, { totalUsos: Number(linkData.totalUsos || 0) + 1, ultimaSolicitacaoId: requestRef.id, atualizadoEm: now });
+      if (verificationRef) transaction.update(verificationRef, { status: 'usado', solicitacaoId: requestRef.id, usadoEm: now, atualizadoEm: now });
+    });
+  } catch (error) {
+    if (error instanceof HttpsError && error.code === 'resource-exhausted') await registerPublicBlock({ root, linkId, identityHash: error.message === 'LIMITE_IDENTIDADE' ? cpfHash : originHash, reason: error.message });
+    throw error;
+  }
+  return { id: requestRef.id };
+});
 
 export const requestRegistrationEmailCode = onCall(mailjetCallableOptions, async request => {
   const linkId = String(request.data?.linkId || '').trim();
