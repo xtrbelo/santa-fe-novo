@@ -2,7 +2,7 @@ import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { auth, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut, GoogleAuthProvider, isFirebaseConfigured } from './services/firebaseAuth';
 import { sendEmailVerificationOnServer, sendPasswordResetOnServer } from './services/firebaseFunctions';
 import { ROLES } from './constants/roles';
-import { canAccessModule, getModuleFromPathname, getModulePath, hasPermission, MODULE_LABELS, MODULES, PERMISSIONS } from './constants/permissions';
+import { canAccessModule, getDefaultModule, getModuleFromPathname, getModulePath, hasPermission, MODULE_LABELS, MODULES, PERMISSIONS } from './constants/permissions';
 import { ToastProvider } from './components/ui/Toast';
 import { useToast } from './components/ui/useToast';
 import { ConnectionStatus } from './components/ui/ConnectionStatus';
@@ -32,6 +32,7 @@ const AutocadastroMembroPage = lazyNamed(() => import('./modules/Autocadastro/Au
 const AtivacaoAcessoPage = lazyNamed(() => import('./modules/AtivacaoAcesso/AtivacaoAcessoPage'), 'AtivacaoAcessoPage');
 const MeuCadastroModule = lazyNamed(() => import('./modules/MeuCadastro/MeuCadastroModule'), 'MeuCadastroModule');
 const AuditoriaModule = lazyNamed(() => import('./modules/Auditoria/AuditoriaModule'), 'AuditoriaModule');
+const MemberAreaModule = lazyNamed(() => import('./modules/MemberArea/MemberAreaModule'), 'MemberAreaModule');
 const BookAuthenticityPage = lazyNamed(() => import('./modules/Livro/BookAuthenticityPage'), 'BookAuthenticityPage');
 
 const ModuleLoading = () => <div className="min-h-40 flex items-center justify-center"><p className="font-bold text-gray-500">Carregando módulo...</p></div>;
@@ -258,6 +259,12 @@ function AppContent() {
     const page = authView === AUTH_VIEW.AUTHORIZED ? MODULE_LABELS[tab] : 'Acesso ao sistema';
     document.title = `${page || 'Sistema'} • Santa Fé${environment}`;
   }, [authView, tab]);
+  useEffect(() => {
+    if (authView !== AUTH_VIEW.AUTHORIZED || canAccessModule(profile, tab)) return;
+    const fallback = getDefaultModule(profile);
+    setTab(fallback);
+    window.history.replaceState({}, '', getModulePath(fallback));
+  }, [authView, profile, tab]);
   if (authView === AUTH_VIEW.LOADING) return user ? withSessionTimeout(<div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>) : <div className="min-h-screen flex items-center justify-center"><p className="font-bold text-gray-500">Carregando Sistema Santa Fé...</p></div>;
   if (authView === AUTH_VIEW.LOGIN) return <LoginScreen onEmailLogin={handleEmailLogin} onGoogleLogin={handleGoogleLogin} onResetPassword={handleResetPassword} busy={isLoggingIn} />;
   if (authView === AUTH_VIEW.UNAUTHORIZED) return withSessionTimeout(<AccessScreen icon={<ShieldQuestion size={44} />} iconClass="text-amber-600" title="Acesso não autorizado" description="Esta conta não possui autorização para acessar o Sistema Santa Fé. Procure um administrador da Casa Santa Fé." showAccountDetails={false} onSignOut={handleSignOut} />);
@@ -295,6 +302,7 @@ function AppContent() {
     if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} onScheduleReturn={openReturnScheduling} />;
     if (tab === MODULES.PEOPLE) return <PessoasCadastrosModule user={user} profile={profile} focusPersonId={focusedPersonId} onFocusConsumed={() => setFocusedPersonId(null)} />;
     if (tab === MODULES.USERS) return <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} />;
+    if (tab === MODULES.MEMBER_AREA) return <MemberAreaModule profile={profile} />;
     if (tab === MODULES.MY_REGISTRATION) return <MeuCadastroModule user={user} profile={profile} />;
     if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} onOpenPerson={openPersonById} />;
     if (tab === MODULES.AUDIT) return <AuditoriaModule onOpenPerson={openPersonById} />;
@@ -318,7 +326,7 @@ export default function App() {
   const isBookAuthenticity = window.location.pathname === '/verificar-livro';
   useEffect(() => {
     if (!isPublicSelfRegistration && !isAccessActivation && !isBookAuthenticity) return;
-    const page = isPublicSelfRegistration ? 'Autocadastro' : isAccessActivation ? 'Ativação de acesso' : 'Verificar Livro Mediúnico';
+    const page = isPublicSelfRegistration ? 'Autocadastro' : isAccessActivation ? 'Ativação de acesso' : isBookAuthenticity ? 'Verificar Livro Mediúnico' : 'Autorização de imagem';
     const environment = import.meta.env.MODE === 'hml' ? ' • HML' : '';
     document.title = `${page} • Santa Fé${environment}`;
   }, [isAccessActivation, isBookAuthenticity, isPublicSelfRegistration]);

@@ -21,7 +21,7 @@ const inviteIndexPath = cpf => `${root}/convite_membro_cpf_index/${cpf}`;
 const registrationPath = id => `${root}/autocadastros_membro/${id}`;
 const authorizationPath = pessoaId => `${root}/autorizacoes_acesso/${pessoaId}`;
 const inviteData = (uid, overrides = {}) => ({ nome: 'Pessoa Convidada', cpf: '52998224725', email: 'convite@example.test', status: 'ativo', criadoEm: new Date(), criadoPor: uid, expiraEm: new Date(Date.now() + 7 * 86400000), atualizadoEm: new Date(), atualizadoPor: uid, ...overrides });
-const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: '96999991111', email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
+const registrationData = (id, overrides = {}) => ({ inviteId: id, nome: 'Pessoa Convidada', cpf: '52998224725', dataNascimento: null, contato: '96999991111', email: 'pessoa@example.test', sexo: 'nao_informado', estadoCivil: 'nao_informado', endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null }, dadosCasa: { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null }, consentimentoImagem: { autorizado: false, versao: '2026-09-29.1', registradoEm: serverTimestamp() }, statusCadastro: 'aguardando_validacao', origemCadastro: 'autocadastro', enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp(), ...overrides });
 
 let environment;
 const authDb = (uid, claims = {}) => environment.authenticatedContext(uid, { email_verified: true, ...claims }).firestore();
@@ -34,7 +34,7 @@ async function seed() {
     const db = context.firestore();
     const users = [
       ['admin-a', 'admin', true], ['admin-b', 'admin', true], ['gestor', 'gestor', true],
-      ['atendimento', 'atendimento', true], ['pendente', 'pendente', true], ['inativo-admin', 'admin', false]
+      ['atendimento', 'atendimento', true], ['membro', 'membro', true], ['midia', 'midia', true], ['pendente', 'pendente', true], ['inativo-admin', 'admin', false]
     ];
     await Promise.all(users.map(([uid, role, ativo]) => setDoc(ref(db, paths.user(uid)), { uid, nome: uid, email: `${uid}@example.test`, role, ativo, ...(role !== 'pendente' ? { pessoaBaseId: `membro-${uid}` } : {}), criadoEm: new Date(), atualizadoEm: new Date() })));
     await Promise.all(users.filter(([, role]) => role !== 'pendente').map(([uid]) => setDoc(ref(db, `${root}/pessoas/membro-${uid}`), canonicalMember({ nome: `Membro ${uid}`, email: `${uid}@example.test` }))));
@@ -48,6 +48,7 @@ async function seed() {
       setDoc(ref(db, paths.agendas), { tipo: 'Agenda', status: 'Aberta', vagasOcupadas: {}, ativo: true }),
       setDoc(ref(db, paths.appointments), { agendaId: 'agenda-1', pessoaBaseId: 'pessoa-1', status: 'Agendado' }),
       setDoc(ref(db, paths.config), { nome: 'Serviço', ativo: true }),
+      setDoc(ref(db, `${root}/config_funcoes_membro/medium`), { codigo: 'medium', nome: 'Médium', ativo: true }),
       setDoc(ref(db, paths.audit), { tipo: 'USUARIO_ROLE_ALTERADO', alvoUid: 'gestor', executadoPor: 'admin-a', criadoEm: new Date() })
     ]);
   });
@@ -103,6 +104,62 @@ describe('B2. verificação de e-mail', () => {
     await assertSucceeds(getDoc(ref(db, paths.user('novo-nao-verificado'))));
     for (const path of [paths.people, paths.agendas, paths.appointments, paths.config, paths.user('gestor')]) {
       await assertFails(getDoc(ref(db, path)));
+    }
+  });
+});
+
+describe('B3. Área do Membro', () => {
+  test('autorizações de imagem e álbuns são acessados somente pelas funções protegidas', async () => {
+    for (const uid of ['admin-a', 'gestor', 'midia', 'membro']) {
+      const db = authDb(uid);
+      await assertFails(getDoc(ref(db, `${root}/autorizacoes_imagem/membro-membro`)));
+      await assertFails(setDoc(ref(db, `${root}/autorizacoes_imagem/membro-membro`), { status: 'autorizado' }));
+      await assertFails(setDoc(ref(db, `${root}/albuns_membros/album-direto`), { titulo: 'Inválido' }));
+    }
+  });
+
+  test('Membro verificado lê somente o próprio usuário e a própria Pessoa', async () => {
+    const db = authDb('membro');
+    await assertSucceeds(getDoc(ref(db, paths.user('membro'))));
+    await assertSucceeds(getDoc(ref(db, `${root}/pessoas/membro-membro`)));
+    for (const path of [paths.people, paths.agendas, paths.appointments, paths.config, paths.audit, paths.user('gestor')]) {
+      await assertFails(getDoc(ref(db, path)));
+    }
+    await assertFails(getDocs(collection(db, `${root}/pessoas`)));
+  });
+
+  test('Membro atualiza somente os campos permitidos do próprio cadastro com auditoria', async () => {
+    const db = authDb('membro');
+    const batch = writeBatch(db);
+    batch.update(ref(db, `${root}/pessoas/membro-membro`), { contato: '96999991111', atualizadoEm: new Date(), atualizadoPor: 'membro' });
+    batch.set(ref(db, `${root}/auditoria/membro-atualiza-contato`), { tipo: 'MEU_CADASTRO_ATUALIZADO', pessoaBaseId: 'membro-membro', camposAlterados: ['contato'], executadoPor: 'membro', criadoEm: new Date() });
+    await assertSucceeds(batch.commit());
+    await assertFails(updateDoc(ref(db, `${root}/pessoas/membro-membro`), { nome: 'Nome alterado', atualizadoEm: new Date(), atualizadoPor: 'membro' }));
+    await assertFails(updateDoc(ref(db, paths.people), { contato: '96999990000', atualizadoEm: new Date(), atualizadoPor: 'membro' }));
+  });
+
+  test('Membro sem e-mail verificado não acessa nem o próprio cadastro', async () => {
+    const db = authDb('membro', { email_verified: false });
+    await assertFails(getDoc(ref(db, `${root}/pessoas/membro-membro`)));
+  });
+
+  test('Equipe de Mídia lê somente o próprio cadastro e não acessa módulos internos diretamente', async () => {
+    const db = authDb('midia');
+    await assertSucceeds(getDoc(ref(db, paths.user('midia'))));
+    await assertSucceeds(getDoc(ref(db, `${root}/pessoas/membro-midia`)));
+    for (const path of [paths.people, paths.agendas, paths.appointments, paths.config, paths.audit, paths.user('gestor')]) {
+      await assertFails(getDoc(ref(db, path)));
+    }
+    await assertFails(getDocs(collection(db, `${root}/pessoas`)));
+    await assertFails(getDocs(collection(db, `${root}/albuns_membros`)));
+  });
+
+  test('Membro e Mídia listam funções da Casa, mas não outras configurações internas', async () => {
+    for (const uid of ['membro', 'midia']) {
+      const db = authDb(uid);
+      await assertSucceeds(getDocs(collection(db, `${root}/config_funcoes_membro`)));
+      await assertFails(getDocs(collection(db, `${root}/config_servicos`)));
+      await assertFails(getDocs(collection(db, `${root}/config_eventos`)));
     }
   });
 });
@@ -402,7 +459,7 @@ describe('D. admin', () => {
   test('não exclui usuário', async () => assertFails(deleteDoc(ref(authDb('admin-a'), paths.user('gestor')))));
   test('não altera UID de usuário', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { uid: 'fraude', atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
   test('não cria role inválido', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('gestor')), { role: 'superadmin', atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
-  for (const role of ['gestor', 'atendimento', 'pendente']) {
+  for (const role of ['gestor', 'atendimento', 'midia', 'pendente']) {
     test(`Admin A não altera o próprio role para ${role}`, async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('admin-a')), { role, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
   }
   test('Admin A não desativa a própria conta', async () => assertFails(updateDoc(ref(authDb('admin-a'), paths.user('admin-a')), { ativo: false, atualizadoEm: new Date(), atualizadoPor: 'admin-a' })));
@@ -467,7 +524,7 @@ describe('F. atendimento', () => {
 
 describe('G. criação do próprio perfil', () => {
   const validProfile = uid => ({ uid, nome: 'Novo', email: `${uid}@example.test`, role: 'pendente', ativo: true, criadoEm: new Date(), atualizadoEm: new Date() });
-  for (const role of ['pendente', 'admin', 'gestor', 'atendimento']) {
+  for (const role of ['pendente', 'admin', 'gestor', 'atendimento', 'membro', 'midia']) {
     test(`recusa autocriar perfil com role ${role}`, async () => {
       const uid = `novo-${role}`;
       await assertFails(setDoc(ref(authDb(uid, { email: `${uid}@example.test` }), paths.user(uid)), { ...validProfile(uid), role }));

@@ -6,6 +6,8 @@ const member = overrides => ({ nome: 'Membro', email: ' MEMBRO@EXAMPLE.TEST ', v
 
 test('aceita somente membro ativo com e-mail e role operacional', () => {
   assert.equal(validateAccessAuthorization({ pessoa: member(), role: 'atendimento' }), null);
+  assert.equal(validateAccessAuthorization({ pessoa: member(), role: 'membro' }), null);
+  assert.equal(validateAccessAuthorization({ pessoa: member(), role: 'midia' }), null);
   assert.equal(validateAccessAuthorization({ pessoa: member({ email: null }), role: 'atendimento' }), 'MEMBRO_SEM_EMAIL_ACESSO');
   assert.equal(validateAccessAuthorization({ pessoa: member({ vinculo: 'consulente' }), role: 'atendimento' }), 'PESSOA_NAO_E_MEMBRO_ATIVO');
   assert.equal(validateAccessAuthorization({ pessoa: member({ ativo: false }), role: 'atendimento' }), 'PESSOA_NAO_E_MEMBRO_ATIVO');

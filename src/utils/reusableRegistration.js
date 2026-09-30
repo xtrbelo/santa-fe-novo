@@ -5,6 +5,7 @@ import { validateSelfRegistrationHouseData } from './memberSelfRegistration.js';
 const digits = (value, limit) => String(value ?? '').replace(/\D/g, '').slice(0, limit);
 const text = value => String(value ?? '').trim() || null;
 export const PRIVACY_NOTICE_VERSION = '2026-09-14.1';
+export const IMAGE_CONSENT_VERSION = '2026-09-29.1';
 
 export const buildReusableRegistrationPayload = (link, data = {}) => ({
   linkId: link.id,
@@ -24,6 +25,7 @@ export const buildReusableRegistrationPayload = (link, data = {}) => ({
     declaracaoVeracidade: data.aceite?.declaracaoVeracidade === true,
     emailConfirmado: link.tipoCadastro === 'membro',
   },
+  ...(link.tipoCadastro === 'membro' ? { consentimentoImagem: { autorizado: data.consentimentoImagem === true, versao: IMAGE_CONSENT_VERSION } } : {}),
   ...(link.tipoCadastro === 'membro' ? { verificacaoEmailId: text(data.verificacaoEmailId) } : {}),
   statusCadastro: 'aguardando_validacao',
   origemCadastro: 'link_reutilizavel',

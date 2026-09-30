@@ -1,7 +1,7 @@
 import { getPessoaVinculo } from './domain.js';
 import { isValidEmail, normalizeEmail } from './pessoaForm.js';
 
-export const ACCESS_AUTHORIZATION_ROLES = Object.freeze(['admin', 'gestor', 'atendimento']);
+export const ACCESS_AUTHORIZATION_ROLES = Object.freeze(['admin', 'gestor', 'atendimento', 'membro', 'midia']);
 export const ACCESS_AUTHORIZATION_STATUS = Object.freeze({ PENDING: 'pendente', USED: 'utilizado', CANCELLED: 'cancelado' });
 
 export const isAccessAuthorizationRole = role => ACCESS_AUTHORIZATION_ROLES.includes(role);

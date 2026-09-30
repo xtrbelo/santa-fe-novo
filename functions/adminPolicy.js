@@ -19,7 +19,7 @@ const memberType = person => String(person?.vinculo || person?.tipoPessoa || '')
 
 export const validateAccessAuthorizationCreation = ({ personId, person, role, index, authorization, activeEmailMatchIds = [] }) => {
   if (!personId || !person) throw new Error('PESSOA_NAO_E_MEMBRO_ATIVO');
-  if (!['admin', 'gestor', 'atendimento'].includes(role)) throw new Error('AUTORIZACAO_INVALIDA');
+  if (!['admin', 'gestor', 'atendimento', 'membro', 'midia'].includes(role)) throw new Error('AUTORIZACAO_INVALIDA');
   if (person.ativo === false || memberType(person) !== 'membro') throw new Error('PESSOA_NAO_E_MEMBRO_ATIVO');
   if (!normalizeEmail(person.email)) throw new Error('MEMBRO_SEM_EMAIL_ACESSO');
   if (activeEmailMatchIds.length !== 1 || activeEmailMatchIds[0] !== personId) throw new Error('EMAIL_MEMBRO_AMBIGUO');
@@ -30,7 +30,7 @@ export const validateAccessAuthorizationCreation = ({ personId, person, role, in
 
 export const validateUserPersonLinkChange = ({ targetUid, target, currentPersonExists, nextPersonId, nextPerson, nextIndex, activeEmailMatchIds = [nextPersonId] }) => {
   if (!targetUid || !target || !nextPersonId) throw new Error('OPERACAO_INVALIDA');
-  if (!['admin', 'gestor', 'atendimento'].includes(target.role)) throw new Error('ROLE_INVALIDA');
+  if (!['admin', 'gestor', 'atendimento', 'membro', 'midia'].includes(target.role)) throw new Error('ROLE_INVALIDA');
   if (!nextPerson || nextPerson.ativo === false || memberType(nextPerson) !== 'membro') throw new Error('PESSOA_NAO_E_MEMBRO_ATIVO');
   if (!normalizeEmail(nextPerson.email)) throw new Error('MEMBRO_SEM_EMAIL_ACESSO');
   if (normalizeEmail(nextPerson.email) !== normalizeEmail(target.email)) throw new Error('EMAIL_MEMBRO_DIVERGENTE');

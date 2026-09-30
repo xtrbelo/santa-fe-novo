@@ -7,6 +7,7 @@ const todayIso = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
+export const IMAGE_CONSENT_VERSION = '2026-09-29.1';
 
 export const validateSelfRegistrationHouseData = (dadosCasa, today = todayIso()) => {
   const normalized = normalizeDadosCasa(dadosCasa);
@@ -47,6 +48,7 @@ export const buildMemberSelfRegistrationPayload = (invite, data = {}) => ({
   estadoCivil: normalizeEstadoCivil(data.estadoCivil),
   endereco: normalizeEndereco(data.endereco),
   dadosCasa: normalizeDadosCasa(data.dadosCasa),
+  consentimentoImagem: { autorizado: data.consentimentoImagem === true, versao: IMAGE_CONSENT_VERSION },
   statusCadastro: 'aguardando_validacao',
   origemCadastro: 'autocadastro',
 });

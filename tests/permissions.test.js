@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   canAccessModule,
+  getDefaultModule,
   getAllowedModules,
   getModuleFromPathname,
   getModulePath,
@@ -15,10 +16,30 @@ import { ROLE_LABELS, ROLES, VALID_ROLES } from '../src/constants/roles.js';
 
 const profile = role => ({ role, ativo: true });
 
-test('mantém somente os quatro roles internos e os labels consolidados', () => {
-  assert.deepEqual([...VALID_ROLES].sort(), ['admin', 'atendimento', 'gestor', 'pendente']);
+test('separa o perfil de membro dos perfis internos', () => {
+  assert.deepEqual([...VALID_ROLES].sort(), ['admin', 'atendimento', 'gestor', 'membro', 'midia', 'pendente']);
   assert.equal(ROLE_LABELS.gestor, 'Gestor / Dirigente');
   assert.equal(ROLE_LABELS.atendimento, 'Atendimento / Recepção');
+});
+
+test('Equipe de Mídia acessa somente álbuns, Área do Membro e próprio cadastro', () => {
+  const midia = profile(ROLES.MIDIA);
+  assert.deepEqual(getAllowedModules(midia), [MODULES.MEMBER_AREA, MODULES.MY_REGISTRATION]);
+  assert.equal(hasPermission(midia, PERMISSIONS.MEMBER_MEDIA_MANAGE), true);
+  for (const permission of [PERMISSIONS.USERS_VIEW, PERMISSIONS.PEOPLE_VIEW, PERMISSIONS.AGENDA_VIEW, PERMISSIONS.CONFIG_MANAGE]) {
+    assert.equal(hasPermission(midia, permission), false);
+  }
+});
+
+test('Membro acessa somente sua área e o próprio cadastro', () => {
+  const membro = profile(ROLES.MEMBRO);
+  assert.deepEqual(getAllowedModules(membro), [MODULES.MEMBER_AREA, MODULES.MY_REGISTRATION]);
+  assert.equal(getDefaultModule(membro), MODULES.MEMBER_AREA);
+  assert.equal(getDefaultModule(profile(ROLES.ADMIN)), MODULES.DASHBOARD);
+  assert.equal(canAccessModule(membro, MODULES.MEMBER_AREA), true);
+  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.PROGRAMACAO, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.USERS, MODULES.CONFIG, MODULES.AUDIT]) {
+    assert.equal(canAccessModule(membro, moduleId), false);
+  }
 });
 
 test('Admin acessa todos os módulos e ações institucionais', () => {

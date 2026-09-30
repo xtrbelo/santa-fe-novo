@@ -73,6 +73,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
   const [eVinculo, setEVinculo] = useState('consulente');
   const [eFuncoes, setEFuncoes] = useState([]);
   const [eDataNasc, setEDataNasc] = useState('');
+  const [eOcultarAniversario, setEOcultarAniversario] = useState(false);
   const [eIdade, setEIdade] = useState(null);
   const [eNome, setENome] = useState('');
   const [eCpf, setECpf] = useState('');
@@ -124,6 +125,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
   const resetForm = () => {
     setEditing(null);
     setEDataNasc('');
+    setEOcultarAniversario(false);
     setEIdade(null);
     setENome('');
     setECpf('');
@@ -147,6 +149,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
     setEVinculo(getPessoaVinculo(p));
     setEFuncoes(getPessoaFuncoesCasa(p));
     setEDataNasc(p.dataNascimento || '');
+    setEOcultarAniversario(p.ocultarAniversario === true);
     setEIdade(calcularIdade(p.dataNascimento));
     setENome(p.nome || '');
     setECpf(maskCPF(p.cpf));
@@ -174,6 +177,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
       funcoesCasa: readOnly ? [] : eFuncoes,
       nome: eNome,
       dataNascimento: eDataNasc || null,
+      ocultarAniversario: effectiveVinculo === 'membro' && eOcultarAniversario,
       cpf: rawCpf || null,
       contato: minor ? null : cleanDigits(eContato) || null,
       email: minor && effectiveVinculo !== 'membro' ? null : eEmail,
@@ -419,6 +423,7 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
                     <span className={`text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider ${p.ativo === false ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{p.ativo === false ? 'Inativo' : 'Ativo'}</span>
                     {getMissingPersonFields(p).length > 0 && <span title={`Faltam: ${getMissingPersonFields(p).join(', ')}`} className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-amber-800">Cadastro incompleto</span>}
                     {getPessoaVinculo(p) === 'membro' && getPessoaStatusCadastro(p) === 'aprovado' && <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider bg-blue-50 text-blue-700">Cadastro aprovado</span>}
+                    {getPessoaVinculo(p) === 'membro' && p.ativo !== false && (typeof p.consentimentoImagem?.autorizado !== 'boolean' || p.consentimentoImagem?.origem === 'titular_presencial') && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-amber-800">Imagem pendente</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
                     <span className="text-[9px] font-black uppercase bg-purple-50 text-purple-700 px-2.5 py-0.5 rounded-full">
@@ -545,6 +550,8 @@ export const PessoasModule = ({ user, profile, focusPersonId = null, onFocusCons
             <input type="email" value={eEmail} onChange={e => setEEmail(e.target.value)} autoComplete="email" className="w-full bg-gray-50 px-4 py-3 rounded-xl border border-transparent font-bold text-sm focus:border-purple-500 focus:bg-white outline-none"/>
             {eVinculo === 'membro' && <p className="text-[11px] font-medium text-purple-700">E-mail opcional no cadastro do membro. Será necessário caso seja liberado acesso ao sistema.</p>}
           </div>
+
+          {!readOnly && eVinculo === 'membro' && <label className="flex items-start gap-3 rounded-2xl border border-pink-100 bg-pink-50/60 p-4 text-sm"><input type="checkbox" checked={eOcultarAniversario} onChange={event => setEOcultarAniversario(event.target.checked)} className="mt-1"/><span><strong className="block text-gray-900">Não exibir nos aniversariantes</strong><span className="text-xs text-gray-500">Oculta nome, dia e mês somente da Área do Membro.</span></span></label>}
 
           {!readOnly && eVinculo === 'membro' && <MembroDadosComplementares value={{ ...eMemberDetails, funcoesCasa: eFuncoes }} onChange={updateMemberDetails} functionOptions={effectiveMemberFunctions} />}
 

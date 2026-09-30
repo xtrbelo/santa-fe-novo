@@ -8,7 +8,7 @@ export const SELF_REGISTRATION_STATUS = Object.freeze({
   REJECTED: 'rejeitado',
 });
 
-export const buildPessoaFromSelfRegistration = (registration, { funcoesCasa = [], dadosCasa = registration?.dadosCasa } = {}) => buildPessoaPayload({
+export const buildPessoaFromSelfRegistration = (registration, { funcoesCasa = [], dadosCasa = registration?.dadosCasa } = {}) => ({ ...buildPessoaPayload({
   vinculo: 'membro',
   tipoPessoa: 'Membro',
   nome: registration?.nome,
@@ -24,7 +24,7 @@ export const buildPessoaFromSelfRegistration = (registration, { funcoesCasa = []
   ativo: true,
   statusCadastro: SELF_REGISTRATION_STATUS.APPROVED,
   origemCadastro: 'autocadastro',
-});
+}), ...(registration?.consentimentoImagem ? { consentimentoImagem: registration.consentimentoImagem } : {}) });
 
 export const validateSelfRegistrationApproval = (registration, options = {}) => {
   if (!registration || registration.statusCadastro !== SELF_REGISTRATION_STATUS.PENDING) return 'AUTOCADASTRO_JA_ANALISADO';

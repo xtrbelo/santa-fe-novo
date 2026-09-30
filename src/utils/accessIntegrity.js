@@ -1,4 +1,4 @@
-const OPERATIONAL_ROLES = new Set(['admin', 'gestor', 'atendimento']);
+const OPERATIONAL_ROLES = new Set(['admin', 'gestor', 'atendimento', 'membro', 'midia']);
 
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const personType = person => String(person?.vinculo || person?.tipoPessoa || '').trim().toLowerCase();
