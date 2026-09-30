@@ -4,7 +4,7 @@ const LABELS = Object.freeze({
   USUARIO_AUTORIZADO: 'Usuário autorizado', USUARIO_VINCULADO: 'Usuário vinculado', USUARIO_VINCULO_REPARADO: 'Vínculo de usuário reparado', USUARIO_ROLE_ALTERADO: 'Perfil de acesso alterado', USUARIO_STATUS_ALTERADO: 'Situação do usuário alterada', USUARIO_ACESSO_PREAUTORIZADO: 'Acesso pré-autorizado', USUARIO_ACESSO_ATIVADO: 'Acesso ativado', USUARIO_ACESSO_REVOGADO: 'Acesso revogado', USUARIO_ACESSO_REATIVADO: 'Acesso reativado', USUARIO_ACESSO_AUTORIZACAO_CANCELADA: 'Autorização de acesso cancelada',
   AGENDAMENTO_CANCELADO: 'Agendamento cancelado', AGENDAMENTO_EDITADO: 'Agendamento editado', PRIORIDADE_ALTERADA: 'Prioridade alterada', ATENDIMENTO_SERVICOS_ALTERADOS: 'Serviços do atendimento alterados', STATUS_ATENDIMENTO_CORRIGIDO: 'Status do atendimento corrigido', ATENDIMENTO_REAGENDADO: 'Atendimento reagendado', SERVICO_REALOCADO: 'Serviço realocado',
   AGENDA_CONCLUIDA: 'Atendimento do dia fechado', AGENDA_EDITADA: 'Agenda atualizada', AGENDA_CANCELADA: 'Agenda cancelada', AGENDA_EXCLUIDA: 'Agenda excluída', SERVICO_AGENDA_CANCELADO: 'Serviço cancelado na agenda', VAGAS_RECONCILIADAS: 'Vagas reconciliadas', CPF_INDEX_RECONSTRUIDO: 'Índice de CPF reparado',
-  DADOS_PESSOAIS_EXPORTADOS: 'Dados pessoais exportados',
+  DADOS_PESSOAIS_EXPORTADOS: 'Dados pessoais exportados', AUTORIZACAO_IMAGEM_ALTERADA: 'Autorização de uso de imagem alterada',
 });
 
 const FIELD_LABELS = Object.freeze({
@@ -15,6 +15,7 @@ export const getAuditOrigin = type => {
   const value = String(type || '');
   if (value === 'AGENDA_CONCLUIDA') return 'Fluxo do Dia';
   if (value === 'MEU_CADASTRO_ATUALIZADO') return 'Meu Cadastro';
+  if (value === 'AUTORIZACAO_IMAGEM_ALTERADA') return 'Área do Membro';
   if (value.startsWith('AUTOCADASTRO_')) return 'Solicitações de cadastro';
   if (value.startsWith('USUARIO_')) return 'Usuários e acessos';
   if (value.startsWith('PESSOA_') || value.startsWith('MEMBRO_') || value === 'CPF_INDEX_RECONSTRUIDO') return 'Pessoas';
@@ -68,7 +69,7 @@ export const getAuditCategory = type => {
   if (String(type).startsWith('USUARIO_')) return 'acesso';
   if (String(type).startsWith('AGENDA_') || type === 'VAGAS_RECONCILIADAS' || type === 'SERVICO_AGENDA_CANCELADO') return 'agenda';
   if (['AGENDAMENTO_CANCELADO', 'PRIORIDADE_ALTERADA', 'ATENDIMENTO_SERVICOS_ALTERADOS', 'STATUS_ATENDIMENTO_CORRIGIDO', 'ATENDIMENTO_REAGENDADO', 'SERVICO_REALOCADO'].includes(type)) return 'atendimento';
-  if (String(type).startsWith('PESSOA_') || String(type).startsWith('MEMBRO_') || String(type).startsWith('AUTOCADASTRO_') || type === 'MEU_CADASTRO_ATUALIZADO' || type === 'CPF_INDEX_RECONSTRUIDO') return 'cadastro';
+  if (String(type).startsWith('PESSOA_') || String(type).startsWith('MEMBRO_') || String(type).startsWith('AUTOCADASTRO_') || type === 'MEU_CADASTRO_ATUALIZADO' || type === 'AUTORIZACAO_IMAGEM_ALTERADA' || type === 'CPF_INDEX_RECONSTRUIDO') return 'cadastro';
   return 'outros';
 };
 

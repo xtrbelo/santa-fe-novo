@@ -8,7 +8,8 @@ import {
   Settings, 
   ContactRound,
   LogOut,
-  ScrollText
+  ScrollText,
+  Images
 } from 'lucide-react';
 import { ROLE_LABELS } from '../../constants/roles';
 import { canAccessModule } from '../../constants/permissions';
@@ -24,6 +25,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
     { id: 'usuarios', label: 'Usuários', icon: <UsersRound size={22} /> },
     { id: 'config', label: 'Configurações', icon: <Settings size={22} /> },
     { id: 'auditoria', label: 'Auditoria', icon: <ScrollText size={22} /> },
+    { id: 'area-membro', label: 'Área do Membro', icon: <Images size={22} /> },
     { id: 'meu-cadastro', label: 'Meu Cadastro', icon: <ContactRound size={22} /> },
   ];
 
@@ -36,7 +38,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
             Santa Fé
           </span>
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mt-0.5">
-            Gestão Interna
+            {profile?.role === 'midia' ? 'Equipe de Mídia' : profile?.role === 'membro' ? 'Área do Membro' : 'Gestão Interna'}
           </span>
           <span className="mt-1 block text-[9px] font-bold text-indigo-600">
             {APP_VERSION_LABEL}

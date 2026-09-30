@@ -29,15 +29,23 @@ import { buildBackupArchive, getBackupBucket } from './systemBackup.js';
 import { buildSecureRegistrationPayload, hashPublicIdentity, isRateLimitExceeded } from './publicRegistration.js';
 import { validateDataExportRequest } from './dataExportPolicy.js';
 import { getOrphanAccessIndexReason } from './accessIndexCleanup.js';
+import { selectMemberBirthdays, selectMemberCalendar, startOfSaoPauloDay } from './memberArea.js';
+import { selectPublishedMemberNotices, validateMemberNotice } from './memberNotices.js';
+import { selectMemberAlbums, validateMemberAlbum } from './memberAlbums.js';
+import { selectImageAuthorizations } from './imageAuthorization.js';
+import { IMAGE_CONSENT_REQUEST_TTL_MS, IMAGE_CONSENT_VERSION, buildImageConsentCodeEmail, buildImageConsentEvidenceHash, buildImageConsentInvitationEmail, buildImageConsentReceiptEmail, createImageConsentToken, hashImageConsentToken, maskImageConsentEmail } from './imageConsentInvitation.js';
 
 if (!getApps().length) initializeApp();
 
-const allowedRoles = new Set(['admin', 'gestor', 'atendimento']);
+const accessRoles = new Set(['admin', 'gestor', 'atendimento', 'membro', 'midia']);
+const internalRoles = new Set(['admin', 'gestor', 'atendimento']);
+const memberAreaRoles = new Set(['admin', 'gestor', 'membro', 'midia']);
+const memberMediaRoles = new Set(['admin', 'gestor', 'midia']);
 const fail = (code, message) => { throw new HttpsError(code, message); };
 const normalizeIdentityEmail = value => String(value || '').trim().toLowerCase();
 const normalizeWorkName = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 const isActiveMemberRecord = person => person?.ativo !== false && String(person?.vinculo || person?.tipoPessoa || '').trim().toLowerCase() === 'membro';
-const PERSON_EDITABLE_FIELDS = new Set(['vinculo', 'funcoesCasa', 'tipoPessoa', 'nome', 'dataNascimento', 'cpf', 'contato', 'email', 'responsavelCpf', 'responsavelNome', 'responsavelContato', 'sexo', 'estadoCivil', 'endereco', 'dadosCasa', 'statusCadastro', 'origemCadastro', 'busca']);
+const PERSON_EDITABLE_FIELDS = new Set(['vinculo', 'funcoesCasa', 'tipoPessoa', 'nome', 'dataNascimento', 'ocultarAniversario', 'cpf', 'contato', 'email', 'responsavelCpf', 'responsavelNome', 'responsavelContato', 'sexo', 'estadoCivil', 'endereco', 'dadosCasa', 'statusCadastro', 'origemCadastro', 'busca']);
 const cleanPersonPayload = data => Object.fromEntries(Object.entries(data || {}).filter(([key, value]) => PERSON_EDITABLE_FIELDS.has(key) && value !== undefined));
 const mailjetApiKey = defineSecret('MAILJET_API_KEY');
 const mailjetSecretKey = defineSecret('MAILJET_SECRET_KEY');
@@ -143,6 +151,192 @@ export const recordDataExport = onCall(async request => {
   return { auditId: ref.id };
 });
 
+export const getMemberAreaOverview = onCall({ maxInstances: 5 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const requestedMonth = request.data?.month == null ? null : Number(request.data.month);
+  if (requestedMonth != null && (!Number.isInteger(requestedMonth) || requestedMonth < 1 || requestedMonth > 12)) fail('invalid-argument', 'MES_INVALIDO');
+
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  const profile = executor.data();
+  if (!executor.exists || profile?.ativo === false || !memberAreaRoles.has(profile?.role)) fail('permission-denied', 'AREA_MEMBRO_NAO_AUTORIZADA');
+
+  if (['membro', 'midia'].includes(profile.role)) {
+    if (!profile.pessoaBaseId) fail('permission-denied', 'MEMBRO_SEM_VINCULO');
+    const person = await root.collection('pessoas').doc(profile.pessoaBaseId).get();
+    if (!person.exists || !isActiveMemberRecord(person.data())) fail('permission-denied', 'MEMBRO_INATIVO');
+  }
+
+  const now = new Date();
+  const start = startOfSaoPauloDay(now);
+  const [agendaSnapshot, peopleSnapshot, noticeSnapshot, albumSnapshot, imageAuthorizationSnapshot] = await Promise.all([
+    root.collection('agendas').where('data', '>=', Timestamp.fromDate(start)).orderBy('data', 'asc').limit(40).get(),
+    root.collection('pessoas').get(),
+    root.collection('avisos_membros').where('status', '==', 'publicado').limit(50).get(),
+    root.collection('albuns_membros').limit(50).get(),
+    root.collection('autorizacoes_imagem').get(),
+  ]);
+  const agendas = agendaSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+  const people = peopleSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+  const notices = noticeSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+  const albums = albumSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+  const imageAuthorizations = imageAuthorizationSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+  const authorizationItems = selectImageAuthorizations(people, imageAuthorizations);
+  const month = requestedMonth || Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', month: '2-digit' }).format(now));
+  return {
+    mesAniversarios: month,
+    calendario: selectMemberCalendar(agendas, { now }),
+    aniversariantes: selectMemberBirthdays(people, { month, now }),
+    avisos: selectPublishedMemberNotices(notices, { now }),
+    albuns: selectMemberAlbums(albums, { includeDrafts: memberMediaRoles.has(profile.role) }),
+    autorizacoesImagem: memberMediaRoles.has(profile.role)
+      ? authorizationItems
+      : authorizationItems.filter(item => item.pessoaId === profile.pessoaBaseId),
+  };
+});
+
+export const manageImageAuthorization = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  const profile = executor.data();
+  if (!executor.exists || profile?.ativo === false || !['admin', 'gestor'].includes(profile?.role)) fail('permission-denied', 'GESTAO_AUTORIZACAO_IMAGEM_OBRIGATORIA');
+  fail('failed-precondition', 'AUTORIZACAO_SOMENTE_DIGITAL');
+});
+
+export const createInPersonImageConsentSession = onCall({ maxInstances: 3 }, async () => {
+  fail('failed-precondition', 'AUTORIZACAO_EXCLUSIVA_CONTA_MEMBRO');
+});
+
+export const submitInPersonImageConsentDecision = onCall({ maxInstances: 5 }, async () => {
+  fail('failed-precondition', 'AUTORIZACAO_EXCLUSIVA_CONTA_MEMBRO');
+});
+
+export const setMyImageConsent = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  if (typeof request.data?.authorized !== 'boolean') fail('invalid-argument', 'AUTORIZACAO_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const user = await root.collection('usuarios').doc(request.auth.uid).get();
+  const profile = user.data();
+  if (!user.exists || profile?.ativo === false || !profile?.pessoaBaseId) fail('permission-denied', 'MEMBRO_SEM_VINCULO');
+  const personRef = root.collection('pessoas').doc(profile.pessoaBaseId);
+  const authorizationRef = root.collection('autorizacoes_imagem').doc(profile.pessoaBaseId);
+  const [person, current] = await Promise.all([personRef.get(), authorizationRef.get()]);
+  if (!person.exists || !isActiveMemberRecord(person.data())) fail('failed-precondition', 'MEMBRO_ATIVO_OBRIGATORIO');
+  const status = request.data.authorized ? 'autorizado' : 'nao_autorizado';
+  const now = Timestamp.now();
+  const previousStatus = current.exists && ['titular_email', 'titular_sistema'].includes(current.data()?.origem)
+    ? current.data().status
+    : person.data()?.consentimentoImagem?.origem !== 'titular_presencial' && person.data()?.consentimentoImagem?.autorizado === true ? 'autorizado'
+      : person.data()?.consentimentoImagem?.origem !== 'titular_presencial' && person.data()?.consentimentoImagem?.autorizado === false ? 'nao_autorizado' : 'pendente';
+  const evidenceHash = buildImageConsentEvidenceHash({ pessoaId: profile.pessoaBaseId, solicitacaoId: authorizationRef.id, autorizado: request.data.authorized, versaoTermo: IMAGE_CONSENT_VERSION, respondidoEm: now.toDate().toISOString(), canal: 'conta_autenticada', titularUid: request.auth.uid });
+  const protocol = evidenceHash.slice(0, 16).toUpperCase();
+  const auditRef = root.collection('auditoria').doc();
+  const batch = firestore.batch();
+  batch.update(personRef, { consentimentoImagem: { autorizado: request.data.authorized, versao: IMAGE_CONSENT_VERSION, registradoEm: now, origem: 'titular_sistema', protocolo: protocol }, atualizadoEm: now, atualizadoPor: request.auth.uid });
+  batch.set(authorizationRef, { pessoaId: profile.pessoaBaseId, status, observacao: request.data.authorized ? 'Autorizado pelo membro em Meu Cadastro.' : 'Não autorizado pelo membro em Meu Cadastro.', origem: 'titular_sistema', versaoTermo: IMAGE_CONSENT_VERSION, emailVerificado: true, evidenciaHash: evidenceHash, protocolo: protocol, atualizadoEm: now, atualizadoPor: request.auth.uid, responsavelNome: person.data().nome || profile.nome || null, ...(current.exists ? {} : { criadoEm: now, criadoPor: request.auth.uid }) }, { merge: true });
+  batch.set(auditRef, { tipo: 'AUTORIZACAO_IMAGEM_ALTERADA', pessoaId: profile.pessoaBaseId, pessoaNome: person.data().nome || null, statusAnterior: previousStatus, statusNovo: status, motivo: request.data.authorized ? 'Aceite realizado pelo próprio membro autenticado.' : 'Recusa ou revogação realizada pelo próprio membro autenticado.', executadoPor: request.auth.uid, responsavelNome: person.data().nome || profile.nome || null, evidenciaHash: evidenceHash, protocolo: protocol, criadoEm: now });
+  await batch.commit();
+  return { status, protocol };
+});
+
+export const manageMemberNotice = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const action = String(request.data?.action || '').trim();
+  const noticeId = String(request.data?.noticeId || '').trim();
+  if (!['save', 'archive'].includes(action) || (action === 'archive' && !noticeId)) fail('invalid-argument', 'ACAO_INVALIDA');
+
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || executor.data()?.ativo === false || !['admin', 'gestor'].includes(executor.data()?.role)) fail('permission-denied', 'GESTAO_AREA_MEMBRO_OBRIGATORIA');
+
+  const noticeRef = noticeId ? root.collection('avisos_membros').doc(noticeId) : root.collection('avisos_membros').doc();
+  const current = noticeId ? await noticeRef.get() : null;
+  if (noticeId && !current?.exists) fail('not-found', 'AVISO_NAO_ENCONTRADO');
+  const auditRef = root.collection('auditoria').doc();
+  const now = FieldValue.serverTimestamp();
+  const batch = firestore.batch();
+
+  if (action === 'archive') {
+    batch.update(noticeRef, { status: 'arquivado', atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(auditRef, { tipo: 'AVISO_MEMBRO_RETIRADO', alvoId: noticeRef.id, executadoPor: request.auth.uid, criadoEm: now });
+  } else {
+    let payload;
+    try { payload = validateMemberNotice(request.data?.notice); }
+    catch (error) { fail('invalid-argument', error.message); }
+    const data = { titulo: payload.titulo, mensagem: payload.mensagem, destaque: payload.destaque, inicioEm: Timestamp.fromDate(payload.inicioEm), fimEm: payload.fimEm ? Timestamp.fromDate(payload.fimEm) : null, status: 'publicado', atualizadoEm: now, atualizadoPor: request.auth.uid };
+    if (current?.exists) batch.update(noticeRef, data);
+    else batch.set(noticeRef, { ...data, criadoEm: now, criadoPor: request.auth.uid });
+    batch.set(auditRef, { tipo: current?.exists ? 'AVISO_MEMBRO_ATUALIZADO' : 'AVISO_MEMBRO_PUBLICADO', alvoId: noticeRef.id, executadoPor: request.auth.uid, criadoEm: now });
+  }
+  await batch.commit();
+  return { noticeId: noticeRef.id, action };
+});
+
+export const manageMemberAlbum = onCall({ maxInstances: 3 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const action = String(request.data?.action || '').trim();
+  const albumId = String(request.data?.albumId || '').trim();
+  if (!['save', 'archive'].includes(action) || (action === 'archive' && !albumId)) fail('invalid-argument', 'ACAO_INVALIDA');
+
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  const profile = executor.data();
+  if (!executor.exists || profile?.ativo === false || !memberMediaRoles.has(profile?.role)) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+  if (profile.role === 'midia') {
+    if (!profile.pessoaBaseId) fail('permission-denied', 'MEMBRO_SEM_VINCULO');
+    const person = await root.collection('pessoas').doc(profile.pessoaBaseId).get();
+    if (!person.exists || !isActiveMemberRecord(person.data())) fail('permission-denied', 'MEMBRO_INATIVO');
+  }
+
+  const albumRef = albumId ? root.collection('albuns_membros').doc(albumId) : root.collection('albuns_membros').doc();
+  const current = albumId ? await albumRef.get() : null;
+  if (albumId && !current?.exists) fail('not-found', 'ALBUM_NAO_ENCONTRADO');
+  const auditRef = root.collection('auditoria').doc();
+  const now = FieldValue.serverTimestamp();
+  const batch = firestore.batch();
+
+  if (action === 'archive') {
+    batch.update(albumRef, { status: 'arquivado', atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(auditRef, { tipo: 'ALBUM_MEMBRO_RETIRADO', alvoId: albumRef.id, executadoPor: request.auth.uid, criadoEm: now });
+  } else {
+    let payload;
+    try { payload = validateMemberAlbum(request.data?.album); }
+    catch (error) { fail('invalid-argument', error.message); }
+    if (payload.status === 'publicado' && payload.participantesIds.length) {
+      const checks = await Promise.all(payload.participantesIds.map(async pessoaId => {
+        const [person, authorization] = await Promise.all([
+          root.collection('pessoas').doc(pessoaId).get(),
+          root.collection('autorizacoes_imagem').doc(pessoaId).get(),
+        ]);
+        return {
+          pessoaId,
+          nome: person.exists ? person.data().nome : 'Membro não localizado',
+          autorizado: person.exists && isActiveMemberRecord(person.data()) && (authorization.exists
+            ? ['titular_email', 'titular_sistema'].includes(authorization.data().origem) && authorization.data().status === 'autorizado'
+            : person.data()?.consentimentoImagem?.origem !== 'titular_presencial' && person.data()?.consentimentoImagem?.autorizado === true),
+        };
+      }));
+      const blocked = checks.filter(item => !item.autorizado);
+      if (blocked.length) throw new HttpsError('failed-precondition', 'AUTORIZACAO_IMAGEM_PENDENTE', { nomes: blocked.map(item => item.nome).slice(0, 10) });
+    }
+    const data = { ...payload, quantidadeArquivos: Number(current?.data()?.quantidadeArquivos || 0), atualizadoEm: now, atualizadoPor: request.auth.uid };
+    if (current?.exists) batch.update(albumRef, data);
+    else batch.set(albumRef, { ...data, criadoEm: now, criadoPor: request.auth.uid });
+    batch.set(auditRef, { tipo: current?.exists ? 'ALBUM_MEMBRO_ATUALIZADO' : 'ALBUM_MEMBRO_CRIADO', alvoId: albumRef.id, status: payload.status, executadoPor: request.auth.uid, criadoEm: now });
+  }
+  await batch.commit();
+  return { albumId: albumRef.id, action };
+});
+
 export const closeDayWithWorkers = onCall(async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
   const agendaId = String(request.data?.agendaId || '').trim();
@@ -162,7 +356,7 @@ export const closeDayWithWorkers = onCall(async request => {
   return firestore.runTransaction(async transaction => {
     const executorRef = root.collection('usuarios').doc(request.auth.uid);
     const executor = await transaction.get(executorRef);
-    if (!executor.exists || executor.data().ativo === false || !allowedRoles.has(executor.data().role)) fail('permission-denied', 'ACESSO_INTERNO_OBRIGATORIO');
+    if (!executor.exists || executor.data().ativo === false || !internalRoles.has(executor.data().role)) fail('permission-denied', 'ACESSO_INTERNO_OBRIGATORIO');
     if (executor.data().pessoaBaseId) {
       const executorPerson = await transaction.get(root.collection('pessoas').doc(executor.data().pessoaBaseId));
       if (!executorPerson.exists || executorPerson.data().ativo === false) fail('permission-denied', 'MEMBRO_INATIVO');
@@ -645,9 +839,9 @@ export const sealReusableRegistrationEvidence = onDocumentCreated({
 });
 
 const sendAccountMessage = ({ email, nome, message }) => sendMailjetMessage({ apiKey: mailjetApiKey.value(), secretKey: mailjetSecretKey.value(), fromEmail: registrationEmailFrom.value(), toEmail: email, toName: nome, ...message });
-const deliverTrackedAccountEmail = async ({ root, pessoaBaseId, tipo, email, nome, message, reenviadoDe = null }) => {
+const deliverTrackedAccountEmail = async ({ root, pessoaBaseId, tipo, email, nome, message, reenviadoDe = null, origemId = null }) => {
   const ref = root.collection('comunicacoes_email').doc();
-  await ref.set({ pessoaBaseId, tipo, destinatario: email, nome: nome || null, status: 'enviando', ...(reenviadoDe ? { reenviadoDe } : {}), criadoEm: FieldValue.serverTimestamp(), atualizadoEm: FieldValue.serverTimestamp() });
+  await ref.set({ pessoaBaseId, tipo, destinatario: email, nome: nome || null, status: 'enviando', ...(reenviadoDe ? { reenviadoDe } : {}), ...(origemId ? { origemId } : {}), criadoEm: FieldValue.serverTimestamp(), atualizadoEm: FieldValue.serverTimestamp() });
   try {
     await sendAccountMessage({ email, nome, message });
     await ref.update({ status: 'enviado', enviadoEm: FieldValue.serverTimestamp(), atualizadoEm: FieldValue.serverTimestamp() });
@@ -658,6 +852,132 @@ const deliverTrackedAccountEmail = async ({ root, pessoaBaseId, tipo, email, nom
   return ref.id;
 };
 const mailjetCallableOptions = { region: 'southamerica-east1', maxInstances: 3, secrets: [mailjetApiKey, mailjetSecretKey, registrationEmailFrom] };
+
+export const sendImageConsentInvitations = onCall(mailjetCallableOptions, async request => {
+  fail('failed-precondition', 'FLUXO_EMAIL_AUTORIZACAO_DESATIVADO');
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const pessoaIds = [...new Set((request.data?.pessoaIds || []).map(value => String(value || '').trim()).filter(Boolean))];
+  if (!pessoaIds.length || pessoaIds.length > 50) fail('invalid-argument', 'MEMBROS_INVALIDOS');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || executor.data()?.ativo === false || !['admin', 'gestor'].includes(executor.data()?.role)) fail('permission-denied', 'GESTAO_AUTORIZACAO_IMAGEM_OBRIGATORIA');
+  const results = [];
+  for (const pessoaId of pessoaIds) {
+    const personRef = root.collection('pessoas').doc(pessoaId);
+    const authorizationRef = root.collection('autorizacoes_imagem').doc(pessoaId);
+    const [person, authorization] = await Promise.all([personRef.get(), authorizationRef.get()]);
+    const personData = person.data();
+    const email = normalizeVerificationEmail(personData?.email);
+    const effectiveStatus = ['titular_email', 'titular_sistema'].includes(authorization.data()?.origem)
+      ? authorization.data()?.status
+      : personData?.consentimentoImagem?.autorizado === true ? 'autorizado' : 'pendente';
+    if (!person.exists || !isActiveMemberRecord(personData)) { results.push({ pessoaId, status: 'ignorado', motivo: 'MEMBRO_INDISPONIVEL' }); continue; }
+    if (!isVerificationEmail(email)) { results.push({ pessoaId, status: 'ignorado', motivo: 'EMAIL_NAO_CADASTRADO' }); continue; }
+    if (effectiveStatus === 'autorizado') { results.push({ pessoaId, status: 'ignorado', motivo: 'JA_AUTORIZADO' }); continue; }
+    const token = createImageConsentToken();
+    const tokenHash = hashImageConsentToken(token);
+    const requestRef = root.collection('solicitacoes_autorizacao_imagem').doc(tokenHash);
+    const previousRequests = await root.collection('solicitacoes_autorizacao_imagem').where('pessoaId', '==', pessoaId).limit(20).get();
+    const now = Timestamp.now();
+    const batch = firestore.batch();
+    previousRequests.docs.filter(item => item.data().status === 'pendente').forEach(item => batch.update(item.ref, { status: 'substituida', atualizadoEm: now }));
+    batch.create(requestRef, { pessoaId, email, nome: personData.nome || null, status: 'pendente', versaoTermo: IMAGE_CONSENT_VERSION, criadoEm: now, criadoPor: request.auth.uid, expiraEm: Timestamp.fromMillis(now.toMillis() + IMAGE_CONSENT_REQUEST_TTL_MS), envioStatus: 'enviando' });
+    batch.create(root.collection('auditoria').doc(), { tipo: 'AUTORIZACAO_IMAGEM_SOLICITADA', pessoaId, pessoaNome: personData.nome || null, executadoPor: request.auth.uid, responsavelNome: executor.data().nome || executor.data().email || null, criadoEm: now });
+    await batch.commit();
+    try {
+      const link = `${getSystemBaseUrl(projectId)}/autorizar-imagem?token=${token}`;
+      const communicationId = await deliverTrackedAccountEmail({ root, pessoaBaseId: pessoaId, tipo: 'autorizacao_imagem_solicitacao', email, nome: personData.nome, message: buildImageConsentInvitationEmail({ nome: personData.nome, link }), origemId: requestRef.id });
+      await requestRef.update({ envioStatus: 'enviado', comunicacaoId: communicationId, enviadoEm: FieldValue.serverTimestamp(), atualizadoEm: FieldValue.serverTimestamp() });
+      results.push({ pessoaId, status: 'enviado' });
+    } catch {
+      await requestRef.update({ envioStatus: 'erro', atualizadoEm: FieldValue.serverTimestamp() });
+      results.push({ pessoaId, status: 'erro', motivo: 'ENVIO_NAO_CONCLUIDO' });
+    }
+  }
+  return { enviados: results.filter(item => item.status === 'enviado').length, ignorados: results.filter(item => item.status === 'ignorado').length, erros: results.filter(item => item.status === 'erro').length, resultados: results };
+});
+
+export const getImageConsentRequest = onCall({ region: 'southamerica-east1', maxInstances: 5 }, async request => {
+  fail('failed-precondition', 'FLUXO_EMAIL_AUTORIZACAO_DESATIVADO');
+  const token = String(request.data?.token || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(token)) return { status: 'indisponivel' };
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data');
+  const snapshot = await root.collection('solicitacoes_autorizacao_imagem').doc(hashImageConsentToken(token)).get();
+  const data = snapshot.data();
+  if (!snapshot.exists || data?.status !== 'pendente' || data?.expiraEm?.toMillis?.() <= Date.now()) return { status: 'indisponivel' };
+  return { status: 'pendente', nome: String(data.nome || '').trim().split(/\s+/)[0] || 'Membro', emailMascarado: maskImageConsentEmail(data.email), versaoTermo: data.versaoTermo || IMAGE_CONSENT_VERSION, codigoEnviado: data.codigoStatus === 'enviado' && data.codigoExpiraEm?.toMillis?.() > Date.now() };
+});
+
+export const requestImageConsentCode = onCall(mailjetCallableOptions, async request => {
+  fail('failed-precondition', 'FLUXO_EMAIL_AUTORIZACAO_DESATIVADO');
+  const token = String(request.data?.token || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(token)) fail('invalid-argument', 'SOLICITACAO_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data');
+  const requestRef = root.collection('solicitacoes_autorizacao_imagem').doc(hashImageConsentToken(token));
+  const code = createVerificationCode();
+  const now = Timestamp.now();
+  const allowed = await getFirestore().runTransaction(async transaction => {
+    const snapshot = await transaction.get(requestRef);
+    const data = snapshot.data();
+    if (!snapshot.exists || data.status !== 'pendente' || data.expiraEm?.toMillis?.() <= now.toMillis()) fail('failed-precondition', 'SOLICITACAO_INDISPONIVEL');
+    if (now.toMillis() - (data.codigoEnviadoEm?.toMillis?.() || 0) < 60000) return null;
+    transaction.update(requestRef, { codigoHash: hashVerificationCode({ verificationId: requestRef.id, code }), codigoStatus: 'enviando', codigoTentativas: 0, codigoEnviadoEm: now, codigoExpiraEm: Timestamp.fromMillis(now.toMillis() + 600000), atualizadoEm: now });
+    return data;
+  });
+  if (!allowed) fail('resource-exhausted', 'AGUARDE_REENVIO');
+  try {
+    await sendAccountMessage({ email: allowed.email, nome: allowed.nome, message: buildImageConsentCodeEmail({ nome: allowed.nome, code }) });
+    await requestRef.update({ codigoStatus: 'enviado', atualizadoEm: FieldValue.serverTimestamp() });
+  } catch (error) {
+    await requestRef.update({ codigoStatus: 'erro', atualizadoEm: FieldValue.serverTimestamp() });
+    throw error;
+  }
+  return { sent: true, emailMascarado: maskImageConsentEmail(allowed.email) };
+});
+
+export const submitImageConsentDecision = onCall(mailjetCallableOptions, async request => {
+  fail('failed-precondition', 'FLUXO_EMAIL_AUTORIZACAO_DESATIVADO');
+  const token = String(request.data?.token || '').trim().toLowerCase();
+  const code = String(request.data?.code || '').trim();
+  const authorized = request.data?.authorized;
+  if (!/^[a-f0-9]{64}$/.test(token) || !/^[0-9]{6}$/.test(code) || typeof authorized !== 'boolean') fail('invalid-argument', 'DADOS_INVALIDOS');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const requestRef = root.collection('solicitacoes_autorizacao_imagem').doc(hashImageConsentToken(token));
+  const result = await firestore.runTransaction(async transaction => {
+    const consentRequest = await transaction.get(requestRef);
+    const data = consentRequest.data();
+    const now = Timestamp.now();
+    if (!consentRequest.exists || data.status !== 'pendente' || data.expiraEm?.toMillis?.() <= now.toMillis() || data.codigoStatus !== 'enviado' || data.codigoExpiraEm?.toMillis?.() <= now.toMillis() || Number(data.codigoTentativas || 0) >= 5) fail('failed-precondition', 'CODIGO_INVALIDO_OU_EXPIRADO');
+    if (!verificationCodeMatches({ verificationId: requestRef.id, code, expectedHash: data.codigoHash })) {
+      transaction.update(requestRef, { codigoTentativas: FieldValue.increment(1), atualizadoEm: now });
+      return null;
+    }
+    const personRef = root.collection('pessoas').doc(data.pessoaId);
+    const authorizationRef = root.collection('autorizacoes_imagem').doc(data.pessoaId);
+    const [person, current] = await Promise.all([transaction.get(personRef), transaction.get(authorizationRef)]);
+    if (!person.exists || !isActiveMemberRecord(person.data()) || normalizeVerificationEmail(person.data().email) !== normalizeVerificationEmail(data.email)) fail('failed-precondition', 'MEMBRO_INDISPONIVEL');
+    const status = authorized ? 'autorizado' : 'nao_autorizado';
+    const previousStatus = ['titular_email', 'titular_sistema'].includes(current.data()?.origem) ? current.data()?.status : person.data()?.consentimentoImagem?.autorizado === true ? 'autorizado' : 'pendente';
+    const evidenceHash = buildImageConsentEvidenceHash({ pessoaId: data.pessoaId, solicitacaoId: requestRef.id, autorizado: authorized, versaoTermo: IMAGE_CONSENT_VERSION, respondidoEm: now.toDate().toISOString(), email: data.email });
+    transaction.update(personRef, { consentimentoImagem: { autorizado: authorized, versao: IMAGE_CONSENT_VERSION, registradoEm: now }, atualizadoEm: now, atualizadoPor: 'titular_email' });
+    transaction.set(authorizationRef, { pessoaId: data.pessoaId, status, origem: 'titular_email', versaoTermo: IMAGE_CONSENT_VERSION, emailVerificado: true, evidenciaHash: evidenceHash, solicitacaoId: requestRef.id, observacao: authorized ? 'Autorizado eletronicamente pelo titular.' : 'Não autorizado eletronicamente pelo titular.', responsavelNome: person.data().nome || data.nome || null, atualizadoEm: now, atualizadoPor: 'titular_email', ...(current.exists ? {} : { criadoEm: now, criadoPor: 'titular_email' }) }, { merge: true });
+    transaction.update(requestRef, { status: 'respondida', decisao: status, respondidoEm: now, evidenciaHash: evidenceHash, codigoHash: FieldValue.delete(), codigoStatus: 'utilizado', atualizadoEm: now });
+    transaction.create(root.collection('auditoria').doc(), { tipo: 'AUTORIZACAO_IMAGEM_ALTERADA', pessoaId: data.pessoaId, pessoaNome: person.data().nome || null, statusAnterior: previousStatus, statusNovo: status, motivo: authorized ? 'Aceite eletrônico realizado pelo titular.' : 'Recusa eletrônica registrada pelo titular.', executadoPor: 'titular_email', responsavelNome: person.data().nome || null, evidenciaHash: evidenceHash, criadoEm: now });
+    return { pessoaId: data.pessoaId, nome: person.data().nome || data.nome, email: data.email, status, evidenceHash };
+  });
+  if (!result) fail('invalid-argument', 'CODIGO_INVALIDO_OU_EXPIRADO');
+  let receiptSent = true;
+  try {
+    await deliverTrackedAccountEmail({ root, pessoaBaseId: result.pessoaId, tipo: 'autorizacao_imagem_comprovante', email: result.email, nome: result.nome, message: buildImageConsentReceiptEmail({ nome: result.nome, authorized, protocol: result.evidenceHash.slice(0, 16).toUpperCase() }), origemId: requestRef.id });
+  } catch { receiptSent = false; }
+  return { status: result.status, protocol: result.evidenceHash.slice(0, 16).toUpperCase(), receiptSent };
+});
 
 const registerPublicBlock = async ({ root, linkId, identityHash, reason }) => {
   const day = new Date().toISOString().slice(0, 10); const id = `seguranca_${day}_${hashPublicIdentity(`${linkId}|${identityHash}|${reason}`).slice(0, 32)}`;
@@ -694,7 +1014,7 @@ export const submitReusableRegistrationSecure = onCall({ region: 'southamerica-e
       if (verificationRef && (!verification?.exists || verification.data().status !== 'confirmado' || verification.data().linkId !== linkId || verification.data().email !== payload.email || verification.data().expiraEm?.toMillis?.() <= nowMillis)) fail('failed-precondition', 'EMAIL_NAO_CONFIRMADO');
       const now = Timestamp.fromMillis(nowMillis); const rateValue = (snapshot, start, windowMs) => nowMillis - start >= windowMs ? { janelaInicio: now, quantidade: 1, atualizadoEm: now } : { janelaInicio: snapshot.data()?.janelaInicio || now, quantidade: FieldValue.increment(1), atualizadoEm: now };
       transaction.set(originRateRef, rateValue(originRate, originStart, 3600000), { merge: true }); transaction.set(cpfRateRef, rateValue(cpfRate, cpfStart, 86400000), { merge: true });
-      transaction.set(requestRef, { ...payload, aceite: { ...payload.aceite, aceitoEm: now, protocolo: requestRef.id }, enviadoEm: now, atualizadoEm: now });
+      transaction.set(requestRef, { ...payload, ...(payload.consentimentoImagem ? { consentimentoImagem: { ...payload.consentimentoImagem, registradoEm: now } } : {}), aceite: { ...payload.aceite, aceitoEm: now, protocolo: requestRef.id }, enviadoEm: now, atualizadoEm: now });
       transaction.update(linkRef, { totalUsos: Number(linkData.totalUsos || 0) + 1, ultimaSolicitacaoId: requestRef.id, atualizadoEm: now });
       if (verificationRef) transaction.update(verificationRef, { status: 'usado', solicitacaoId: requestRef.id, usadoEm: now, atualizadoEm: now });
     });
@@ -839,6 +1159,10 @@ export const resendEmailCommunicationMailjet = onCall(mailjetCallableOptions, as
       message = buildVerificationEmail({ nome: person.data().nome, link: await getAuth().generateEmailVerificationLink(email, { url: getSystemBaseUrl(projectId) }) });
     } else if (previous.tipo === 'recuperacao_senha' && linkedUser) {
       message = buildPasswordResetEmail({ nome: person.data().nome, link: await getAuth().generatePasswordResetLink(email, { url: getSystemBaseUrl(projectId) }) });
+    } else if (previous.tipo === 'autorizacao_imagem_comprovante') {
+      const authorization = await root.collection('autorizacoes_imagem').doc(previous.pessoaBaseId).get();
+      if (!authorization.exists || !['titular_email', 'titular_sistema'].includes(authorization.data().origem)) fail('failed-precondition', 'REENVIO_NAO_PERMITIDO');
+      message = buildImageConsentReceiptEmail({ nome: person.data().nome, authorized: authorization.data().status === 'autorizado', protocol: String(authorization.data().evidenciaHash || authorization.id).slice(0, 16).toUpperCase() });
     } else fail('failed-precondition', 'REENVIO_NAO_PERMITIDO');
   }
   const id = await deliverTrackedAccountEmail({ root, pessoaBaseId: previous.pessoaBaseId, tipo: previous.tipo, email, nome: person.data().nome, message, reenviadoDe: communicationId });
@@ -849,7 +1173,7 @@ export const createAccessAuthorizationSecure = onCall({ maxInstances: 3 }, async
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
   const pessoaBaseId = String(request.data?.pessoaBaseId || '').trim();
   const role = String(request.data?.role || '').trim();
-  if (!pessoaBaseId || !allowedRoles.has(role)) fail('invalid-argument', 'AUTORIZACAO_INVALIDA');
+  if (!pessoaBaseId || !accessRoles.has(role)) fail('invalid-argument', 'AUTORIZACAO_INVALIDA');
   const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
   if (!projectId) fail('internal', 'PROJETO_FIREBASE_NAO_IDENTIFICADO');
   const firestore = getFirestore();
@@ -1088,7 +1412,7 @@ export const updateUserAccess = onCall({ maxInstances: 3 }, async request => {
   const { targetUid, action, role, active, reason, pessoaBaseId } = request.data || {};
   if (!targetUid || !['role', 'active', 'link', 'authorize'].includes(action)) fail('invalid-argument', 'OPERACAO_INVALIDA');
   if (targetUid === request.auth.uid && action !== 'link') fail('failed-precondition', 'AUTO_ALTERACAO_PROIBIDA');
-  if (['role', 'authorize'].includes(action) && !allowedRoles.has(role)) fail('invalid-argument', 'ROLE_INVALIDA');
+  if (['role', 'authorize'].includes(action) && !accessRoles.has(role)) fail('invalid-argument', 'ROLE_INVALIDA');
   if (action === 'active' && typeof active !== 'boolean') fail('invalid-argument', 'SITUACAO_INVALIDA');
   if (['link', 'authorize'].includes(action) && !pessoaBaseId) fail('invalid-argument', 'PESSOA_OBRIGATORIA');
   const cleanReason = typeof reason === 'string' ? reason.trim() : '';

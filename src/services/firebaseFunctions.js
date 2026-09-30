@@ -71,6 +71,10 @@ export const verifyBookStorageHealthOnServer = async () => (await httpsCallable(
 export const runSystemBackupOnServer = async () => (await httpsCallable(getFunctionsClient(), 'runSystemBackup')()).data;
 export const getSystemBackupDownloadOnServer = async () => (await httpsCallable(getFunctionsClient(), 'getSystemBackupDownload')()).data;
 export const recordDataExportOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'recordDataExport')(payload)).data;
+export const getMemberAreaOverviewOnServer = async month => (await httpsCallable(getFunctionsClient(), 'getMemberAreaOverview')({ month })).data;
+export const manageMemberNoticeOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'manageMemberNotice')(payload)).data;
+export const manageMemberAlbumOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'manageMemberAlbum')(payload)).data;
+export const setMyImageConsentOnServer = async authorized => (await httpsCallable(getFunctionsClient(), 'setMyImageConsent')({ authorized })).data;
 
 export const updateWorkTypeOnServer = async payload => {
   const response = await httpsCallable(getFunctionsClient(), 'updateWorkType')(payload);

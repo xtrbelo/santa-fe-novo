@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isValidCpf, normalizeCpf } from './cpfValidation.js';
 
 export const PRIVACY_NOTICE_VERSION = '2026-09-14.1';
+export const IMAGE_CONSENT_VERSION = '2026-09-29.1';
 const cleanText = (value, limit = 150) => String(value || '').trim().slice(0, limit) || null;
 const cleanDigits = (value, limit) => String(value || '').replace(/\D/g, '').slice(0, limit) || null;
 const validEmail = value => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(value || ''));
@@ -19,6 +20,7 @@ export const buildSecureRegistrationPayload = ({ linkId, link, data }) => {
     endereco: { cep: cleanText(data?.endereco?.cep, 10), logradouro: cleanText(data?.endereco?.logradouro), numero: cleanText(data?.endereco?.numero, 30), complemento: cleanText(data?.endereco?.complemento), bairro: cleanText(data?.endereco?.bairro), cidade: cleanText(data?.endereco?.cidade), uf: cleanText(data?.endereco?.uf, 2)?.toUpperCase() || null },
     dadosCasa: member ? { dataIngresso: cleanText(data?.dadosCasa?.dataIngresso, 10), batizadoCaesf: data?.dadosCasa?.batizadoCaesf, dataBatismoCaesf: cleanText(data?.dadosCasa?.dataBatismoCaesf, 10) } : { dataIngresso: null, batizadoCaesf: false, dataBatismoCaesf: null },
     aceite: { versao: PRIVACY_NOTICE_VERSION, avisoPrivacidade: data?.aceite?.avisoPrivacidade === true, declaracaoVeracidade: data?.aceite?.declaracaoVeracidade === true, emailConfirmado: member },
+    ...(member ? { consentimentoImagem: { autorizado: data?.consentimentoImagem === true, versao: IMAGE_CONSENT_VERSION } } : {}),
     ...(member ? { verificacaoEmailId: cleanText(data?.verificacaoEmailId, 30) } : {}), statusCadastro: 'aguardando_validacao', origemCadastro: 'link_reutilizavel',
   };
   if (!payload.nome) throw new Error('NOME_OBRIGATORIO');

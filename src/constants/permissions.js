@@ -18,6 +18,8 @@ export const PERMISSIONS = Object.freeze({
   LIFECYCLE_MANAGE: 'lifecycle_manage',
   CONFIG_MANAGE: 'config_manage',
   AUDIT_VIEW: 'audit_view',
+  MEMBER_AREA_VIEW: 'member_area_view',
+  MEMBER_MEDIA_MANAGE: 'member_media_manage',
   MY_REGISTRATION_VIEW: 'my_registration_view',
   AGENDA_DELETE: 'agenda_delete',
   ATTENDANCE_RELOCATE: 'attendance_relocate',
@@ -35,6 +37,7 @@ export const MODULES = Object.freeze({
   USERS: 'usuarios',
   CONFIG: 'config',
   AUDIT: 'auditoria',
+  MEMBER_AREA: 'area-membro',
   MY_REGISTRATION: 'meu-cadastro',
 });
 
@@ -49,6 +52,7 @@ export const MODULE_LABELS = Object.freeze({
   [MODULES.USERS]: 'Usuários',
   [MODULES.CONFIG]: 'Configurações',
   [MODULES.AUDIT]: 'Auditoria',
+  [MODULES.MEMBER_AREA]: 'Área do Membro',
   [MODULES.MY_REGISTRATION]: 'Meu Cadastro',
 });
 
@@ -63,6 +67,7 @@ export const MODULE_PERMISSIONS = Object.freeze({
   [MODULES.USERS]: PERMISSIONS.USERS_VIEW,
   [MODULES.CONFIG]: PERMISSIONS.CONFIG_MANAGE,
   [MODULES.AUDIT]: PERMISSIONS.AUDIT_VIEW,
+  [MODULES.MEMBER_AREA]: PERMISSIONS.MEMBER_AREA_VIEW,
   [MODULES.MY_REGISTRATION]: PERMISSIONS.MY_REGISTRATION_VIEW,
 });
 
@@ -88,8 +93,19 @@ export const ROLE_PERMISSIONS = Object.freeze({
     PERMISSIONS.MEMBER_INVITES_MANAGE,
     PERMISSIONS.MEMBER_REGISTRATIONS_REVIEW,
     PERMISSIONS.ATTENDANCE_RELOCATE,
+    PERMISSIONS.MEMBER_AREA_VIEW,
+    PERMISSIONS.MEMBER_MEDIA_MANAGE,
   ]),
   [ROLES.ATENDIMENTO]: Object.freeze(operational),
+  [ROLES.MEMBRO]: Object.freeze([
+    PERMISSIONS.MEMBER_AREA_VIEW,
+    PERMISSIONS.MY_REGISTRATION_VIEW,
+  ]),
+  [ROLES.MIDIA]: Object.freeze([
+    PERMISSIONS.MEMBER_AREA_VIEW,
+    PERMISSIONS.MEMBER_MEDIA_MANAGE,
+    PERMISSIONS.MY_REGISTRATION_VIEW,
+  ]),
   [ROLES.PENDENTE]: Object.freeze([]),
 });
 
@@ -111,6 +127,8 @@ export const canAccessModule = (profile, moduleId) => {
 
 export const getAllowedModules = profile => Object.keys(MODULE_PERMISSIONS)
   .filter(moduleId => canAccessModule(profile, moduleId));
+
+export const getDefaultModule = profile => getAllowedModules(profile)[0] || MODULES.DASHBOARD;
 
 export const getModuleFromPathname = pathname => {
   const segment = String(pathname || '').split('/').filter(Boolean)[0];

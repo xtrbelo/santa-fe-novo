@@ -75,6 +75,8 @@ test('autoriza acesso somente quando o e-mail identifica um único Membro ativo'
     activeEmailMatchIds: ['pessoa-1'],
   };
   assert.doesNotThrow(() => validateAccessAuthorizationCreation(base));
+  assert.doesNotThrow(() => validateAccessAuthorizationCreation({ ...base, role: 'membro' }));
+  assert.doesNotThrow(() => validateAccessAuthorizationCreation({ ...base, role: 'midia' }));
   assert.throws(() => validateAccessAuthorizationCreation({ ...base, activeEmailMatchIds: ['pessoa-1', 'pessoa-2'] }), /EMAIL_MEMBRO_AMBIGUO/);
   assert.throws(() => validateAccessAuthorizationCreation({ ...base, activeEmailMatchIds: ['pessoa-2'] }), /EMAIL_MEMBRO_AMBIGUO/);
 });

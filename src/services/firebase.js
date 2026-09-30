@@ -315,7 +315,7 @@ export const submitMemberSelfRegistration = async ({ inviteId, data }, firestore
   const validationError = validateMemberSelfRegistrationPayload(payload);
   if (validationError) throw new Error(validationError);
   const batch = writeBatch(firestore);
-  batch.set(registrationRef, { ...payload, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
+  batch.set(registrationRef, { ...payload, consentimentoImagem: { ...payload.consentimentoImagem, registradoEm: serverTimestamp() }, enviadoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
   batch.update(inviteRef, { status: 'respondido', respondidoEm: serverTimestamp(), atualizadoEm: serverTimestamp() });
   await batch.commit();
 };
