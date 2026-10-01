@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertMemberEmailAvailable, findActiveMemberEmailConflict, getMemberEmailIndexId, validateSecurePersonPayload } from './personIdentity.js';
+import { assertMemberEmailAvailable, findActiveMemberEmailConflict, getActiveMemberEmailIndexId, getMemberEmailIndexId, validateSecurePersonPayload } from './personIdentity.js';
 
 const member = (id, email, overrides = {}) => ({ id, nome: id, email, vinculo: 'membro', ativo: true, ...overrides });
 
 test('normaliza o identificador do índice sem permitir barra no caminho', () => {
   assert.equal(getMemberEmailIndexId(' MEMBRO/TESTE@Example.test '), 'membro%2Fteste%40example.test');
+});
+
+test('não cria caminho de índice para Membro legado sem e-mail', () => {
+  assert.equal(getActiveMemberEmailIndexId(member('p1', null)), null);
+  assert.equal(getActiveMemberEmailIndexId(member('p1', '   ')), null);
+  assert.equal(getActiveMemberEmailIndexId(member('p1', 'membro@example.test')), 'membro%40example.test');
 });
 
 test('encontra conflito somente entre outros Membros ativos', () => {

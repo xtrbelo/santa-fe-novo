@@ -74,6 +74,8 @@ export const recordDataExportOnServer = async payload => (await httpsCallable(ge
 export const getMemberAreaOverviewOnServer = async month => (await httpsCallable(getFunctionsClient(), 'getMemberAreaOverview')({ month })).data;
 export const manageMemberNoticeOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'manageMemberNotice')(payload)).data;
 export const manageMemberAlbumOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'manageMemberAlbum')(payload)).data;
+export const manageMemberMediaOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'manageMemberMedia')(payload)).data;
+export const manageDriveMediaInboxOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'manageDriveMediaInbox')(payload)).data;
 export const setMyImageConsentOnServer = async authorized => (await httpsCallable(getFunctionsClient(), 'setMyImageConsent')({ authorized })).data;
 
 export const updateWorkTypeOnServer = async payload => {

@@ -4,6 +4,8 @@ import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
+import { DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -13,7 +15,7 @@ import { assertAdminContinuity, isActiveAdmin, requiresActiveMember, requiresAdm
 import { buildApprovedRegistrationEmail, sendMailjetEmail, sendMailjetMessage, shouldSendApprovedRegistrationEmail } from './registrationEmail.js';
 import { buildActivationEmail, buildPasswordResetEmail, buildVerificationEmail, getSystemBaseUrl } from './accountEmail.js';
 import { buildRegistrationEvidenceHash, buildRegistrationVerificationEmail, createVerificationCode, hashVerificationCode, hashVerificationIdentity, isVerificationEmail, normalizeVerificationEmail, verificationCodeMatches } from './registrationVerification.js';
-import { assertMemberEmailAvailable, getMemberEmailIndexId, isActiveMemberIdentity, validateSecurePersonPayload } from './personIdentity.js';
+import { assertMemberEmailAvailable, getActiveMemberEmailIndexId, getMemberEmailIndexId, isActiveMemberIdentity, validateSecurePersonPayload } from './personIdentity.js';
 import { normalizeWorkerIds, validateAttendanceWorkers, validateDayCanClose } from './attendanceWorkers.js';
 import { getScheduledWorkerIds } from './workGroups.js';
 import { buildBookVolumeHash, verifyBookVolumeHash } from './bookVolume.js';
@@ -31,15 +33,17 @@ import { validateDataExportRequest } from './dataExportPolicy.js';
 import { getOrphanAccessIndexReason } from './accessIndexCleanup.js';
 import { selectMemberBirthdays, selectMemberCalendar, startOfSaoPauloDay } from './memberArea.js';
 import { selectPublishedMemberNotices, validateMemberNotice } from './memberNotices.js';
-import { selectMemberAlbums, validateMemberAlbum } from './memberAlbums.js';
+import { selectMemberAlbums, selectRecoverableMemberAlbums, validateMemberAlbum } from './memberAlbums.js';
+import { MEMBER_MEDIA_INBOX_LIMIT, MEMBER_MEDIA_LIMIT, buildInstitutionalMediaName, buildMediaStorageReport, getArchivedMediaRecovery, selectMemberMedia, validateMemberInboxUpload, validateMemberMediaUpload } from './memberMedia.js';
 import { selectImageAuthorizations } from './imageAuthorization.js';
+import { createDriveAccessToken, downloadDriveFile, listDriveInboxFiles, parseDriveServiceAccount, validateDriveImport } from './googleDriveInbox.js';
 import { IMAGE_CONSENT_REQUEST_TTL_MS, IMAGE_CONSENT_VERSION, buildImageConsentCodeEmail, buildImageConsentEvidenceHash, buildImageConsentInvitationEmail, buildImageConsentReceiptEmail, createImageConsentToken, hashImageConsentToken, maskImageConsentEmail } from './imageConsentInvitation.js';
 
 if (!getApps().length) initializeApp();
 
 const accessRoles = new Set(['admin', 'gestor', 'atendimento', 'membro', 'midia']);
 const internalRoles = new Set(['admin', 'gestor', 'atendimento']);
-const memberAreaRoles = new Set(['admin', 'gestor', 'membro', 'midia']);
+const memberAreaRoles = new Set(['admin', 'gestor', 'atendimento', 'membro', 'midia']);
 const memberMediaRoles = new Set(['admin', 'gestor', 'midia']);
 const fail = (code, message) => { throw new HttpsError(code, message); };
 const normalizeIdentityEmail = value => String(value || '').trim().toLowerCase();
@@ -50,6 +54,21 @@ const cleanPersonPayload = data => Object.fromEntries(Object.entries(data || {})
 const mailjetApiKey = defineSecret('MAILJET_API_KEY');
 const mailjetSecretKey = defineSecret('MAILJET_SECRET_KEY');
 const registrationEmailFrom = defineSecret('REGISTRATION_EMAIL_FROM');
+const r2AccountId = defineSecret('R2_ACCOUNT_ID');
+const r2BucketName = defineSecret('R2_BUCKET_NAME');
+const r2AccessKeyId = defineSecret('R2_ACCESS_KEY_ID');
+const r2SecretAccessKey = defineSecret('R2_SECRET_ACCESS_KEY');
+const r2Secrets = [r2AccountId, r2BucketName, r2AccessKeyId, r2SecretAccessKey];
+const googleDriveServiceAccount = defineSecret('GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON');
+const googleDriveInboxFolderId = defineSecret('GOOGLE_DRIVE_INBOX_FOLDER_ID');
+const driveInboxSecrets = [...r2Secrets, googleDriveServiceAccount, googleDriveInboxFolderId];
+const getR2Client = () => new S3Client({
+  region: 'auto',
+  endpoint: `https://${r2AccountId.value()}.r2.cloudflarestorage.com`,
+  credentials: { accessKeyId: r2AccessKeyId.value(), secretAccessKey: r2SecretAccessKey.value() },
+  requestChecksumCalculation: 'WHEN_REQUIRED',
+  responseChecksumValidation: 'WHEN_REQUIRED',
+});
 const AUDIT_RETENTION_MONTHS = 24;
 const monthKey = value => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit' }).formatToParts(value?.toDate?.() || new Date(value));
@@ -151,7 +170,7 @@ export const recordDataExport = onCall(async request => {
   return { auditId: ref.id };
 });
 
-export const getMemberAreaOverview = onCall({ maxInstances: 5 }, async request => {
+export const getMemberAreaOverview = onCall({ maxInstances: 5, secrets: r2Secrets }, async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
   const requestedMonth = request.data?.month == null ? null : Number(request.data.month);
   if (requestedMonth != null && (!Number.isInteger(requestedMonth) || requestedMonth < 1 || requestedMonth > 12)) fail('invalid-argument', 'MES_INVALIDO');
@@ -170,26 +189,41 @@ export const getMemberAreaOverview = onCall({ maxInstances: 5 }, async request =
 
   const now = new Date();
   const start = startOfSaoPauloDay(now);
-  const [agendaSnapshot, peopleSnapshot, noticeSnapshot, albumSnapshot, imageAuthorizationSnapshot] = await Promise.all([
+  const [agendaSnapshot, peopleSnapshot, noticeSnapshot, albumSnapshot, imageAuthorizationSnapshot, mediaSnapshot] = await Promise.all([
     root.collection('agendas').where('data', '>=', Timestamp.fromDate(start)).orderBy('data', 'asc').limit(40).get(),
     root.collection('pessoas').get(),
     root.collection('avisos_membros').where('status', '==', 'publicado').limit(50).get(),
     root.collection('albuns_membros').limit(50).get(),
     root.collection('autorizacoes_imagem').get(),
+    root.collection('albuns_membros_arquivos').where('status', '==', 'disponivel').limit(500).get(),
   ]);
   const agendas = agendaSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
   const people = peopleSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
   const notices = noticeSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
   const albums = albumSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+  const media = mediaSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
   const imageAuthorizations = imageAuthorizationSnapshot.docs.map(item => ({ id: item.id, ...item.data() }));
   const authorizationItems = selectImageAuthorizations(people, imageAuthorizations);
   const month = requestedMonth || Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', month: '2-digit' }).format(now));
+  const selectedAlbums = selectMemberAlbums(albums, { includeDrafts: memberMediaRoles.has(profile.role) });
+  const recoverableAlbums = memberMediaRoles.has(profile.role) ? selectRecoverableMemberAlbums(albums, { now }) : [];
+  const r2Client = getR2Client(); const bucket = r2BucketName.value();
+  const presentAlbum = async album => {
+    const cover = media.find(file => file.id === album.capaArquivoId && file.albumId === album.id && file.tipo?.startsWith('image/'));
+    if (!cover) return { ...album, arquivos: selectMemberMedia(media.filter(file => file.albumId === album.id)) };
+    try {
+      const capaUrl = await getSignedUrl(r2Client, new GetObjectCommand({ Bucket: bucket, Key: cover.objectKey, ResponseContentType: cover.tipo }), { expiresIn: 600 });
+      return { ...album, capaUrl, arquivos: selectMemberMedia(media.filter(file => file.albumId === album.id)) };
+    } catch { return { ...album, arquivos: selectMemberMedia(media.filter(file => file.albumId === album.id)) }; }
+  };
+  const [albumsWithCovers, archivedAlbumsWithCovers] = await Promise.all([Promise.all(selectedAlbums.map(presentAlbum)), Promise.all(recoverableAlbums.map(presentAlbum))]);
   return {
     mesAniversarios: month,
     calendario: selectMemberCalendar(agendas, { now }),
     aniversariantes: selectMemberBirthdays(people, { month, now }),
     avisos: selectPublishedMemberNotices(notices, { now }),
-    albuns: selectMemberAlbums(albums, { includeDrafts: memberMediaRoles.has(profile.role) }),
+    albuns: albumsWithCovers,
+    albunsArquivados: archivedAlbumsWithCovers,
     autorizacoesImagem: memberMediaRoles.has(profile.role)
       ? authorizationItems
       : authorizationItems.filter(item => item.pessoaId === profile.pessoaBaseId),
@@ -283,7 +317,7 @@ export const manageMemberAlbum = onCall({ maxInstances: 3 }, async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
   const action = String(request.data?.action || '').trim();
   const albumId = String(request.data?.albumId || '').trim();
-  if (!['save', 'archive'].includes(action) || (action === 'archive' && !albumId)) fail('invalid-argument', 'ACAO_INVALIDA');
+  if (!['save', 'archive', 'restore'].includes(action) || (['archive', 'restore'].includes(action) && !albumId)) fail('invalid-argument', 'ACAO_INVALIDA');
 
   const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
   const firestore = getFirestore();
@@ -305,12 +339,21 @@ export const manageMemberAlbum = onCall({ maxInstances: 3 }, async request => {
   const batch = firestore.batch();
 
   if (action === 'archive') {
-    batch.update(albumRef, { status: 'arquivado', atualizadoEm: now, atualizadoPor: request.auth.uid });
+    const archiveData = { status: 'arquivado', arquivadoEm: now, arquivadoPor: request.auth.uid, atualizadoEm: now, atualizadoPor: request.auth.uid };
+    if (current?.data()?.status === 'publicado') { archiveData.retiradoPublicacaoEm = now; archiveData.retiradoPublicacaoPor = request.auth.uid; }
+    batch.update(albumRef, archiveData);
     batch.set(auditRef, { tipo: 'ALBUM_MEMBRO_RETIRADO', alvoId: albumRef.id, executadoPor: request.auth.uid, criadoEm: now });
+  } else if (action === 'restore') {
+    if (current?.data()?.status !== 'arquivado') fail('failed-precondition', 'ALBUM_NAO_ARQUIVADO');
+    const archivedDate = current.data()?.arquivadoEm?.toDate?.() || current.data()?.atualizadoEm?.toDate?.();
+    if (!archivedDate || Date.now() - archivedDate.getTime() > 30 * 24 * 60 * 60 * 1000) fail('failed-precondition', 'PRAZO_RECUPERACAO_EXPIRADO');
+    batch.update(albumRef, { status: 'rascunho', restauradoEm: now, restauradoPor: request.auth.uid, atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(auditRef, { tipo: 'ALBUM_MEMBRO_RESTAURADO', alvoId: albumRef.id, executadoPor: request.auth.uid, criadoEm: now });
   } else {
     let payload;
     try { payload = validateMemberAlbum(request.data?.album); }
     catch (error) { fail('invalid-argument', error.message); }
+    if (payload.status === 'publicado' && Number(current?.data()?.quantidadeArquivos || 0) <= 0) fail('failed-precondition', 'ALBUM_SEM_ARQUIVOS');
     if (payload.status === 'publicado' && payload.participantesIds.length) {
       const checks = await Promise.all(payload.participantesIds.map(async pessoaId => {
         const [person, authorization] = await Promise.all([
@@ -328,13 +371,306 @@ export const manageMemberAlbum = onCall({ maxInstances: 3 }, async request => {
       const blocked = checks.filter(item => !item.autorizado);
       if (blocked.length) throw new HttpsError('failed-precondition', 'AUTORIZACAO_IMAGEM_PENDENTE', { nomes: blocked.map(item => item.nome).slice(0, 10) });
     }
+    const previousStatus = current?.data()?.status;
     const data = { ...payload, quantidadeArquivos: Number(current?.data()?.quantidadeArquivos || 0), atualizadoEm: now, atualizadoPor: request.auth.uid };
+    if (payload.status === 'publicado' && previousStatus !== 'publicado') { data.publicadoEm = now; data.publicadoPor = request.auth.uid; }
+    if (payload.status === 'rascunho' && previousStatus === 'publicado') { data.retiradoPublicacaoEm = now; data.retiradoPublicacaoPor = request.auth.uid; }
     if (current?.exists) batch.update(albumRef, data);
     else batch.set(albumRef, { ...data, criadoEm: now, criadoPor: request.auth.uid });
-    batch.set(auditRef, { tipo: current?.exists ? 'ALBUM_MEMBRO_ATUALIZADO' : 'ALBUM_MEMBRO_CRIADO', alvoId: albumRef.id, status: payload.status, executadoPor: request.auth.uid, criadoEm: now });
+    const auditType = payload.status === 'publicado' && previousStatus !== 'publicado' ? 'ALBUM_MEMBRO_PUBLICADO' : payload.status === 'rascunho' && previousStatus === 'publicado' ? 'ALBUM_MEMBRO_RETIRADO_PUBLICACAO' : current?.exists ? 'ALBUM_MEMBRO_ATUALIZADO' : 'ALBUM_MEMBRO_CRIADO';
+    batch.set(auditRef, { tipo: auditType, alvoId: albumRef.id, status: payload.status, executadoPor: request.auth.uid, criadoEm: now });
   }
   await batch.commit();
   return { albumId: albumRef.id, action };
+});
+
+export const manageMemberMedia = onCall({ maxInstances: 3, secrets: r2Secrets, timeoutSeconds: 60 }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const action = String(request.data?.action || '').trim();
+  if (!['create-upload', 'confirm-upload', 'get-view', 'list-view', 'create-downloads', 'set-cover', 'delete', 'reorder', 'update-details', 'create-inbox-upload', 'confirm-inbox-upload', 'list-inbox', 'move-inbox', 'archive-inbox', 'restore-inbox', 'delete-inbox'].includes(action)) fail('invalid-argument', 'ACAO_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  const profile = executor.data();
+  if (!executor.exists || profile?.ativo === false || !memberAreaRoles.has(profile?.role)) fail('permission-denied', 'AREA_MEMBRO_NAO_AUTORIZADA');
+  if (['membro', 'midia'].includes(profile.role)) {
+    const person = profile.pessoaBaseId ? await root.collection('pessoas').doc(profile.pessoaBaseId).get() : null;
+    if (!person?.exists || !isActiveMemberRecord(person.data())) fail('permission-denied', 'MEMBRO_INATIVO');
+  }
+  const canManage = memberMediaRoles.has(profile.role);
+  const bucket = r2BucketName.value();
+  const client = getR2Client();
+
+  if (action === 'list-inbox') {
+    if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+    const snapshot = await root.collection('midia_entrada').get();
+    const available = snapshot.docs.filter(item => item.data()?.status === 'disponivel').sort((a, b) => Number(b.data()?.criadoEm?.toMillis?.() || 0) - Number(a.data()?.criadoEm?.toMillis?.() || 0)).slice(0, 100);
+    const archived = snapshot.docs.filter(item => item.data()?.status === 'arquivado').sort((a, b) => Number(b.data()?.arquivadoEm?.toMillis?.() || 0) - Number(a.data()?.arquivadoEm?.toMillis?.() || 0)).slice(0, 100);
+    const albumSnapshot = await root.collection('albuns_membros_arquivos').get();
+    const storageReport = buildMediaStorageReport([...snapshot.docs, ...albumSnapshot.docs].map(item => ({ id: item.id, ...item.data() })));
+    const albumsSnapshot = await root.collection('albuns_membros').get();
+    const albumTitles = new Map(albumsSnapshot.docs.map(item => [item.id, item.data()?.titulo || 'Álbum sem título']));
+    const present = async item => {
+      const data = item.data();
+      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: data.objectKey, ResponseContentType: data.tipo }), { expiresIn: 600 });
+      const recovery = data.status === 'arquivado' ? getArchivedMediaRecovery(data.arquivadoEm) : {};
+      return { id: item.id, nome: data.nome, tipo: data.tipo, tamanho: data.tamanho, url, criadoPor: data.criadoPor, ...recovery, ...(storageReport.duplicateByKey.get(data.objectKey) || {}) };
+    };
+    const duplicateSources = new Map();
+    [...albumSnapshot.docs, ...snapshot.docs].forEach(item => {
+      const data = item.data();
+      if (data.status === 'removido' || !storageReport.duplicateByKey.has(data.objectKey) || duplicateSources.has(data.objectKey)) return;
+      duplicateSources.set(data.objectKey, item);
+    });
+    const presentDuplicate = async item => {
+      const data = item.data();
+      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: data.objectKey, ResponseContentType: data.tipo }), { expiresIn: 600 });
+      return { id: item.id, albumId: data.albumId || null, albumTitulo: data.albumId ? albumTitles.get(data.albumId) || 'Álbum não identificado' : null, nome: data.nome, tipo: data.tipo, tamanho: data.tamanho, url, origem: data.albumId ? 'album' : 'entrada', ...storageReport.duplicateByKey.get(data.objectKey) };
+    };
+    return { files: await Promise.all(available.map(present)), archived: await Promise.all(archived.map(present)), repetidos: await Promise.all([...duplicateSources.values()].map(presentDuplicate)), armazenamento: { totalBytes: storageReport.totalBytes, totalArquivos: storageReport.totalArquivos, duplicados: storageReport.duplicados, economiaPossivelBytes: storageReport.economiaPossivelBytes } };
+  }
+
+  if (action === 'create-inbox-upload') {
+    if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+    const inboxSnapshot = await root.collection('midia_entrada').get();
+    if (inboxSnapshot.docs.filter(item => !['removido', 'movido'].includes(item.data()?.status)).length >= MEMBER_MEDIA_INBOX_LIMIT) fail('resource-exhausted', 'LIMITE_ENTRADA_MIDIA');
+    let upload; try { upload = validateMemberInboxUpload(request.data); }
+    catch (error) { fail('invalid-argument', error.message); }
+    const mediaRef = root.collection('midia_entrada').doc();
+    const objectKey = `media-inbox/${request.auth.uid}/${mediaRef.id}.${upload.extension}`;
+    await mediaRef.set({ nome: upload.fileName, tipo: upload.contentType, tamanho: upload.size, objectKey, status: 'aguardando_envio', origem: 'upload_sistema', criadoPor: request.auth.uid, criadoEm: FieldValue.serverTimestamp() });
+    const command = new PutObjectCommand({ Bucket: bucket, Key: objectKey, ContentType: upload.contentType });
+    return { mediaId: mediaRef.id, uploadUrl: await getSignedUrl(client, command, { expiresIn: 300 }), expiresIn: 300 };
+  }
+
+  if (action === 'confirm-inbox-upload') {
+    if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+    const mediaId = String(request.data?.mediaId || '').trim();
+    const mediaRef = root.collection('midia_entrada').doc(mediaId);
+    const media = mediaId ? await mediaRef.get() : null;
+    if (!media?.exists || media.data()?.criadoPor !== request.auth.uid || media.data()?.status === 'removido') fail('not-found', 'ARQUIVO_NAO_ENCONTRADO');
+    if (media.data()?.status === 'disponivel') return { mediaId, status: 'disponivel' };
+    let head; try { head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: media.data().objectKey })); }
+    catch { fail('failed-precondition', 'ENVIO_NAO_LOCALIZADO'); }
+    if (Number(head.ContentLength) !== Number(media.data().tamanho) || String(head.ContentType || '').toLowerCase() !== media.data().tipo) fail('failed-precondition', 'ARQUIVO_DIVERGENTE');
+    const now = FieldValue.serverTimestamp(); const batch = firestore.batch();
+    batch.update(mediaRef, { status: 'disponivel', etag: String(head.ETag || '').replace(/^"|"$/g, '').toLowerCase(), confirmadoEm: now, confirmadoPor: request.auth.uid });
+    batch.set(root.collection('auditoria').doc(), { tipo: 'MIDIA_ENTRADA_ENVIADA', alvoId: mediaId, nomeArquivo: media.data().nome, tipoArquivo: media.data().tipo, tamanhoArquivo: media.data().tamanho, executadoPor: request.auth.uid, criadoEm: now });
+    await batch.commit();
+    return { mediaId, status: 'disponivel' };
+  }
+
+  if (['move-inbox', 'archive-inbox', 'restore-inbox', 'delete-inbox'].includes(action)) {
+    if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+    const mediaIds = [...new Set((request.data?.mediaIds || []).map(value => String(value || '').trim()).filter(Boolean))].slice(0, 30);
+    if (!mediaIds.length) fail('invalid-argument', 'ARQUIVOS_NAO_INFORMADOS');
+    const inboxFiles = await Promise.all(mediaIds.map(id => root.collection('midia_entrada').doc(id).get()));
+    const requiredStatus = action === 'restore-inbox' ? 'arquivado' : action === 'delete-inbox' ? null : 'disponivel';
+    if (inboxFiles.some(item => !item.exists || (requiredStatus ? item.data()?.status !== requiredStatus : !['disponivel', 'arquivado'].includes(item.data()?.status)))) fail('failed-precondition', 'ARQUIVO_ENTRADA_INDISPONIVEL');
+    const now = FieldValue.serverTimestamp();
+    const batch = firestore.batch();
+    if (action === 'archive-inbox') {
+      inboxFiles.forEach(item => {
+        batch.update(item.ref, { status: 'arquivado', arquivadoEm: now, arquivadoPor: request.auth.uid });
+        batch.set(root.collection('auditoria').doc(), { tipo: 'MIDIA_ENTRADA_ARQUIVADA', alvoId: item.id, nomeArquivo: item.data().nome, executadoPor: request.auth.uid, criadoEm: now });
+      });
+      await batch.commit();
+      return { processed: inboxFiles.length, status: 'arquivado' };
+    }
+    if (action === 'restore-inbox') {
+      if (inboxFiles.some(item => !getArchivedMediaRecovery(item.data()?.arquivadoEm).recuperavel)) fail('failed-precondition', 'PRAZO_RECUPERACAO_EXPIRADO');
+      inboxFiles.forEach(item => {
+        batch.update(item.ref, { status: 'disponivel', restauradoEm: now, restauradoPor: request.auth.uid });
+        batch.set(root.collection('auditoria').doc(), { tipo: 'MIDIA_ENTRADA_RESTAURADA', alvoId: item.id, nomeArquivo: item.data().nome, executadoPor: request.auth.uid, criadoEm: now });
+      });
+      await batch.commit();
+      return { processed: inboxFiles.length, status: 'disponivel' };
+    }
+    if (action === 'delete-inbox') {
+      for (const item of inboxFiles) await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.data().objectKey }));
+      inboxFiles.forEach(item => {
+        batch.update(item.ref, { status: 'removido', removidoEm: now, removidoPor: request.auth.uid });
+        batch.set(root.collection('auditoria').doc(), { tipo: 'MIDIA_ENTRADA_REMOVIDA', alvoId: item.id, nomeArquivo: item.data().nome, executadoPor: request.auth.uid, criadoEm: now });
+      });
+      await batch.commit();
+      return { processed: inboxFiles.length, status: 'removido' };
+    }
+    const targetAlbumId = String(request.data?.albumId || '').trim();
+    const targetAlbumRef = root.collection('albuns_membros').doc(targetAlbumId);
+    const targetAlbum = targetAlbumId ? await targetAlbumRef.get() : null;
+    if (!targetAlbum?.exists || targetAlbum.data()?.status === 'arquivado') fail('not-found', 'ALBUM_NAO_ENCONTRADO');
+    const albumFiles = await root.collection('albuns_membros_arquivos').where('albumId', '==', targetAlbumId).get();
+    if (albumFiles.docs.filter(item => item.data()?.status !== 'removido').length + inboxFiles.length > MEMBER_MEDIA_LIMIT) fail('failed-precondition', 'LIMITE_ARQUIVOS_ALBUM');
+    let firstImageId = '';
+    inboxFiles.forEach((item, index) => {
+      const data = item.data(); const albumMediaRef = root.collection('albuns_membros_arquivos').doc();
+      if (!firstImageId && String(data.tipo || '').startsWith('image/')) firstImageId = albumMediaRef.id;
+      const institutionalName = buildInstitutionalMediaName({ album: targetAlbum.data(), originalName: data.nome, contentType: data.tipo, sequence: albumFiles.docs.filter(file => file.data()?.status !== 'removido').length + index + 1 });
+      batch.set(albumMediaRef, { albumId: targetAlbumId, nome: institutionalName, nomeOriginal: data.nomeOriginal || data.nome, tipo: data.tipo, tamanho: data.tamanho, objectKey: data.objectKey, etag: data.etag || '', status: 'disponivel', origem: 'entrada_sistema', entradaId: item.id, criadoPor: data.criadoPor, criadoEm: data.criadoEm || now, confirmadoEm: data.confirmadoEm || now, confirmadoPor: data.confirmadoPor || request.auth.uid, movidoEm: now, movidoPor: request.auth.uid });
+      batch.update(item.ref, { status: 'movido', albumId: targetAlbumId, movidoEm: now, movidoPor: request.auth.uid });
+      batch.set(root.collection('auditoria').doc(), { tipo: 'MIDIA_ENTRADA_MOVIDA_ALBUM', alvoId: item.id, albumId: targetAlbumId, arquivoId: albumMediaRef.id, nomeArquivo: data.nome, executadoPor: request.auth.uid, criadoEm: now });
+    });
+    const albumUpdate = { quantidadeArquivos: FieldValue.increment(inboxFiles.length), atualizadoEm: now, atualizadoPor: request.auth.uid };
+    if (!targetAlbum.data()?.capaArquivoId && firstImageId) albumUpdate.capaArquivoId = firstImageId;
+    if (targetAlbum.data()?.status === 'publicado') { albumUpdate.status = 'rascunho'; albumUpdate.retiradoPublicacaoEm = now; albumUpdate.retiradoPublicacaoPor = request.auth.uid; }
+    batch.update(targetAlbumRef, albumUpdate);
+    await batch.commit();
+    return { processed: inboxFiles.length, status: 'movido', albumId: targetAlbumId };
+  }
+
+  const albumId = String(request.data?.albumId || '').trim();
+  const album = albumId ? await root.collection('albuns_membros').doc(albumId).get() : null;
+  if (!album?.exists || album.data()?.status === 'arquivado') fail('not-found', 'ALBUM_NAO_ENCONTRADO');
+  if (!canManage && album.data()?.status !== 'publicado') fail('permission-denied', 'ALBUM_NAO_PUBLICADO');
+
+  if (action === 'list-view') {
+    const snapshot = await root.collection('albuns_membros_arquivos').where('albumId', '==', albumId).get();
+    const files = selectMemberMedia(snapshot.docs.map(item => ({ id: item.id, ...item.data() })));
+    return { files: await Promise.all(files.map(async file => {
+      const source = snapshot.docs.find(item => item.id === file.id).data();
+      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: source.objectKey, ResponseContentType: source.tipo }), { expiresIn: 600 });
+      return { ...file, url, capa: album.data()?.capaArquivoId === file.id };
+    })) };
+  }
+
+  if (action === 'create-downloads') {
+    if (!canManage) fail('permission-denied', 'DOWNLOAD_MIDIA_NAO_AUTORIZADO');
+    const requestedIds = [...new Set((request.data?.mediaIds || []).map(value => String(value || '').trim()).filter(Boolean))].slice(0, MEMBER_MEDIA_LIMIT);
+    if (!requestedIds.length) fail('invalid-argument', 'ARQUIVOS_NAO_INFORMADOS');
+    const snapshot = await root.collection('albuns_membros_arquivos').where('albumId', '==', albumId).get();
+    const selected = snapshot.docs.filter(item => requestedIds.includes(item.id) && item.data()?.status === 'disponivel');
+    if (selected.length !== requestedIds.length) fail('failed-precondition', 'ARQUIVO_INDISPONIVEL');
+    const downloads = await Promise.all(selected.map(async item => {
+      const data = item.data(); const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(data.nome)}`;
+      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: data.objectKey, ResponseContentType: data.tipo, ResponseContentDisposition: disposition }), { expiresIn: 300 });
+      return { id: item.id, nome: data.nome, tamanho: Math.max(0, Number(data.tamanho) || 0), url };
+    }));
+    await root.collection('auditoria').add({ tipo: 'ALBUM_MEMBRO_ARQUIVOS_BAIXADOS', alvoId: albumId, albumId, quantidadeArquivos: downloads.length, arquivosIds: downloads.map(item => item.id), executadoPor: request.auth.uid, criadoEm: FieldValue.serverTimestamp() });
+    return { downloads, expiresIn: 300 };
+  }
+
+  if (action === 'reorder') {
+    if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+    const requestedIds = (request.data?.mediaIds || []).map(value => String(value || '').trim()).filter(Boolean);
+    const snapshot = await root.collection('albuns_membros_arquivos').where('albumId', '==', albumId).get();
+    const availableIds = snapshot.docs.filter(item => item.data()?.status === 'disponivel').map(item => item.id);
+    if (requestedIds.length !== availableIds.length || new Set(requestedIds).size !== requestedIds.length || requestedIds.some(id => !availableIds.includes(id))) fail('invalid-argument', 'ORDEM_ARQUIVOS_INVALIDA');
+    const now = FieldValue.serverTimestamp(); const batch = firestore.batch();
+    requestedIds.forEach((id, index) => batch.update(root.collection('albuns_membros_arquivos').doc(id), { ordem: index, ordenadoEm: now, ordenadoPor: request.auth.uid }));
+    batch.update(album.ref, { atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(root.collection('auditoria').doc(), { tipo: 'ALBUM_MEMBRO_ARQUIVOS_ORDENADOS', alvoId: albumId, quantidadeArquivos: requestedIds.length, executadoPor: request.auth.uid, criadoEm: now });
+    await batch.commit();
+    return { albumId, mediaIds: requestedIds };
+  }
+
+  if (action === 'create-upload') {
+    if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+    let upload; try { upload = validateMemberMediaUpload({ ...request.data, albumId }); }
+    catch (error) { fail('invalid-argument', error.message); }
+    const existing = await root.collection('albuns_membros_arquivos').where('albumId', '==', albumId).get();
+    if (existing.docs.filter(item => item.data()?.status !== 'removido').length >= MEMBER_MEDIA_LIMIT) fail('failed-precondition', 'LIMITE_ARQUIVOS_ALBUM');
+    const mediaRef = root.collection('albuns_membros_arquivos').doc();
+    const sequence = existing.docs.filter(item => item.data()?.status !== 'removido').length + 1;
+    const institutionalName = buildInstitutionalMediaName({ album: album.data(), originalName: upload.fileName, contentType: upload.contentType, sequence });
+    await mediaRef.set({ albumId, nome: institutionalName, nomeOriginal: upload.fileName, tipo: upload.contentType, tamanho: upload.size, objectKey: upload.objectKey, status: 'aguardando_envio', criadoPor: request.auth.uid, criadoEm: FieldValue.serverTimestamp() });
+    const command = new PutObjectCommand({ Bucket: bucket, Key: upload.objectKey, ContentType: upload.contentType });
+    return { mediaId: mediaRef.id, uploadUrl: await getSignedUrl(client, command, { expiresIn: 300 }), expiresIn: 300 };
+  }
+
+  const mediaId = String(request.data?.mediaId || '').trim();
+  const mediaRef = root.collection('albuns_membros_arquivos').doc(mediaId);
+  const media = mediaId ? await mediaRef.get() : null;
+  if (!media?.exists || media.data()?.albumId !== albumId || media.data()?.status === 'removido') fail('not-found', 'ARQUIVO_NAO_ENCONTRADO');
+  if (action === 'get-view') {
+    if (media.data()?.status !== 'disponivel') fail('failed-precondition', 'ARQUIVO_INDISPONIVEL');
+    const command = new GetObjectCommand({ Bucket: bucket, Key: media.data().objectKey, ResponseContentType: media.data().tipo });
+    return { url: await getSignedUrl(client, command, { expiresIn: 600 }), expiresIn: 600 };
+  }
+
+  if (!canManage) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+  if (action === 'update-details') {
+    if (media.data()?.status !== 'disponivel') fail('failed-precondition', 'ARQUIVO_INDISPONIVEL');
+    const legenda = String(request.data?.legenda || '').trim(); const descricaoAlternativa = String(request.data?.descricaoAlternativa || '').trim();
+    if (legenda.length > 200 || descricaoAlternativa.length > 500) fail('invalid-argument', 'DETALHES_MIDIA_INVALIDOS');
+    const now = FieldValue.serverTimestamp(); const batch = firestore.batch();
+    batch.update(mediaRef, { legenda, descricaoAlternativa, atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(root.collection('auditoria').doc(), { tipo: 'ALBUM_MEMBRO_ARQUIVO_DESCRITO', alvoId: mediaId, albumId, nomeArquivo: media.data().nome, executadoPor: request.auth.uid, criadoEm: now });
+    await batch.commit(); return { mediaId, legenda, descricaoAlternativa };
+  }
+  if (action === 'set-cover') {
+    if (media.data()?.status !== 'disponivel' || !String(media.data()?.tipo || '').startsWith('image/')) fail('failed-precondition', 'CAPA_INVALIDA');
+    const now = FieldValue.serverTimestamp(); const batch = firestore.batch();
+    batch.update(album.ref, { capaArquivoId: mediaId, atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(root.collection('auditoria').doc(), { tipo: 'ALBUM_MEMBRO_CAPA_ALTERADA', alvoId: albumId, arquivoId: mediaId, executadoPor: request.auth.uid, criadoEm: now });
+    await batch.commit(); return { mediaId, capa: true };
+  }
+  if (action === 'delete') {
+    if (media.data()?.status !== 'disponivel') fail('failed-precondition', 'ARQUIVO_INDISPONIVEL');
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: media.data().objectKey }));
+    const now = FieldValue.serverTimestamp(); const batch = firestore.batch();
+    batch.update(mediaRef, { status: 'removido', removidoEm: now, removidoPor: request.auth.uid });
+    const albumUpdate = { quantidadeArquivos: FieldValue.increment(-1), atualizadoEm: now, atualizadoPor: request.auth.uid };
+    if (album.data()?.capaArquivoId === mediaId) albumUpdate.capaArquivoId = FieldValue.delete();
+    batch.update(album.ref, albumUpdate);
+    batch.set(root.collection('auditoria').doc(), { tipo: 'ALBUM_MEMBRO_ARQUIVO_REMOVIDO', alvoId: mediaId, albumId, nomeArquivo: media.data().nome, executadoPor: request.auth.uid, criadoEm: now });
+    await batch.commit(); return { mediaId, status: 'removido' };
+  }
+  if (media.data()?.status === 'disponivel') return { mediaId, status: 'disponivel' };
+  let head; try { head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: media.data().objectKey })); }
+  catch { fail('failed-precondition', 'ENVIO_NAO_LOCALIZADO'); }
+  if (Number(head.ContentLength) !== Number(media.data().tamanho) || String(head.ContentType || '').toLowerCase() !== media.data().tipo) fail('failed-precondition', 'ARQUIVO_DIVERGENTE');
+  const now = FieldValue.serverTimestamp(); const batch = firestore.batch();
+  batch.update(mediaRef, { status: 'disponivel', etag: String(head.ETag || '').replace(/^"|"$/g, '').toLowerCase(), confirmadoEm: now, confirmadoPor: request.auth.uid });
+  batch.update(album.ref, { quantidadeArquivos: FieldValue.increment(1), atualizadoEm: now, atualizadoPor: request.auth.uid });
+  batch.set(root.collection('auditoria').doc(), { tipo: 'ALBUM_MEMBRO_ARQUIVO_ENVIADO', alvoId: mediaId, albumId, nomeArquivo: media.data().nome, tipoArquivo: media.data().tipo, tamanhoArquivo: media.data().tamanho, executadoPor: request.auth.uid, criadoEm: now });
+  await batch.commit();
+  return { mediaId, status: 'disponivel' };
+});
+
+export const manageDriveMediaInbox = onCall({ maxInstances: 2, secrets: driveInboxSecrets, timeoutSeconds: 300, memory: '1GiB' }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'AUTENTICACAO_OBRIGATORIA');
+  const action = String(request.data?.action || '').trim();
+  if (!['list', 'import'].includes(action)) fail('invalid-argument', 'ACAO_INVALIDA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore(); const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get(); const profile = executor.data();
+  if (!executor.exists || profile?.ativo === false || !memberMediaRoles.has(profile?.role)) fail('permission-denied', 'GESTAO_MIDIA_OBRIGATORIA');
+  if (profile.role === 'midia') {
+    const person = profile.pessoaBaseId ? await root.collection('pessoas').doc(profile.pessoaBaseId).get() : null;
+    if (!person?.exists || !isActiveMemberRecord(person.data())) fail('permission-denied', 'MEMBRO_INATIVO');
+  }
+  let token; try { token = await createDriveAccessToken(parseDriveServiceAccount(googleDriveServiceAccount.value())); }
+  catch (error) { fail('failed-precondition', error.message); }
+  let files; try { files = await listDriveInboxFiles({ accessToken: token, folderId: googleDriveInboxFolderId.value() }); }
+  catch (error) { fail('failed-precondition', error.message); }
+  const importedSnapshot = await root.collection('albuns_membros_arquivos').where('origem', '==', 'google_drive').get();
+  const importedIds = new Set(importedSnapshot.docs.filter(item => item.data()?.status !== 'removido').map(item => item.data()?.driveArquivoId));
+  if (action === 'list') return { files: files.map(file => ({ ...file, importado: importedIds.has(file.id) })) };
+
+  const albumId = String(request.data?.albumId || '').trim(); const albumRef = root.collection('albuns_membros').doc(albumId); const album = await albumRef.get();
+  if (!album.exists || album.data()?.status === 'arquivado') fail('not-found', 'ALBUM_NAO_ENCONTRADO');
+  const requestedIds = [...new Set((request.data?.fileIds || []).map(value => String(value || '').trim()).filter(Boolean))];
+  const selectedFiles = requestedIds.map(id => files.find(file => file.id === id)).filter(Boolean);
+  if (selectedFiles.some(file => importedIds.has(file.id))) fail('already-exists', 'DRIVE_ARQUIVO_JA_IMPORTADO');
+  let uploads; try { uploads = validateDriveImport({ albumId, files: selectedFiles }); }
+  catch (error) { fail('invalid-argument', error.message); }
+  const currentFiles = await root.collection('albuns_membros_arquivos').where('albumId', '==', albumId).get();
+  if (currentFiles.docs.filter(item => item.data()?.status !== 'removido').length + uploads.length > MEMBER_MEDIA_LIMIT) fail('failed-precondition', 'LIMITE_ARQUIVOS_ALBUM');
+  const client = getR2Client(); const bucket = r2BucketName.value(); let imported = 0;
+  for (let index = 0; index < selectedFiles.length; index += 1) {
+    const source = selectedFiles[index]; const upload = uploads[index]; let body;
+    try { body = await downloadDriveFile({ accessToken: token, fileId: source.id }); }
+    catch (error) { fail('failed-precondition', error.message); }
+    const uploadedObject = await client.send(new PutObjectCommand({ Bucket: bucket, Key: upload.objectKey, ContentType: upload.contentType, ContentLength: body.length, Body: body }));
+    const now = FieldValue.serverTimestamp(); const mediaRef = root.collection('albuns_membros_arquivos').doc(); const batch = firestore.batch();
+    const institutionalName = buildInstitutionalMediaName({ album: album.data(), originalName: upload.fileName, contentType: upload.contentType, sequence: currentFiles.docs.filter(item => item.data()?.status !== 'removido').length + index + 1 });
+    batch.set(mediaRef, { albumId, nome: institutionalName, nomeOriginal: upload.fileName, tipo: upload.contentType, tamanho: upload.size, objectKey: upload.objectKey, etag: String(uploadedObject.ETag || '').replace(/^"|"$/g, '').toLowerCase(), status: 'disponivel', origem: 'google_drive', driveArquivoId: source.id, criadoPor: request.auth.uid, criadoEm: now, confirmadoEm: now, confirmadoPor: request.auth.uid });
+    batch.update(albumRef, { quantidadeArquivos: FieldValue.increment(1), atualizadoEm: now, atualizadoPor: request.auth.uid });
+    batch.set(root.collection('auditoria').doc(), { tipo: 'ALBUM_MEMBRO_ARQUIVO_IMPORTADO_DRIVE', alvoId: mediaRef.id, albumId, driveArquivoId: source.id, nomeArquivo: upload.fileName, executadoPor: request.auth.uid, criadoEm: now });
+    await batch.commit(); imported += 1;
+  }
+  return { imported };
 });
 
 export const closeDayWithWorkers = onCall(async request => {
@@ -1263,8 +1599,10 @@ export const savePersonWithUniqueEmail = onCall({ maxInstances: 3 }, async reque
       try { validateSecurePersonPayload(next); }
       catch (error) { fail('invalid-argument', error.message); }
       const people = peopleSnapshot.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() }));
-      const nextEmailIndexRef = isActiveMemberIdentity(next) ? root.collection('membro_email_index').doc(getMemberEmailIndexId(next.email)) : null;
-      const previousEmailIndexRef = isActiveMemberIdentity(current) ? root.collection('membro_email_index').doc(getMemberEmailIndexId(current.email)) : null;
+      const nextEmailIndexId = getActiveMemberEmailIndexId(next);
+      const previousEmailIndexId = getActiveMemberEmailIndexId(current);
+      const nextEmailIndexRef = nextEmailIndexId ? root.collection('membro_email_index').doc(nextEmailIndexId) : null;
+      const previousEmailIndexRef = previousEmailIndexId ? root.collection('membro_email_index').doc(previousEmailIndexId) : null;
       const nextCpfRef = next.cpf ? root.collection('cpf_index').doc(next.cpf) : null;
       const previousCpf = String(current?.cpf || '').replace(/\D/g, '') || null;
       const previousCpfRef = previousCpf ? root.collection('cpf_index').doc(previousCpf) : null;

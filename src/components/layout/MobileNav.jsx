@@ -8,7 +8,8 @@ import {
   Settings,
   ContactRound,
   ScrollText,
-  Images
+  Images,
+  Clapperboard
 } from 'lucide-react';
 import { canAccessModule } from '../../constants/permissions';
 
@@ -23,6 +24,7 @@ export const MobileNav = ({ activeTab, onSelectTab, profile }) => {
     { id: 'usuarios', label: 'Usuários', icon: UsersRound },
     { id: 'config', label: 'Ajustes', icon: Settings },
     { id: 'auditoria', label: 'Auditoria', icon: ScrollText },
+    { id: 'central-midia', label: 'Mídia', icon: Clapperboard },
     { id: 'area-membro', label: 'Área', icon: Images },
     { id: 'meu-cadastro', label: 'Cadastro', icon: ContactRound },
   ];

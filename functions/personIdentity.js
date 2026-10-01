@@ -5,6 +5,10 @@ const memberType = person => String(person?.vinculo || person?.tipoPessoa || '')
 
 export const isActiveMemberIdentity = person => Boolean(person) && person.ativo !== false && memberType(person) === 'membro';
 export const getMemberEmailIndexId = email => encodeURIComponent(normalizeEmail(email));
+export const getActiveMemberEmailIndexId = person => {
+  if (!isActiveMemberIdentity(person)) return null;
+  return getMemberEmailIndexId(person.email) || null;
+};
 
 export const findActiveMemberEmailConflict = ({ personId = null, person, people = [] }) => {
   if (!isActiveMemberIdentity(person)) return null;

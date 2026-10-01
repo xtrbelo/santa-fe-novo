@@ -9,7 +9,8 @@ import {
   ContactRound,
   LogOut,
   ScrollText,
-  Images
+  Images,
+  Clapperboard
 } from 'lucide-react';
 import { ROLE_LABELS } from '../../constants/roles';
 import { canAccessModule } from '../../constants/permissions';
@@ -25,6 +26,7 @@ export const Sidebar = ({ activeTab, onSelectTab, onSignOut, profile }) => {
     { id: 'usuarios', label: 'Usuários', icon: <UsersRound size={22} /> },
     { id: 'config', label: 'Configurações', icon: <Settings size={22} /> },
     { id: 'auditoria', label: 'Auditoria', icon: <ScrollText size={22} /> },
+    { id: 'central-midia', label: 'Central de Mídia', icon: <Clapperboard size={22} /> },
     { id: 'area-membro', label: 'Área do Membro', icon: <Images size={22} /> },
     { id: 'meu-cadastro', label: 'Meu Cadastro', icon: <ContactRound size={22} /> },
   ];

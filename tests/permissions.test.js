@@ -22,9 +22,9 @@ test('separa o perfil de membro dos perfis internos', () => {
   assert.equal(ROLE_LABELS.atendimento, 'Atendimento / Recepção');
 });
 
-test('Equipe de Mídia acessa somente álbuns, Área do Membro e próprio cadastro', () => {
+test('Equipe de Mídia acessa Central de Mídia, Área do Membro e próprio cadastro', () => {
   const midia = profile(ROLES.MIDIA);
-  assert.deepEqual(getAllowedModules(midia), [MODULES.MEMBER_AREA, MODULES.MY_REGISTRATION]);
+  assert.deepEqual(getAllowedModules(midia), [MODULES.MEDIA_CENTER, MODULES.MEMBER_AREA, MODULES.MY_REGISTRATION]);
   assert.equal(hasPermission(midia, PERMISSIONS.MEMBER_MEDIA_MANAGE), true);
   for (const permission of [PERMISSIONS.USERS_VIEW, PERMISSIONS.PEOPLE_VIEW, PERMISSIONS.AGENDA_VIEW, PERMISSIONS.CONFIG_MANAGE]) {
     assert.equal(hasPermission(midia, permission), false);
@@ -37,7 +37,7 @@ test('Membro acessa somente sua área e o próprio cadastro', () => {
   assert.equal(getDefaultModule(membro), MODULES.MEMBER_AREA);
   assert.equal(getDefaultModule(profile(ROLES.ADMIN)), MODULES.DASHBOARD);
   assert.equal(canAccessModule(membro, MODULES.MEMBER_AREA), true);
-  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.PROGRAMACAO, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.USERS, MODULES.CONFIG, MODULES.AUDIT]) {
+  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.PROGRAMACAO, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.USERS, MODULES.CONFIG, MODULES.AUDIT, MODULES.MEDIA_CENTER]) {
     assert.equal(canAccessModule(membro, moduleId), false);
   }
 });
@@ -52,7 +52,7 @@ test('Admin acessa todos os módulos e ações institucionais', () => {
 
 test('Gestor preserva módulos de negócio sem gestão institucional de acesso', () => {
   const gestor = profile(ROLES.GESTOR);
-  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.MEMBER_INVITES, MODULES.MEMBER_REGISTRATIONS, MODULES.MY_REGISTRATION]) {
+  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.MEMBER_INVITES, MODULES.MEMBER_REGISTRATIONS, MODULES.MEDIA_CENTER, MODULES.MY_REGISTRATION]) {
     assert.equal(canAccessModule(gestor, moduleId), true);
   }
   for (const permission of [PERMISSIONS.USERS_VIEW, PERMISSIONS.USERS_MANAGE, PERMISSIONS.ACCESS_AUTHORIZATION_MANAGE, PERMISSIONS.LIFECYCLE_MANAGE, PERMISSIONS.CONFIG_MANAGE]) {
@@ -60,15 +60,16 @@ test('Gestor preserva módulos de negócio sem gestão institucional de acesso',
   }
 });
 
-test('Atendimento acessa operação e Meu Cadastro, sem módulos administrativos', () => {
+test('Atendimento acessa operação, Área do Membro e Meu Cadastro, sem módulos administrativos', () => {
   const atendimento = profile(ROLES.ATENDIMENTO);
-  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.MY_REGISTRATION]) {
+  for (const moduleId of [MODULES.DASHBOARD, MODULES.AGENDAS, MODULES.ATTENDANCE, MODULES.PEOPLE, MODULES.MEMBER_AREA, MODULES.MY_REGISTRATION]) {
     assert.equal(canAccessModule(atendimento, moduleId), true);
   }
-  for (const moduleId of [MODULES.USERS, MODULES.MEMBER_INVITES, MODULES.MEMBER_REGISTRATIONS, MODULES.CONFIG]) {
+  for (const moduleId of [MODULES.USERS, MODULES.MEMBER_INVITES, MODULES.MEMBER_REGISTRATIONS, MODULES.CONFIG, MODULES.MEDIA_CENTER]) {
     assert.equal(canAccessModule(atendimento, moduleId), false);
   }
   assert.equal(hasPermission(atendimento, PERMISSIONS.CONSULENTES_MANAGE), true);
+  assert.equal(hasPermission(atendimento, PERMISSIONS.MEMBER_MEDIA_MANAGE), false);
   assert.equal(hasPermission(atendimento, PERMISSIONS.PEOPLE_MANAGE), false);
 });
 
