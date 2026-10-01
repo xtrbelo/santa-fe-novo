@@ -26,12 +26,12 @@
     "build:hml": "vite build --mode hml"
   },
   "dependencies": {
-    "firebase": "^12.11.0",
+    "firebase": "^12.19.0",
     "jszip": "^3.10.2",
     "lucide-react": "^1.7.0",
     "qrcode": "^1.5.4",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
