@@ -53,6 +53,7 @@ import { getAgendaSchedulingKey } from '../utils/agendaScheduling.js';
 import { inspectAccessIntegrityData } from '../utils/accessIntegrity.js';
 import { buildRegistrationLinkUrl, normalizeRegistrationLinkConfig, normalizeRegistrationLinkEdit } from '../utils/registrationLink.js';
 import { buildReusableRegistrationPayload, validateReusableRegistrationPayload } from '../utils/reusableRegistration.js';
+import { normalizeDisplayName } from '../utils/textCase.js';
 
 const getDataCollection = (firestore, collName) => collection(firestore, 'artifacts', appId, 'public', 'data', collName);
 const getDataDoc = (firestore, collName, docId) => doc(firestore, 'artifacts', appId, 'public', 'data', collName, docId);
@@ -233,7 +234,7 @@ export const submitReusableRegistration = async ({ linkId, data }, firestore = d
 
 export const createMemberInvite = async ({ nome, cpf, email, userId, origin }, firestore = db) => {
   const cleanCpf = normalizeSearchDigits(cpf);
-  const normalizedName = String(nome || '').trim();
+  const normalizedName = normalizeDisplayName(nome);
   const normalizedEmail = normalizeEmail(email) || null;
   if (!normalizedName) throw new Error('CONVITE_INVALIDO:O nome é obrigatório.');
   if (!validateCPF(cleanCpf)) throw new Error('CONVITE_INVALIDO:Informe um CPF válido.');

@@ -1,3 +1,5 @@
+import { normalizeDisplayName } from './textCase.js';
+
 export const REGISTRATION_LINK_TYPES = Object.freeze({ MEMBER: 'membro', CONSULTEE: 'consulente' });
 
 export const REGISTRATION_LINK_TYPE_LABELS = Object.freeze({
@@ -38,7 +40,7 @@ export const getRegistrationLinkWarnings = (link, now = Date.now()) => {
 
 export const normalizeRegistrationLinkConfig = data => {
   const tipoCadastro = String(data?.tipoCadastro || '');
-  const nome = String(data?.nome || '').trim();
+  const nome = normalizeDisplayName(data?.nome);
   const validadeDias = data?.validadeDias === '' ? null : Number(data?.validadeDias);
   const limiteUsos = data?.limiteUsos === '' ? null : Number(data?.limiteUsos);
   if (!Object.values(REGISTRATION_LINK_TYPES).includes(tipoCadastro)) throw new Error('TIPO_LINK_INVALIDO');
@@ -49,7 +51,7 @@ export const normalizeRegistrationLinkConfig = data => {
 };
 
 export const normalizeRegistrationLinkEdit = (data, totalUsos = 0) => {
-  const nome = String(data?.nome || '').trim();
+  const nome = normalizeDisplayName(data?.nome);
   const validadeDias = data?.validadeDias === '' ? null : Number(data?.validadeDias);
   const limiteUsos = data?.limiteUsos === '' ? null : Number(data?.limiteUsos);
   if (!nome || nome.length > 100) throw new Error('NOME_LINK_INVALIDO');

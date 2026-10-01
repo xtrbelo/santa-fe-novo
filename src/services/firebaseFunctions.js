@@ -69,6 +69,7 @@ export const verifyBookVolumeIntegrityOnServer = async volumeId => (await httpsC
 export const checkBookVolumeAuthenticityOnServer = async verificationCode => (await httpsCallable(getFunctionsClient(), 'checkBookVolumeAuthenticity')({ verificationCode })).data;
 export const verifyBookStorageHealthOnServer = async () => (await httpsCallable(getFunctionsClient(), 'verifyBookStorageHealth')()).data;
 export const runSystemBackupOnServer = async () => (await httpsCallable(getFunctionsClient(), 'runSystemBackup')()).data;
+export const normalizeExistingTextRecordsOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'normalizeExistingTextRecords')(payload)).data;
 export const getSystemBackupDownloadOnServer = async () => (await httpsCallable(getFunctionsClient(), 'getSystemBackupDownload')()).data;
 export const recordDataExportOnServer = async payload => (await httpsCallable(getFunctionsClient(), 'recordDataExport')(payload)).data;
 export const getMemberAreaOverviewOnServer = async month => (await httpsCallable(getFunctionsClient(), 'getMemberAreaOverview')({ month })).data;

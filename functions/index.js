@@ -38,6 +38,7 @@ import { MEMBER_MEDIA_INBOX_LIMIT, MEMBER_MEDIA_LIMIT, buildInstitutionalMediaNa
 import { selectImageAuthorizations } from './imageAuthorization.js';
 import { createDriveAccessToken, downloadDriveFile, listDriveInboxFiles, parseDriveServiceAccount, validateDriveImport } from './googleDriveInbox.js';
 import { IMAGE_CONSENT_REQUEST_TTL_MS, IMAGE_CONSENT_VERSION, buildImageConsentCodeEmail, buildImageConsentEvidenceHash, buildImageConsentInvitationEmail, buildImageConsentReceiptEmail, createImageConsentToken, hashImageConsentToken, maskImageConsentEmail } from './imageConsentInvitation.js';
+import { buildCollectionPatch, CASE_NORMALIZATION_COLLECTIONS, normalizeCollectionData, normalizeDisplayText } from './textCase.js';
 
 if (!getApps().length) initializeApp();
 
@@ -145,6 +146,39 @@ export const runSystemBackup = onCall({ timeoutSeconds: 540, memory: '1GiB' }, a
   const root = getFirestore().collection('artifacts').doc(projectId).collection('public').doc('data'); const executor = await root.collection('usuarios').doc(request.auth.uid).get();
   if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
   return executeSystemBackup({ trigger: 'manual', requestedBy: request.auth.uid });
+});
+
+export const normalizeExistingTextRecords = onCall({ timeoutSeconds: 540, memory: '1GiB' }, async request => {
+  if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
+  const mode = request.data?.mode === 'apply' ? 'apply' : 'preview';
+  if (mode === 'apply' && request.data?.confirmation !== 'NORMALIZAR_REGISTROS_EXISTENTES') fail('failed-precondition', 'CONFIRMACAO_OBRIGATORIA');
+  const projectId = resolveProjectId({ appProjectId: getApp().options.projectId, googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT, gcloudProject: process.env.GCLOUD_PROJECT });
+  const firestore = getFirestore();
+  const root = firestore.collection('artifacts').doc(projectId).collection('public').doc('data');
+  const executor = await root.collection('usuarios').doc(request.auth.uid).get();
+  if (!executor.exists || !isActiveAdmin(executor.data())) fail('permission-denied', 'ADMIN_OBRIGATORIO');
+
+  const report = { mode, analyzed: 0, changed: 0, fields: 0, collections: {} };
+  const writer = mode === 'apply' ? firestore.bulkWriter() : null;
+  for (const collectionName of CASE_NORMALIZATION_COLLECTIONS) {
+    const snapshot = await root.collection(collectionName).get();
+    let analyzed = 0; let changed = 0; let fields = 0;
+    for (const item of snapshot.docs) {
+      analyzed += 1;
+      const patch = buildCollectionPatch(collectionName, item.data());
+      const keys = Object.keys(patch);
+      if (!keys.length) continue;
+      changed += 1; fields += keys.length;
+      if (writer) writer.update(item.ref, patch);
+    }
+    report.analyzed += analyzed; report.changed += changed; report.fields += fields;
+    report.collections[collectionName] = { analyzed, changed, fields };
+  }
+  if (writer) {
+    await writer.close();
+    await root.collection('auditoria').add({ tipo: 'PADRONIZACAO_TEXTO_APLICADA', colecoes: report.collections, quantidadeAnalisada: report.analyzed, quantidadeAtualizada: report.changed, quantidadeCampos: report.fields, executadoPor: request.auth.uid, criadoEm: FieldValue.serverTimestamp() });
+  }
+  return report;
 });
 
 export const getSystemBackupDownload = onCall(async request => {
@@ -1011,7 +1045,7 @@ export const refreshBookRecord = onCall(async request => {
 export const updateWorkType = onCall(async request => {
   if (!request.auth || request.auth.token.email_verified !== true) fail('unauthenticated', 'LOGIN_OBRIGATORIO');
   const workTypeId = String(request.data?.workTypeId || '').trim();
-  const nome = String(request.data?.nome || '').trim();
+  const nome = normalizeDisplayText(request.data?.nome);
   const natureza = request.data?.natureza;
   const publicosPermitidos = natureza === 'interno' ? ['membro'] : [...new Set(request.data?.publicosPermitidos || [])].filter(item => ['consulente', 'membro'].includes(item));
   if (!workTypeId || !nome || !['atendimento_publico', 'evento_servicos', 'interno'].includes(natureza) || !publicosPermitidos.length) fail('invalid-argument', 'TIPO_TRABALHO_INVALIDO');
@@ -1586,7 +1620,7 @@ export const savePersonWithUniqueEmail = onCall({ maxInstances: 3 }, async reque
       if (!executorSnapshot.exists || executor?.ativo === false || !['admin', 'gestor'].includes(executor?.role)) fail('permission-denied', 'GESTAO_PESSOAS_OBRIGATORIA');
       if (pessoaId && !targetSnapshot?.exists) fail('not-found', 'PESSOA_NAO_ENCONTRADA');
       const current = targetSnapshot?.data() || null;
-      const next = {
+      const rawNext = {
         ...(current || {}),
         ...payload,
         vinculo: payload.vinculo,
@@ -1596,6 +1630,7 @@ export const savePersonWithUniqueEmail = onCall({ maxInstances: 3 }, async reque
         cpf: String(payload.cpf || '').replace(/\D/g, '') || null,
         ativo: current ? current.ativo !== false : true,
       };
+      const next = normalizeCollectionData('pessoas', rawNext);
       try { validateSecurePersonPayload(next); }
       catch (error) { fail('invalid-argument', error.message); }
       const people = peopleSnapshot.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() }));
