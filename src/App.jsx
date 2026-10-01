@@ -33,6 +33,7 @@ const AtivacaoAcessoPage = lazyNamed(() => import('./modules/AtivacaoAcesso/Ativ
 const MeuCadastroModule = lazyNamed(() => import('./modules/MeuCadastro/MeuCadastroModule'), 'MeuCadastroModule');
 const AuditoriaModule = lazyNamed(() => import('./modules/Auditoria/AuditoriaModule'), 'AuditoriaModule');
 const MemberAreaModule = lazyNamed(() => import('./modules/MemberArea/MemberAreaModule'), 'MemberAreaModule');
+const CentralMediaModule = lazyNamed(() => import('./modules/MemberArea/CentralMediaModule'), 'CentralMediaModule');
 const BookAuthenticityPage = lazyNamed(() => import('./modules/Livro/BookAuthenticityPage'), 'BookAuthenticityPage');
 
 const ModuleLoading = () => <div className="min-h-40 flex items-center justify-center"><p className="font-bold text-gray-500">Carregando módulo...</p></div>;
@@ -302,6 +303,7 @@ function AppContent() {
     if (tab === MODULES.ATTENDANCE) return <FluxoModule user={user} profile={profile} onScheduleReturn={openReturnScheduling} />;
     if (tab === MODULES.PEOPLE) return <PessoasCadastrosModule user={user} profile={profile} focusPersonId={focusedPersonId} onFocusConsumed={() => setFocusedPersonId(null)} />;
     if (tab === MODULES.USERS) return <UsuariosModule user={user} profile={profile} initialFilter={usersFilter} />;
+    if (tab === MODULES.MEDIA_CENTER) return <CentralMediaModule profile={profile} />;
     if (tab === MODULES.MEMBER_AREA) return <MemberAreaModule profile={profile} />;
     if (tab === MODULES.MY_REGISTRATION) return <MeuCadastroModule user={user} profile={profile} />;
     if (tab === MODULES.CONFIG) return <ConfiguracoesModule user={user} profile={profile} onOpenPerson={openPersonById} />;
