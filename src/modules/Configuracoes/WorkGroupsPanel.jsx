@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { useToast } from '../../components/ui/useToast';
 import { Plus, Users } from 'lucide-react';
+import { normalizeDisplayName } from '../../utils/textCase';
 
 const emptyDraft = { nome: '', diasSemana: [], mediunsIds: [], cambonesIds: [] };
 const toggle = (items, id) => items.includes(id) ? items.filter(item => item !== id) : [...items, id];
@@ -22,7 +23,7 @@ export const WorkGroupsPanel = ({ user, functions }) => {
   const save = async () => {
     if (!draft.nome.trim() || !draft.diasSemana.length || (!draft.mediunsIds.length && !draft.cambonesIds.length)) { toast.error('Informe nome, dia e pelo menos um trabalhador.'); return; }
     setSaving(true);
-    const payload = { nome: draft.nome.trim(), diasSemana: [...new Set(draft.diasSemana)].sort(), mediunsIds: [...new Set(draft.mediunsIds)], cambonesIds: [...new Set(draft.cambonesIds)], ativo: true, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid };
+    const payload = { nome: normalizeDisplayName(draft.nome), diasSemana: [...new Set(draft.diasSemana)].sort(), mediunsIds: [...new Set(draft.mediunsIds)], cambonesIds: [...new Set(draft.cambonesIds)], ativo: true, atualizadoEm: Timestamp.now(), atualizadoPor: user.uid };
     try {
       if (draft.id) await updateDoc(getAppDoc('config_grupos_trabalho', draft.id), payload);
       else await addDoc(getAppCollection('config_grupos_trabalho'), { ...payload, criadoEm: Timestamp.now(), criadoPor: user.uid });

@@ -1,4 +1,5 @@
 import { ESTADOS_CIVIS, SEXOS, isValidEmail, normalizeDadosCasa, normalizeEmail, normalizeEndereco, normalizeEstadoCivil, normalizeSexo } from './pessoaForm.js';
+import { normalizeDisplayName } from './textCase.js';
 
 const nullableText = value => String(value ?? '').trim() || null;
 const digits = (value, limit) => String(value ?? '').replace(/\D/g, '').slice(0, limit);
@@ -39,7 +40,7 @@ export const maskSelfRegistrationPhone = value => {
 
 export const buildMemberSelfRegistrationPayload = (invite, data = {}) => ({
   inviteId: invite.id,
-  nome: String(invite.nome || '').trim(),
+  nome: normalizeDisplayName(invite.nome),
   cpf: String(invite.cpf || ''),
   dataNascimento: nullableText(data.dataNascimento),
   contato: digits(data.contato, 11) || null,

@@ -4,6 +4,7 @@ import { addDoc, getAppCollection, getAppDoc, onSnapshot, Timestamp, updateDoc }
 import { Button } from '../../components/ui/Button';
 import { Pagination, usePagination } from '../../components/ui/Pagination';
 import { useToast } from '../../components/ui/useToast';
+import { normalizeDisplayName, normalizeDisplayText } from '../../utils/textCase';
 
 export const EventTeamPanel = ({ user }) => {
   const [members, setMembers] = useState([]);
@@ -17,7 +18,7 @@ export const EventTeamPanel = ({ user }) => {
   }), []);
 
   const save = async () => {
-    const nome = draft.nome.trim(); const funcao = draft.funcao.trim();
+    const nome = normalizeDisplayName(draft.nome); const funcao = normalizeDisplayText(draft.funcao);
     if (!nome || !funcao) { toast.error('Informe o nome e a função.'); return; }
     setSaving(true);
     try {

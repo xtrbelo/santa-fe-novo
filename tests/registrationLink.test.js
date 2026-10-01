@@ -14,7 +14,7 @@ test('rejeita configurações fora dos limites seguros', () => {
 });
 
 test('normaliza edição e impede limite menor que o histórico de usos', () => {
-  assert.deepEqual(normalizeRegistrationLinkEdit({ nome: ' Link atualizado ', validadeDias: '15', limiteUsos: '25' }, 20), { nome: 'Link atualizado', validadeDias: 15, limiteUsos: 25 });
+  assert.deepEqual(normalizeRegistrationLinkEdit({ nome: ' Link atualizado ', validadeDias: '15', limiteUsos: '25' }, 20), { nome: 'Link Atualizado', validadeDias: 15, limiteUsos: 25 });
   assert.throws(() => normalizeRegistrationLinkEdit({ nome: 'Link', validadeDias: '', limiteUsos: '19' }, 20), /LIMITE_INFERIOR_AOS_USOS/);
 });
 

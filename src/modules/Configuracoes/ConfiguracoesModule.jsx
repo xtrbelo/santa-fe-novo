@@ -19,6 +19,8 @@ import { EventTeamPanel } from './EventTeamPanel';
 import { BookResponsiblesPanel } from './BookResponsiblesPanel';
 import { BookVolumesPanel } from './BookVolumesPanel';
 import { SystemBackupPanel } from './SystemBackupPanel';
+import { TextCaseNormalizationPanel } from './TextCaseNormalizationPanel';
+import { normalizeDisplayName, normalizeDisplayText } from '../../utils/textCase';
 
 const publics = [{ id: 'consulente', nome: 'Consulente' }, { id: 'membro', nome: 'Membro' }];
 
@@ -67,17 +69,17 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
   const toggle = (list, id) => list.includes(id) ? list.filter(item => item !== id) : [...list, id];
   const addFunction = async () => {
     if (!novaFuncao.codigo.trim() || !novaFuncao.nome.trim()) return;
-    await addDoc(getAppCollection('config_funcoes_membro'), { codigo: novaFuncao.codigo.trim().toLowerCase(), nome: novaFuncao.nome.trim(), ...metadata() });
+    await addDoc(getAppCollection('config_funcoes_membro'), { codigo: novaFuncao.codigo.trim().toLowerCase(), nome: normalizeDisplayName(novaFuncao.nome), ...metadata() });
     setNovaFuncao({ codigo: '', nome: '' }); toast.success('Função de membro cadastrada.');
   };
   const addWork = async () => {
     if (!novoTrabalho.nome.trim()) return;
-    await addDoc(getAppCollection('config_eventos'), { nome: novoTrabalho.nome.trim(), natureza: novoTrabalho.natureza, publicosPermitidos: novoTrabalho.natureza === 'interno' ? ['membro'] : novoTrabalho.publicosPermitidos, ...metadata() });
+    await addDoc(getAppCollection('config_eventos'), { nome: normalizeDisplayText(novoTrabalho.nome), natureza: novoTrabalho.natureza, publicosPermitidos: novoTrabalho.natureza === 'interno' ? ['membro'] : novoTrabalho.publicosPermitidos, ...metadata() });
     setNovoTrabalho({ nome: '', natureza: 'atendimento_publico', publicosPermitidos: ['consulente', 'membro'] }); toast.success('Tipo de trabalho cadastrado.');
   };
   const addService = async () => {
     if (!novoServico.nome.trim() || !novoServico.tipoTrabalhoIds.length) { toast.error('Selecione ao menos um tipo de trabalho.'); return; }
-    await addDoc(getAppCollection('config_servicos'), { ...novoServico, nome: novoServico.nome.trim(), requerVagas: novoServico.controlaVagas, ...metadata() });
+    await addDoc(getAppCollection('config_servicos'), { ...novoServico, nome: normalizeDisplayText(novoServico.nome), requerVagas: novoServico.controlaVagas, ...metadata() });
     setNovoServico({ nome: '', tipoTrabalhoIds: [], controlaVagas: false }); toast.success('Serviço cadastrado.');
   };
   const startWorkEdit = work => setEditingWork({ id: work.id, nome: work.nome || '', natureza: work.natureza || (work.nome?.trim().toLowerCase() === 'atendimento' ? 'atendimento_publico' : 'interno'), publicosPermitidos: work.natureza === 'interno' ? ['membro'] : getPublicosPermitidosTrabalho(work) });
@@ -85,7 +87,7 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
     if (!editingWork?.nome.trim()) return;
     setSavingWork(true);
     try {
-      await updateWorkTypeOnServer({ workTypeId: editingWork.id, nome: editingWork.nome.trim(), natureza: editingWork.natureza, publicosPermitidos: editingWork.natureza === 'interno' ? ['membro'] : editingWork.publicosPermitidos });
+      await updateWorkTypeOnServer({ workTypeId: editingWork.id, nome: normalizeDisplayText(editingWork.nome), natureza: editingWork.natureza, publicosPermitidos: editingWork.natureza === 'interno' ? ['membro'] : editingWork.publicosPermitidos });
       toast.success('Tipo de trabalho atualizado.'); setEditingWork(null);
     } catch (error) {
       console.error(error);
@@ -260,6 +262,7 @@ export const ConfiguracoesModule = ({ user, profile, onOpenPerson }) => {
     {canManageConfig && <Card className="space-y-4">
       <h3 className="font-black uppercase text-blue-700 flex gap-2"><DatabaseZap size={18}/> Manutenção</h3>
       <SystemHealthPanel />
+      <TextCaseNormalizationPanel />
       <p className="text-sm text-gray-600">Reconstrói somente o índice derivado usado na busca de pessoas, em lotes seguros.</p>
       <Button onClick={rebuildIndex} disabled={rebuilding} className="w-full">{rebuilding ? 'Atualizando índice...' : 'Atualizar índice de busca de pessoas'}</Button>
       {rebuildReport && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">

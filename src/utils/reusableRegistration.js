@@ -1,6 +1,7 @@
 import { buildPessoaPayload, isValidEmail, normalizeDadosCasa, normalizeEmail, normalizeEndereco, normalizeEstadoCivil, normalizeSexo } from './pessoaForm.js';
 import { validateCPF } from './formatters.js';
 import { validateSelfRegistrationHouseData } from './memberSelfRegistration.js';
+import { normalizeDisplayName } from './textCase.js';
 
 const digits = (value, limit) => String(value ?? '').replace(/\D/g, '').slice(0, limit);
 const text = value => String(value ?? '').trim() || null;
@@ -10,7 +11,7 @@ export const IMAGE_CONSENT_VERSION = '2026-09-29.1';
 export const buildReusableRegistrationPayload = (link, data = {}) => ({
   linkId: link.id,
   tipoCadastro: link.tipoCadastro,
-  nome: String(data.nome || '').trim(),
+  nome: normalizeDisplayName(data.nome),
   cpf: digits(data.cpf, 11) || null,
   contato: digits(data.contato, 11) || null,
   email: normalizeEmail(data.email) || null,

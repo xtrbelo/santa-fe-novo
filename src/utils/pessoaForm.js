@@ -1,4 +1,5 @@
 import { normalizeSearchText } from './pessoaSearch.js';
+import { normalizeAddressText, normalizeDisplayName, normalizeEmailText } from './textCase.js';
 
 export const FALLBACK_FUNCOES_MEMBRO = [{ id: 'medium', nome: 'Médium' }, { id: 'cambone', nome: 'Cambone' }];
 export const SEXOS = ['masculino', 'feminino', 'outro', 'nao_informado'];
@@ -22,7 +23,7 @@ export const getMemberFunctionLabels = (codes, effectiveFunctions) => {
   return (codes || []).map(code => labels.get(code) || code);
 };
 
-export const normalizeEmail = value => String(value || '').trim().toLowerCase();
+export const normalizeEmail = normalizeEmailText;
 export const isValidEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
 const nullableText = value => String(value ?? '').trim() || null;
 const normalizeOption = (value, allowed, fallback = 'nao_informado') => allowed.includes(value) ? value : fallback;
@@ -33,10 +34,8 @@ export const isValidStatusCadastro = value => STATUS_CADASTRO.includes(value);
 export const isValidOrigemCadastro = value => ORIGENS_CADASTRO.includes(value);
 export const getPessoaStatusCadastro = pessoa => pessoa?.statusCadastro || 'aprovado';
 export const normalizeEndereco = endereco => ({
+  ...normalizeAddressText(endereco),
   cep: String(endereco?.cep ?? '').replace(/\D/g, '') || null,
-  logradouro: nullableText(endereco?.logradouro), numero: nullableText(endereco?.numero),
-  complemento: nullableText(endereco?.complemento), bairro: nullableText(endereco?.bairro),
-  cidade: nullableText(endereco?.cidade), uf: nullableText(endereco?.uf)?.toUpperCase() || null,
 });
 export const getBatizadoCaesf = dadosCasa => {
   if (typeof dadosCasa?.batizadoCaesf === 'boolean') return dadosCasa.batizadoCaesf;
@@ -59,7 +58,7 @@ export const createEmptyMemberDetails = pessoa => ({
 export const buildPessoaPayload = data => {
   const vinculo = data.vinculo === 'membro' ? 'membro' : 'consulente';
   const { sexo, estadoCivil, endereco, dadosCasa, statusCadastro, origemCadastro, ...sharedData } = data;
-  const payload = { ...sharedData, vinculo, tipoPessoa: vinculo === 'membro' ? 'Membro' : 'Consulente', funcoesCasa: vinculo === 'membro' ? [...new Set(data.funcoesCasa || [])] : [], nome: String(data.nome || '').trim(), email: normalizeEmail(data.email) || null };
+  const payload = { ...sharedData, vinculo, tipoPessoa: vinculo === 'membro' ? 'Membro' : 'Consulente', funcoesCasa: vinculo === 'membro' ? [...new Set(data.funcoesCasa || [])] : [], nome: normalizeDisplayName(data.nome), email: normalizeEmail(data.email) || null };
   if (vinculo === 'membro') Object.assign(payload, {
     sexo: normalizeSexo(sexo), estadoCivil: normalizeEstadoCivil(estadoCivil), endereco: normalizeEndereco(endereco), dadosCasa: normalizeDadosCasa(dadosCasa),
     statusCadastro: statusCadastro ?? 'aprovado', origemCadastro: origemCadastro ?? 'administrativo',
